@@ -1,0 +1,70 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: agentflow_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://agentflow:agentflow_password@postgres:5432/agentflow_db
+      - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - mongodb
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentflow_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: agentflow
+      POSTGRES_PASSWORD: agentflow_password
+      POSTGRES_DB: agentflow_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mongodb:
+    image: mongo:7.0
+    container_name: agentflow_mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: agentflow
+      MONGO_INITDB_ROOT_PASSWORD: agentflow_password
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: agentflow_mongo_express
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: agentflow
+      ME_CONFIG_MONGODB_ADMINPASSWORD: agentflow_password
+      ME_CONFIG_MONGODB_URL: mongodb://agentflow:agentflow_password@mongodb:27017/
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      - mongodb
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentflow_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
