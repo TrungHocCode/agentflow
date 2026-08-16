@@ -10,6 +10,34 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: agentflow_password
+          POSTGRES_DB: agentflow_db
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mongodb:
+        image: mongo:7.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: agentflow
+          MONGO_INITDB_ROOT_PASSWORD: agentflow_password
+        ports:
+          - 27017:27017
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -25,6 +53,16 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Init DB tables
+        env:
+          POSTGRES_URL: postgresql+asyncpg://agentflow:agentflow_password@localhost:5433/agentflow_db
+        run: |
+          python backend/app/db/init_db.py
+
       - name: Run unit tests
+        env:
+          POSTGRES_URL: postgresql+asyncpg://agentflow:agentflow_password@localhost:5433/agentflow_db
+          MONGO_URL: mongodb://agentflow:agentflow_password@localhost:27017/agentflow_runs?authSource=admin
+          REDIS_URL: redis://localhost:6379/0
         run: |
           python -m unittest discover -s tests
