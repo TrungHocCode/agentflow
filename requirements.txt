@@ -37,3 +37,11 @@ uuid_utils==0.16.2
 websockets==15.0.1
 xxhash==3.7.1
 zstandard==0.25.0
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0
+motor>=3.3.0
+redis>=5.0.0
+python-dotenv>=1.0.0
+pydantic-settings>=2.0.0
+alembic>=1.13.0
+
