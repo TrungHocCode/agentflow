@@ -54,7 +54,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             plan=[
                 Task(id=1, node="worker", status="pending", error=None, description="Run first task")
             ],
-            direction="academic"
+            metadata={"direction": "academic"}
         )
         mock_structured_llm.ainvoke.return_value = mock_output
 
@@ -66,9 +66,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "logs": [],
             "result_storage": [],
             "mode": "conversation",
-            "direction": None,
-            "pending_review_content": None,
-            "review_status": None
+            "metadata": {}
         }
 
         updates = await supervisor.execute(state)
@@ -78,7 +76,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         mock_structured_llm.ainvoke.assert_called_once()
         
         self.assertEqual(updates["mode"], "executing")
-        self.assertEqual(updates["direction"], "academic")
+        self.assertEqual(updates["metadata"], {"direction": "academic"})
         self.assertEqual(len(updates["messages"]), 1)
         self.assertEqual(updates["messages"][0].content, "Creating a plan.")
         self.assertEqual(len(updates["plan"]), 1)
@@ -103,9 +101,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "logs": [],
             "result_storage": [],
             "mode": "executing",
-            "direction": None,
-            "pending_review_content": None,
-            "review_status": None
+            "metadata": {}
         }
 
         updates = await worker.execute(state)
@@ -154,9 +150,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "logs": [],
             "result_storage": [],
             "mode": "executing",
-            "direction": None,
-            "pending_review_content": None,
-            "review_status": None
+            "metadata": {}
         }
 
         updates = await worker.execute(state)
@@ -169,6 +163,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].status, "done")
         self.assertEqual(updates["result_storage"][0]["result"], "The result is 5.")
         self.assertTrue(any("Executing tool 'add' with args {'a': 2, 'b': 3}" in log for log in updates["logs"]))
+
 
 
 if __name__ == "__main__":
