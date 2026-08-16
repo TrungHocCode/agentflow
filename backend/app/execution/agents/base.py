@@ -94,8 +94,8 @@ class SupervisorAgent(BaseAgent):
         if response.plan is not None:
             updates["plan"] = response.plan
         
-        if response.direction is not None:
-            updates["direction"] = response.direction
+        if response.metadata is not None:
+            updates["metadata"] = response.metadata
 
         return updates
 
@@ -104,6 +104,7 @@ class WorkerAgent(BaseAgent):
     """
     WorkerAgent executes specific tasks.
     It fetches inputs from result_storage and executes tools to complete the task.
+    Tool execution outputs are sanitized and wrapped in <tool_output> tags for safety.
     """
     async def execute(self, state: State) -> Dict[str, Any]:
         current_task = state.get("current_task")
@@ -151,7 +152,7 @@ class WorkerAgent(BaseAgent):
             else:
                 llm_with_tools = self.llm
 
-            max_iterations = 5
+            max_iterations = current_task.max_iterations if current_task.max_iterations else 5
             iteration = 0
             tool_map = {tool.name: tool for tool in self.tools}
 
@@ -185,8 +186,11 @@ class WorkerAgent(BaseAgent):
                             tool_result = f"Tool '{tool_name}' not found in registry."
                             logs.append(f"[{self.name}] {tool_result}")
 
+                        # Prompt injection defense: wrap tool output in XML tags
+                        wrapped_output = f"<tool_output>\n{str(tool_result)}\n</tool_output>"
+
                         messages.append(ToolMessage(
-                            content=str(tool_result),
+                            content=wrapped_output,
                             name=tool_name,
                             tool_call_id=tool_id
                         ))
@@ -195,7 +199,7 @@ class WorkerAgent(BaseAgent):
                     break
             else:
                 status = "failed"
-                error_msg = "Agent exceeded maximum tool execution iterations."
+                error_msg = f"Agent exceeded maximum tool execution iterations ({max_iterations})."
                 logs.append(f"[{self.name}] Error: {error_msg}")
 
         except Exception as e:
@@ -224,3 +228,4 @@ class WorkerAgent(BaseAgent):
             "result_storage": [new_result],
             "logs": logs
         }
+
