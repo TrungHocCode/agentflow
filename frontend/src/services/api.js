@@ -35,19 +35,26 @@ export async function getRunDetails(runId) {
   return res.json();
 }
 
-export async function startRun(prompt, modelName = 'qwen3:8b') {
+export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default_flow') {
   const res = await fetch(`${API_BASE}/runs/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      user_prompt: prompt,
-      model_name: modelName,
-      use_llm: true
+      flow_id: flowId,
+      input_message: prompt,
+      metadata: {
+        model_name: modelName,
+        use_llm: true
+      }
     })
   });
-  if (!res.ok) throw new Error('Failed to start workflow run');
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to start workflow run (${res.status}): ${errorText}`);
+  }
   return res.json();
 }
+
 
 export async function approveRun(runId) {
   const res = await fetch(`${API_BASE}/runs/${runId}/approve`, {
