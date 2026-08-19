@@ -107,6 +107,24 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
           ))
         )}
 
+        {/* Typing 3-Dots Thinking Indicator */}
+        {isProcessing && (
+          <div style={{ display: 'flex', gap: '0.875rem', alignSelf: 'flex-start', margin: '0.5rem 0' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Bot style={{ width: '18px', height: '18px', color: '#fff' }} />
+            </div>
+            <div className="glass-card" style={{ padding: '0.75rem 1.125rem', display: 'flex', alignItems: 'center', gap: '0.625rem', borderRadius: '16px 16px 16px 4px' }}>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '500' }}>Supervisor đang suy nghĩ</span>
+              <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                <span className="typing-dot"></span>
+                <span className="typing-dot"></span>
+                <span className="typing-dot"></span>
+              </div>
+            </div>
+          </div>
+        )}
+
+
         {/* Proposed DAG Plan Proposal Card */}
         {activePlan && activePlan.length > 0 && (
           <div className="glass-panel" style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(6,182,212,0.08))', border: '1px solid rgba(99,102,241,0.4)', padding: '1.25rem', marginTop: '0.5rem' }}>

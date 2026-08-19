@@ -73,6 +73,17 @@ export default function App() {
     setIsProcessing(true);
     setMessages(prev => [...prev, { sender: 'user', text: textPrompt }]);
 
+    // Check if user is approving an existing plan with approval keywords
+    const approvalKeywords = ['ok', 'đồng ý', 'chạy đi', 'thực thi', 'bắt đầu', 'yes', 'approve', 'run'];
+    const cleanInput = textPrompt.trim().toLowerCase();
+    const isApprovalMessage = approvalKeywords.some(kw => cleanInput === kw || cleanInput.startsWith(kw));
+
+    if (activePlan && activePlan.length > 0 && isApprovalMessage) {
+      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt! Đang chuyển sang màn hình Realtime Execution Tracker để thực thi các Task...' }]);
+      await handleApprovePlan();
+      return;
+    }
+
     try {
       if (backendStatus) {
         const runData = await startRun(textPrompt, selectedModel);
@@ -98,6 +109,7 @@ export default function App() {
           ]);
         }
       } else {
+
         // Fallback simulation mode
         setTimeout(() => {
           const simulatedPlan = [
