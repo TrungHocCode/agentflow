@@ -153,17 +153,25 @@ export default function App() {
         // Subscribe to SSE Realtime Stream
         const unsubscribe = subscribeRunSSEStream(
           currentRun.run_id,
-          (eventData) => {
-            if (eventData.logs) {
+          async (eventData) => {
+            if (eventData.type === 'log' && eventData.message) {
+              setExecutionLogs(prev => [...prev, eventData.message]);
+            } else if (eventData.logs) {
               setExecutionLogs(prev => [...prev, ...eventData.logs]);
             }
-            if (eventData.plan) {
-              setActivePlan(eventData.plan);
+
+            if (eventData.type === 'status_update' || eventData.type === 'completed') {
+              try {
+                const latestDoc = await getRunDetails(currentRun.run_id);
+                if (latestDoc?.plan) setActivePlan(latestDoc.plan);
+                if (latestDoc?.result_storage) setExecutionResults(latestDoc.result_storage);
+                if (latestDoc?.logs) setExecutionLogs(latestDoc.logs);
+              } catch (e) {
+                console.warn('Error fetching run updates:', e);
+              }
             }
-            if (eventData.result_storage) {
-              setExecutionResults(eventData.result_storage);
-            }
-            if (eventData.status === 'completed' || eventData.status === 'failed') {
+
+            if (eventData.status === 'completed' || eventData.status === 'failed' || eventData.type === 'completed') {
               setIsStreaming(false);
               setIsProcessing(false);
               unsubscribe();
@@ -175,6 +183,7 @@ export default function App() {
             setIsProcessing(false);
           }
         );
+
       } catch (err) {
         console.error("Approve run error:", err);
         setIsStreaming(false);

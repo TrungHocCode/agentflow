@@ -49,14 +49,14 @@ export default function ExecutionTracker({ currentRun, logs, results, plan, isSt
               <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>Chưa có task nào được tạo.</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {plan.map((t) => (
-                  <div key={t.id} className="glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.625rem 0.875rem' }}>
+                {plan.map((t, idx) => (
+                  <div key={t?.id || idx} className="glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.625rem 0.875rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
-                      <span style={{ fontSize: '0.8125rem', fontWeight: '700', color: '#fff' }}>Task {t.id}</span>
-                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>({t.node})</span>
+                      <span style={{ fontSize: '0.8125rem', fontWeight: '700', color: '#fff' }}>Task {t?.id || idx + 1}</span>
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>({t?.node || 'Worker'})</span>
                     </div>
-                    <span className={`badge ${t.status === 'done' ? 'badge-done' : (t.status === 'running' ? 'badge-running' : 'badge-pending')}`}>
-                      {t.status}
+                    <span className={`badge ${t?.status === 'done' ? 'badge-done' : (t?.status === 'running' ? 'badge-running' : 'badge-pending')}`}>
+                      {t?.status || 'pending'}
                     </span>
                   </div>
                 ))}
@@ -74,12 +74,12 @@ export default function ExecutionTracker({ currentRun, logs, results, plan, isSt
             </div>
 
             <div style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: '#cbd5e1', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-              {logs.length === 0 ? (
+              {(!logs || logs.length === 0) ? (
                 <p style={{ color: 'var(--text-muted)' }}>Chưa có log sự kiện streaming nào...</p>
               ) : (
                 logs.map((log, i) => (
                   <div key={i} style={{ lineHeight: 1.4, wordBreak: 'break-all' }}>
-                    <span style={{ color: 'var(--accent-cyan)' }}>[{new Date().toLocaleTimeString()}]</span> {typeof log === 'string' ? log : JSON.stringify(log)}
+                    <span style={{ color: 'var(--accent-cyan)' }}>[{new Date().toLocaleTimeString()}]</span> {typeof log === 'string' ? log : JSON.stringify(log, null, 2)}
                   </div>
                 ))
               )}
@@ -101,22 +101,29 @@ export default function ExecutionTracker({ currentRun, logs, results, plan, isSt
               <p style={{ fontSize: '0.875rem' }}>Kết quả thực thi sẽ hiển thị ở đây sau khi Worker Nodes hoàn thành.</p>
             </div>
           ) : (
-            results.map((res, i) => (
-              <div key={i} className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--accent-cyan)' }}>
-                    Task {res.task_id} [{res.node}]
-                  </span>
-                  <span className="badge badge-done">{res.status || 'done'}</span>
+            results.map((res, i) => {
+              const resultText = typeof res?.result === 'object'
+                ? JSON.stringify(res.result, null, 2)
+                : String(res?.result ?? (typeof res === 'object' ? JSON.stringify(res, null, 2) : String(res)));
+
+              return (
+                <div key={i} className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--accent-cyan)' }}>
+                      Task {res?.task_id || i + 1} [{res?.node || 'Worker'}]
+                    </span>
+                    <span className="badge badge-done">{res?.status || 'done'}</span>
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{res?.description || ''}</p>
+                  <div style={{ background: 'rgba(15,23,42,0.8)', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8125rem', color: '#e2e8f0', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '300px', overflowY: 'auto' }}>
+                    {resultText}
+                  </div>
                 </div>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{res.description}</p>
-                <div style={{ background: 'rgba(15,23,42,0.8)', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8125rem', color: '#e2e8f0', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: '300px', overflowY: 'auto' }}>
-                  {res.result}
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
+
       </div>
     </div>
   );
