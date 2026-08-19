@@ -11,16 +11,81 @@ from app.execution.tools.registry import autodiscover_tools
 autodiscover_tools()
 
 
+SUPERVISOR_SYSTEM_PROMPT = (
+    "You are SupervisorAgent, an AI Agent Planner for AgentFlow platform.\n"
+    "Your job is to converse with the user, clarify their requirements, and construct a DAG plan.\n"
+    "Available Worker Nodes: 'news_crawler', 'text_summarizer', 'markdown_report_generator', 'python_executor', 'web_search'.\n"
+    "If the user's request is vague, ask clarifying questions (keep mode='conversation').\n"
+    "If the request is clear, propose a list of Tasks and ask if they agree to execute it (keep mode='conversation').\n"
+    "If the user approves (e.g. 'ok', 'chạy đi', 'đồng ý', 'yes', 'run', 'approve'), set mode='executing'."
+)
+
+
 async def supervisor_node(state: State) -> Dict[str, Any]:
     """
-    Supervisor Node handles intent analysis and plan formulation during Build Phase.
-    If state already has a plan, it preserves the existing plan.
+    Supervisor Node handles intent analysis, multi-turn clarification, and plan formulation.
     """
+    current_mode = state.get("mode", "conversation")
     plan = state.get("plan") or []
-    logs = [f"[SupervisorNode] Processing state. Current plan tasks count: {len(plan)}."]
+
+    # If already executing, maintain executing mode
+    if current_mode == "executing":
+        return {
+            "mode": "executing",
+            "logs": [f"[SupervisorNode] Already in executing mode with {len(plan)} tasks."]
+        }
+
+    metadata = state.get("metadata") or {}
+    use_llm = metadata.get("use_llm", False)
+
+    if use_llm:
+        from app.execution.llm import get_llm
+        model_name = metadata.get("model_name", "qwen3:8b")
+        llm = get_llm(model_name=model_name, temperature=0.2)
+        supervisor = SupervisorAgent(
+            name="supervisor",
+            system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+            llm=llm
+        )
+        return await supervisor.execute(state)
+
+    user_msgs = state.get("messages") or []
+    last_msg = ""
+    if user_msgs:
+        m = user_msgs[-1]
+        last_msg = m.content.lower() if hasattr(m, "content") else str(m).lower()
+
+    approval_keywords = ["đồng ý", "chạy đi", "ok", "yes", "run", "approve", "bắt đầu", "thực thi"]
+
+
+
+    if any(kw in last_msg for kw in approval_keywords):
+        if not plan:
+            t1 = Task(id=1, node="news_crawler", status="pending", description="Crawl article from URL")
+            t2 = Task(id=2, node="text_summarizer", status="pending", dependencies=[1], description="Summarize text")
+            t3 = Task(id=3, node="markdown_report_generator", status="pending", dependencies=[2], description="Generate Markdown report")
+            plan = [t1, t2, t3]
+        return {
+            "mode": "executing",
+            "plan": plan,
+            "logs": ["[SupervisorNode] User approved plan. Transitioning to 'executing'."]
+        }
+
+    if not plan:
+        t1 = Task(id=1, node="news_crawler", status="pending", description="Crawl article from URL")
+        t2 = Task(id=2, node="text_summarizer", status="pending", dependencies=[1], description="Summarize text")
+        t3 = Task(id=3, node="markdown_report_generator", status="pending", dependencies=[2], description="Generate Markdown report")
+        return {
+            "mode": "conversation",
+            "plan": [t1, t2, t3],
+            "messages": ["Supervisor: Tôi đã lập xong kế hoạch 3 bước. Bạn có đồng ý thực thi không?"],
+            "logs": ["[SupervisorNode] Created initial plan proposal. Awaiting user confirmation."]
+        }
+
+
     return {
-        "mode": "executing",
-        "logs": logs
+        "mode": "conversation",
+        "logs": ["[SupervisorNode] Awaiting user approval/clarification."]
     }
 
 
@@ -41,8 +106,6 @@ async def worker_node(state: State) -> Dict[str, Any]:
     if not current_task:
         return {"logs": ["[WorkerNode] No current_task found in state to execute."]}
 
-    # Resolve tool instances from registry
-    # Map common node types to default tool sets if unspecified
     node_name = current_task.node.lower()
     tool_instances = []
 
@@ -75,18 +138,15 @@ async def worker_node(state: State) -> Dict[str, Any]:
         )
         return await worker_agent.execute(state)
 
-
     result_text = ""
     status = "done"
     error_msg = None
 
     try:
-        # Run specific tool logic based on task description keywords
         desc = current_task.description.lower()
         if "crawl" in desc or "news" in desc or "http" in desc:
             crawler_tool = ToolRegistry.get_tool("news_crawler")
             if crawler_tool:
-                # Extract URL if present in description or fallback to test URL
                 url_match = [w for w in current_task.description.split() if w.startswith("http")]
                 target_url = url_match[0] if url_match else "https://news.ycombinator.com"
                 result_text = crawler_tool.invoke({"url": target_url})
@@ -151,6 +211,18 @@ async def worker_node(state: State) -> Dict[str, Any]:
     }
 
 
+def route_after_supervisor(state: State) -> str:
+    """
+    Conditional router edge after supervisor:
+    If mode is 'executing', proceed to dispatcher_node.
+    If mode is 'conversation', pause execution and return to user (END).
+    """
+    mode = state.get("mode", "conversation")
+    if mode == "executing":
+        return "dispatcher_node"
+    return END
+
+
 def route_after_dispatch(state: State) -> str:
     """
     Conditional router edge: decides whether to continue to worker_node or finish graph execution.
@@ -174,7 +246,14 @@ def build_execution_graph():
 
     # Add Edges
     workflow.set_entry_point("supervisor_node")
-    workflow.add_edge("supervisor_node", "dispatcher_node")
+    workflow.add_conditional_edges(
+        "supervisor_node",
+        route_after_supervisor,
+        {
+            "dispatcher_node": "dispatcher_node",
+            END: END
+        }
+    )
 
     workflow.add_conditional_edges(
         "dispatcher_node",
@@ -188,3 +267,4 @@ def build_execution_graph():
     workflow.add_edge("worker_node", "dispatcher_node")
 
     return workflow.compile()
+
