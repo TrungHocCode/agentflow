@@ -45,5 +45,7 @@ python-dotenv>=1.0.0
 pydantic-settings>=2.0.0
 alembic>=1.13.0
 langchain-ollama>=0.1.0
+uvicorn[standard]>=0.25.0
+
 
 

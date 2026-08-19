@@ -204,10 +204,10 @@ Khi cập nhật State, **chỉ trả về các fields cần thay đổi** trong
 - Hotfix sau khi merge vào `main` phải được back-merge (merge hoặc cherry-pick) lại vào `dev` để không bị mất fix ở lần release tiếp theo.
 - Không `force push` lên `dev` hoặc `main`. Cần rollback thì dùng `git revert`, không xoá lịch sử.
 
-## Important Notes
-
+- **Quy trình Git & Verification Bắt Buộc**: Mỗi khi hoàn thành hoặc chuyển tiếp một tính năng mới, Agent BẮT BUỘC phải kiểm tra `git status` đầy đủ, chạy 100% unit tests pass, và tuân thủ đúng quy trình Git Flow (Feature Branch -> Commit -> Push -> Merge dev -> Checkout/Pull dev).
 - **Không commit** `.venv/`, `__pycache__/`, hay `docs/` (đã trong `.gitignore`).
 - **Không hardcode** API keys hay secrets. Sử dụng environment variables.
 - **File tools** sử dụng `workspace_data/` directory để sandbox file I/O, tránh path traversal.
 - **Worker agent** mặc định tối đa 5 iterations trong tool loop (hoặc theo cấu hình task) để tránh infinite loops.
 - **Messages** được giữ tối đa 10 messages gần nhất để kiểm soát context window.
+

@@ -102,17 +102,44 @@ class RunService:
         if input_message:
             logs.append(f"[User Input]: {input_message}")
 
+        mode = "conversation"
+        result_storage = []
+
+        # If no plan pre-defined, invoke LangGraph supervisor_node to analyze intent and generate proposed plan
+        if not plan:
+            try:
+                from app.execution.graph import build_execution_graph
+                graph_app = build_execution_graph()
+                init_state: State = {
+                    "messages": [input_message] if input_message else [],
+                    "plan": [],
+                    "current_task": None,
+                    "logs": logs,
+                    "result_storage": [],
+                    "mode": "conversation",
+                    "metadata": metadata or {}
+                }
+                res_state = await graph_app.ainvoke(init_state)
+                plan = res_state.get("plan", [])
+                mode = res_state.get("mode", "conversation")
+                logs = res_state.get("logs", logs)
+                result_storage = res_state.get("result_storage", [])
+            except Exception as e:
+                logs.append(f"[RunService Warning] Graph invocation error: {e}")
+
         doc = RunDocument(
             run_id=run_id,
             flow_id=flow_id,
             status="pending",
-            mode="executing",
+            mode=mode,
             plan=plan,
             logs=logs,
+            result_storage=result_storage,
             metadata=metadata or {}
         )
         await RunService.save_run_doc(doc)
         return doc
+
 
     @staticmethod
     async def execute_step(run_id: str) -> Optional[RunDocument]:
