@@ -150,6 +150,56 @@ class TestToolsAndReducers(unittest.TestCase):
         missing_res = reader.invoke({"filename": "missing.txt"})
         self.assertTrue("Error:" in missing_res)
 
+    @patch("requests.get")
+    def test_news_crawler_tool(self, mock_get):
+        """Test news crawler tool fetches and parses article paragraphs."""
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = """
+        <html>
+            <head><title>AI Breakthrough News</title></head>
+            <body>
+                <p>Paragraph 1: AI Agents are revolutionizing autonomous software engineering workflows worldwide.</p>
+                <p>Paragraph 2: Researchers announce state of the art results on agent benchmarks.</p>
+            </body>
+        </html>
+        """
+        mock_get.return_value = mock_res
+
+        crawler = ToolRegistry.get_tool("news_crawler")
+        res = crawler.invoke({"url": "https://news.example.com/ai-breakthrough"})
+        self.assertTrue("AI Breakthrough News" in res)
+        self.assertTrue("Paragraph 1:" in res)
+
+    def test_text_summarizer_tool(self):
+        """Test text summarizer tool extracts bullet points."""
+        summarizer = ToolRegistry.get_tool("text_summarizer")
+        sample_text = (
+            "First sentence about artificial intelligence and modern agentic coding platforms. "
+            "Second sentence describing how LangGraph nodes coordinate deterministic worker agents. "
+            "Third sentence explaining the role of tool registries and prompt injection defense."
+        )
+        res = summarizer.invoke({"text": sample_text, "max_bullet_points": 2})
+        self.assertTrue("TEXT SUMMARY" in res)
+        self.assertTrue("- First sentence" in res)
+
+    def test_markdown_report_generator_tool(self):
+        """Test markdown report generator tool writes formatted report into workspace_data."""
+        report_gen = ToolRegistry.get_tool("markdown_report_generator")
+        res = report_gen.invoke({
+            "title": "Weekly Tech Intelligence Report",
+            "summary": "Key market trends and agent architecture updates.",
+            "sections": [
+                {"header": "Background", "content": "Overview of stateful agent systems."},
+                {"header": "Key Takeaways", "content": "1. Multi-tier memory architecture.\n2. Modular tools."}
+            ],
+            "filename": "tech_report.md"
+        })
+        self.assertTrue("Successfully generated Markdown report" in res)
+        report_file = os.path.join(os.getcwd(), "workspace_data", "reports", "tech_report.md")
+        self.assertTrue(os.path.exists(report_file))
+
 
 if __name__ == "__main__":
     unittest.main()
+

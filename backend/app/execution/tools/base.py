@@ -52,6 +52,11 @@ class ToolRegistry:
     def list_tools(cls) -> List[str]:
         return list(cls._registry.keys())
 
+    @classmethod
+    def get_all_tools(cls) -> List[BaseTool]:
+        return list(cls._registry.values())
+
+
 
 def _get_safe_path(filename: str) -> str:
     """
