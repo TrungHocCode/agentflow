@@ -31,3 +31,32 @@ class ArtifactDocument(BaseModel):
     payload: Any
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class RunStartRequest(BaseModel):
+    """Request schema to start a run execution for a flow"""
+    flow_id: str
+    input_message: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+class RunApproveRequest(BaseModel):
+    """Request schema to approve or reject a pending flow plan"""
+    approved: bool = True
+    feedback: Optional[str] = None
+
+class RunResponse(BaseModel):
+    """Response schema for run status and details"""
+    run_id: str
+    flow_id: str
+    user_id: str
+    status: str
+    mode: str
+    current_task: Optional[Task] = None
+    plan: List[Task] = Field(default_factory=list)
+    logs: List[Any] = Field(default_factory=list)
+    result_storage: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    total_tokens: int = 0
+    execution_time_ms: float = 0.0
+    created_at: datetime
+    updated_at: datetime
+

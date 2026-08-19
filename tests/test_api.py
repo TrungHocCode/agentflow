@@ -10,8 +10,10 @@ from app.main import app
 
 class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        os.environ["TESTING"] = "true"
         self.transport = httpx.ASGITransport(app=app)
-        self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test")
+        self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test", follow_redirects=True)
+
 
     async def asyncTearDown(self):
         await self.client.aclose()
