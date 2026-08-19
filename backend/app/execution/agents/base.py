@@ -45,12 +45,28 @@ class BaseAgent(ABC):
 
 class SupervisorAgent(BaseAgent):
     """
-    SupervisorAgent is responsible for coordinating other agents.
-    It decides whether to continue conversation or plan/execute workflows.
+    SupervisorAgent is responsible for coordinating conversation, clarifying user intent,
+    and formulating/approving execution plans.
     """
     async def execute(self, state: State) -> Dict[str, Any]:
-        # Formulate current execution plan context
+        user_messages = self._get_messages(state)
+        last_user_msg = ""
+        if user_messages:
+            last_user_msg = str(user_messages[-1].content).strip().lower()
+
         plan = state.get("plan") or []
+        current_mode = state.get("mode", "conversation")
+
+        # Approval keyword check: if user approves existing plan, switch mode to executing
+        approval_keywords = ["đồng ý", "chạy đi", "ok", "yes", "run", "approve", "bắt đầu", "thực thi"]
+        if plan and any(kw in last_user_msg for kw in approval_keywords):
+            return {
+                "mode": "executing",
+                "messages": [AIMessage(content="Đã nhận xác nhận từ bạn! Hệ thống đang chuyển sang chế độ thực thi các task...")],
+                "logs": ["[SupervisorAgent] User approved plan. Switching mode to 'executing'."]
+            }
+
+        # Formulate current execution plan context
         if plan:
             plan_str = "\n".join([
                 f"- Task {t.id}: {t.description} (Node: {t.node}, Status: {t.status})"
@@ -59,7 +75,6 @@ class SupervisorAgent(BaseAgent):
         else:
             plan_str = "No current plan."
 
-        # Formulate previous results context
         results = state.get("result_storage") or []
         if results:
             results_str = "\n".join([
@@ -69,7 +84,6 @@ class SupervisorAgent(BaseAgent):
         else:
             results_str = "No execution results yet."
 
-        # Inject context into system prompt
         context = (
             f"\n\n--- Current Execution Context ---\n"
             f"[Plan]:\n{plan_str}\n\n"
@@ -77,27 +91,33 @@ class SupervisorAgent(BaseAgent):
             f"---------------------------------"
         )
         system_message = SystemMessage(content=self.system_prompt + context)
-        messages = [system_message] + self._get_messages(state)
+        messages = [system_message] + user_messages
 
-        # Invoke structured LLM
-        structured_llm = self.llm.with_structured_output(SupervisorOutput)
-        response: SupervisorOutput = await structured_llm.ainvoke(messages)
+        try:
+            structured_llm = self.llm.with_structured_output(SupervisorOutput)
+            response: SupervisorOutput = await structured_llm.ainvoke(messages)
 
-        updates = {}
-        if response.mode:
-            updates["mode"] = response.mode
-        
-        # Add assistant message to history if present
-        if response.assistant_message:
-            updates["messages"] = [AIMessage(content=response.assistant_message)]
-        
-        if response.plan is not None:
-            updates["plan"] = response.plan
-        
-        if response.metadata is not None:
-            updates["metadata"] = response.metadata
+            updates = {}
+            if response.mode:
+                updates["mode"] = response.mode
+            if response.assistant_message:
+                updates["messages"] = [AIMessage(content=response.assistant_message)]
+            if response.plan is not None:
+                updates["plan"] = response.plan
+            if response.metadata is not None:
+                updates["metadata"] = response.metadata
 
-        return updates
+            return updates
+        except Exception:
+            # Fallback to plain text invocation if structured output is unsupported by local LLM
+            response_msg = await self.llm.ainvoke(messages)
+            content = response_msg.content if hasattr(response_msg, "content") else str(response_msg)
+            return {
+                "mode": "conversation",
+                "messages": [AIMessage(content=content)],
+                "logs": ["[SupervisorAgent] Direct LLM conversational response generated."]
+            }
+
 
 
 class WorkerAgent(BaseAgent):
