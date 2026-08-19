@@ -6,16 +6,38 @@ import shutil
 # Adjust path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.execution.state import State, Task
-from app.execution.graph import build_execution_graph
-from app.execution.llm import get_llm
+import urllib.request
+
+try:
+    from langchain_ollama import ChatOllama
+    from app.execution.llm import get_llm
+    from app.execution.state import State, Task
+    from app.execution.graph import build_execution_graph
+    HAS_OLLAMA_PKG = True
+except ImportError:
+    HAS_OLLAMA_PKG = False
 
 
+def is_ollama_server_online() -> bool:
+    if not HAS_OLLAMA_PKG:
+        return False
+    try:
+        url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+@unittest.skipIf(not HAS_OLLAMA_PKG, "langchain-ollama package is not installed")
+@unittest.skipIf(not is_ollama_server_online(), "Local Ollama server (http://localhost:11434) is offline or unreachable")
 class TestLiveOllamaExecution(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         data_dir = os.path.join(os.getcwd(), "workspace_data")
         if os.path.exists(data_dir):
             shutil.rmtree(data_dir)
+
 
     async def test_ollama_llm_direct_invocation(self):
         """Test direct connection to local Ollama server."""
