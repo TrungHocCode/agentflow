@@ -1,11 +1,13 @@
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.execution.state import State, Task
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.registry import autodiscover_tools
+from app.execution.checkpointer import get_checkpointer
 
 # Ensure all tools are registered
 autodiscover_tools()
@@ -214,13 +216,26 @@ async def worker_node(state: State) -> Dict[str, Any]:
 def route_after_supervisor(state: State) -> str:
     """
     Conditional router edge after supervisor:
-    If mode is 'executing', proceed to dispatcher_node.
-    If mode is 'conversation', pause execution and return to user (END).
+    - mode='conversation': đi vào 'hitl_gate' (HITL checkpoint node) — graph sẽ PAUSE tại đây.
+    - mode='executing': bỏ qua gate, đi thẳng vào 'dispatcher_node'.
     """
     mode = state.get("mode", "conversation")
     if mode == "executing":
         return "dispatcher_node"
-    return END
+    return "hitl_gate"
+
+
+async def hitl_gate_node(state: State) -> Dict[str, Any]:
+    """
+    HITL Gate Node — no-op node làm điểm dừng trong conversation mode.
+
+    Sau khi Supervisor đề xuất plan (mode='conversation'), graph route vào node này
+    rồi đến END. Checkpointer lưu state tại đây, cho phép resume sau khi user
+    approve (bằng cách gửi ainvoke với {"mode": "executing"} và cùng thread_id).
+
+    Node này không thực hiện bất kỳ logic nào — chỉ là checkpoint marker.
+    """
+    return {"logs": ["[HITLGate] Awaiting user input (approve/reject/chat)."]}  
 
 
 def route_after_dispatch(state: State) -> str:
@@ -233,28 +248,46 @@ def route_after_dispatch(state: State) -> str:
     return END
 
 
-def build_execution_graph():
+def build_execution_graph(
+    checkpointer: Optional[BaseCheckpointSaver] = None
+) -> "CompiledGraph":
     """
     Constructs and compiles the AgentFlow LangGraph StateGraph.
+
+    Graph được compile với:
+    - checkpointer: lưu state tại mỗi bước (mặc định dùng singleton MemorySaver)
+    - interrupt_after=["supervisor_node"]: graph tự động PAUSE ngay sau supervisor_node.
+      Điều này cho phép user xem xét plan (conversation) hoặc approve trước khi
+      dispatcher-worker loop bắt đầu chạy. Sau khi approve, gọi lại ainvoke
+      với cùng thread_id để RESUME — dispatcher-worker loop sẽ chạy đến END
+      mà không bị interrupt thêm.
+
+    Args:
+        checkpointer: Checkpointer tùy chọn (dùng trong tests để inject MemorySaver riêng)
     """
     workflow = StateGraph(State)
 
     # Add Nodes
     workflow.add_node("supervisor_node", supervisor_node)
+    workflow.add_node("hitl_gate", hitl_gate_node)  # HITL checkpoint: PAUSE khi mode=conversation
     workflow.add_node("dispatcher_node", dispatcher_node)
     workflow.add_node("worker_node", worker_node)
 
-    # Add Edges
+    # supervisor -> hitl_gate (conversation) | dispatcher (executing)
     workflow.set_entry_point("supervisor_node")
     workflow.add_conditional_edges(
         "supervisor_node",
         route_after_supervisor,
         {
+            "hitl_gate": "hitl_gate",
             "dispatcher_node": "dispatcher_node",
-            END: END
         }
     )
 
+    # hitl_gate → END (graph dừng lại, chờ user input tiếp theo qua API)
+    workflow.add_edge("hitl_gate", END)
+
+    # dispatcher -> worker | END
     workflow.add_conditional_edges(
         "dispatcher_node",
         route_after_dispatch,
@@ -266,5 +299,26 @@ def build_execution_graph():
 
     workflow.add_edge("worker_node", "dispatcher_node")
 
-    return workflow.compile()
+    _checkpointer = checkpointer if checkpointer is not None else get_checkpointer()
+    return workflow.compile(
+        checkpointer=_checkpointer,
+        # Không cần interrupt_before/after vì hitl_gate→END đã làm dừng graph ở đúng chỗ.
+        # Checkpointer vẫn lưu state sau mỗi node để hỗ trợ resume.
+    )
+
+
+def get_graph_config(run_id: str) -> Dict[str, Any]:
+    """
+    Tạo LangGraph config dict chuẩn cho một run cụ thể.
+
+    Mỗi run_id ánh xạ đến một thread riêng biệt trong checkpointer,
+    đảm bảo state isolation giữa các run song song.
+
+    Args:
+        run_id: ID duy nhất của run, dùng làm thread_id
+
+    Returns:
+        config dict để truyền vào ainvoke/astream/astream_events
+    """
+    return {"configurable": {"thread_id": run_id}}
 

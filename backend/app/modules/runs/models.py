@@ -43,6 +43,11 @@ class RunApproveRequest(BaseModel):
     approved: bool = True
     feedback: Optional[str] = None
 
+
+class RunChatRequest(BaseModel):
+    """Request schema to send a follow-up message to a paused run's conversation"""
+    message: str
+
 class RunResponse(BaseModel):
     """Response schema for run status and details"""
     run_id: str

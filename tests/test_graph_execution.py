@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 import unittest
 import shutil
 from unittest.mock import patch, MagicMock
@@ -8,7 +9,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 from app.execution.state import State, Task
-from app.execution.graph import build_execution_graph
+from app.execution.graph import build_execution_graph, get_graph_config
 
 
 class TestGraphExecution(unittest.IsolatedAsyncioTestCase):
@@ -52,9 +53,11 @@ class TestGraphExecution(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        # 2. Build and invoke graph
+        # 2. Build and invoke graph — phải truyền config với thread_id khi dùng checkpointer
         compiled_graph = build_execution_graph()
-        final_state = await compiled_graph.ainvoke(initial_state)
+        run_id = str(uuid.uuid4())
+        config = get_graph_config(run_id)
+        final_state = await compiled_graph.ainvoke(initial_state, config=config)
 
         # 3. Assertions
         final_plan = final_state.get("plan") or []

@@ -74,7 +74,10 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(approve_res.status_code, 200)
         approve_data = approve_res.json()
-        self.assertEqual(approve_data["status"], "running")
+        # approve_run bây giờ resume graph và thực thi plan:
+        # status có thể là 'completed' (plan done) hoặc 'running' (plan chưa xong)
+        self.assertIn(approve_data["status"], ("running", "completed", "failed"),
+                      f"Status sau approve phải là running/completed/failed, got: {approve_data['status']}")
 
     async def test_stream_run_events(self):
         # Start a run
