@@ -12,7 +12,8 @@ try:
     from langchain_ollama import ChatOllama
     from app.execution.llm import get_llm
     from app.execution.state import State, Task
-    from app.execution.graph import build_execution_graph
+    from app.execution.graph import build_execution_graph, get_graph_config
+    import uuid
     HAS_OLLAMA_PKG = True
 except ImportError:
     HAS_OLLAMA_PKG = False
@@ -81,7 +82,9 @@ class TestLiveOllamaExecution(unittest.IsolatedAsyncioTestCase):
         }
 
         compiled_graph = build_execution_graph()
-        final_state = await compiled_graph.ainvoke(initial_state)
+        run_id = str(uuid.uuid4())
+        config = get_graph_config(run_id)
+        final_state = await compiled_graph.ainvoke(initial_state, config=config)
 
         final_plan = final_state.get("plan") or []
         self.assertEqual(len(final_plan), 2)

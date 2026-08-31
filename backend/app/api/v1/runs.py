@@ -7,6 +7,7 @@ from app.db.postgres_client import get_db
 from app.modules.runs.models import (
     RunStartRequest,
     RunApproveRequest,
+    RunChatRequest,
     RunResponse
 )
 from app.modules.runs.service import RunService
@@ -68,6 +69,30 @@ async def approve_run(
         run_id=run_id,
         approved=req.approved,
         feedback=req.feedback
+    )
+    if not run_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run with ID '{run_id}' not found."
+        )
+    return run_doc
+
+
+@router.post("/{run_id}/chat", response_model=RunResponse)
+async def chat_run(
+    run_id: str,
+    req: RunChatRequest
+):
+    """
+    Send a follow-up message to a paused run's supervisor conversation.
+
+    Dùng cho multi-turn conversation: user làm rõ yêu cầu với Supervisor
+    trước khi approve plan. Graph được resume từ checkpoint với message mới
+    và lại PAUSE chờ phản hồi tiếp.
+    """
+    run_doc = await RunService.send_message(
+        run_id=run_id,
+        message=req.message
     )
     if not run_doc:
         raise HTTPException(
