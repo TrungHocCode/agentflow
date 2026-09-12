@@ -9,24 +9,20 @@ from typing import Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 _checkpointer: Optional[MemorySaver] = None
 
 
 def get_checkpointer() -> MemorySaver:
     """
-    Trả về singleton MemorySaver instance.
-
-    MemorySaver lưu toàn bộ checkpoint trong RAM — state sẽ mất khi
-    server restart. Phù hợp cho development và testing.
-
-    Để dùng PostgresSaver cho production:
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        return AsyncPostgresSaver.from_conn_string(settings.POSTGRES_URL)
+    Trả về singleton MemorySaver instance với JsonPlusSerializer
+    đã đăng ký Task type để tránh warning Msgpack deserialization.
     """
     global _checkpointer
     if _checkpointer is None:
-        _checkpointer = MemorySaver()
+        serde = JsonPlusSerializer(allowed_msgpack_modules=[("app.execution.state", "Task")])
+        _checkpointer = MemorySaver(serde=serde)
     return _checkpointer
 
 

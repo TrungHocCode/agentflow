@@ -200,21 +200,11 @@ class RunService:
         feedback: Optional[str] = None
     ) -> Optional[RunDocument]:
         """
-        Approve hoặc reject plan đề xuất của Supervisor.
+        Approve hoặc reject plan đề xuất của Supervisor (non-blocking).
 
-        Nếu approved=True: Resume graph từ checkpoint bằng cách truyền
-        state update mode='executing' vào cùng thread_id. Graph sẽ tiếp tục
-        từ điểm PAUSE (trước dispatcher_node) và thực thi toàn bộ task plan.
-
-        Nếu approved=False: Đánh dấu run là failed, không resume graph.
-
-        Args:
-            run_id: ID của run cần approve
-            approved: True để approve, False để reject
-            feedback: Phản hồi tùy chọn từ user
-
-        Returns:
-            RunDocument sau khi cập nhật
+        Chỉ cập nhật trạng thái 'running' và log xác nhận của user,
+        sau đó trả về ngay để không block HTTP request. Quá trình thực thi
+        và stream logs sẽ do stream_run_events (SSE) đảm nhiệm.
         """
         run_doc = await RunService.get_run(run_id)
         if not run_doc:
@@ -231,37 +221,6 @@ class RunService:
         run_doc.status = "running"
         run_doc.updated_at = datetime.utcnow()
         await RunService.save_run_doc(run_doc)
-
-        # Resume graph từ checkpoint: truyền state update mode="executing".
-        # Graph tiếp tục từ điểm PAUSE (interrupt_before=dispatcher_node),
-        # chạy toàn bộ dispatcher → worker → ... → END và tự kết thúc.
-        try:
-            from app.execution.graph import build_execution_graph, get_graph_config
-            graph_app = build_execution_graph()
-            config = get_graph_config(run_id)
-
-            res_state = await graph_app.ainvoke(
-                {"mode": "executing"},
-                config=config
-            )
-
-            plan = res_state.get("plan", run_doc.plan)
-            result_storage = res_state.get("result_storage", run_doc.result_storage)
-            new_logs = res_state.get("logs", [])
-
-            run_doc.plan = plan
-            run_doc.result_storage = result_storage
-            run_doc.logs.extend(new_logs)
-
-            all_finished = len(plan) > 0 and all(t.status in ("done", "failed", "skipped") for t in plan)
-            run_doc.status = "completed" if all_finished else "running"
-            run_doc.logs.append(f"[RunService] Run {run_id} execution finished. Status: {run_doc.status}")
-        except Exception as e:
-            run_doc.logs.append(f"[RunService Warning] approve_run graph resume error: {e}")
-            run_doc.status = "failed"
-
-        run_doc.updated_at = datetime.utcnow()
-        await RunService.save_run_doc(run_doc)
         return run_doc
 
     @staticmethod
@@ -269,11 +228,8 @@ class RunService:
         """
         Stream live execution logs và progress updates qua Server-Sent Events (SSE).
 
-        Dùng graph.astream_events() để nhận real-time events từ LangGraph execution,
-        thay vì polling loop thủ công. Graph phải đã được resume (approve_run đã được gọi)
-        hoặc đang ở trạng thái running.
-
-        Nếu run đang pending (chờ approve), stream trả về current state mà không thực thi.
+        Dùng graph.astream(..., stream_mode="updates") để thực thi đồ thị và bắn log
+        real-time từng Node (Dispatcher, Worker) trực tiếp về Frontend mà không bị lag.
         """
         run_doc = await RunService.get_run(run_id)
         if not run_doc:
@@ -289,45 +245,77 @@ class RunService:
             yield f"data: {json.dumps({'type': 'completed', 'run_id': run_id, 'status': 'pending'})}\n\n"
             return
 
-        # Nếu run đã completed/failed, trả về logs và kết quả hiện có
+        # Nếu run đã completed/failed trước đó, trả về logs hiện có
         if run_doc.status in ("completed", "failed"):
             for log in run_doc.logs:
                 yield f"data: {json.dumps({'type': 'log', 'message': str(log)})}\n\n"
             yield f"data: {json.dumps({'type': 'completed', 'run_id': run_id, 'status': run_doc.status})}\n\n"
             return
 
-        # Run đang chạy (running) — stream events từ graph qua astream_events
+        # Run đang ở trạng thái 'running' — Bắt đầu thực thi và Stream Realtime qua LangGraph astream
         try:
             from app.execution.graph import build_execution_graph, get_graph_config
             graph_app = build_execution_graph()
             config = get_graph_config(run_id)
 
-            # Với checkpointer, graph có thể tiếp tục từ checkpoint đã lưu.
-            # Truyền None để resume từ state hiện tại trong checkpoint.
-            async for event in graph_app.astream_events(None, config=config, version="v2"):
-                event_name = event.get("event", "")
-                event_data = event.get("data", {})
-                node_name = event.get("name", "")
+            yield f"data: {json.dumps({'type': 'log', 'message': f'[ExecutionEngine] Resuming graph for Run {run_id} in mode: executing...'})}\n\n"
 
-                if event_name == "on_chain_start" and node_name in ("worker_node", "dispatcher_node"):
-                    yield f"data: {json.dumps({'type': 'node_start', 'node': node_name})}\n\n"
+            # Stream updates từ từng node trong LangGraph
+            async for chunk in graph_app.astream({"mode": "executing"}, config=config, stream_mode="updates"):
+                for node_name, node_output in chunk.items():
+                    if isinstance(node_output, dict):
+                        logs = node_output.get("logs", [])
+                        current_task = node_output.get("current_task")
+                        plan = node_output.get("plan")
+                        result_storage = node_output.get("result_storage")
 
-                elif event_name == "on_chain_end" and node_name in ("worker_node", "dispatcher_node"):
-                    output = event_data.get("output", {})
-                    logs = output.get("logs", []) if isinstance(output, dict) else []
-                    current_task = output.get("current_task") if isinstance(output, dict) else None
-                    for log in logs:
-                        yield f"data: {json.dumps({'type': 'log', 'message': str(log)})}\n\n"
-                    if current_task and hasattr(current_task, "model_dump"):
-                        yield f"data: {json.dumps({'type': 'task_update', 'task': current_task.model_dump()})}\n\n"
-                    elif current_task and isinstance(current_task, dict):
-                        yield f"data: {json.dumps({'type': 'task_update', 'task': current_task})}\n\n"
+                        if logs:
+                            for log in logs:
+                                run_doc.logs.append(log)
+                                yield f"data: {json.dumps({'type': 'log', 'message': str(log)})}\n\n"
 
-            # Sau khi stream kết thúc, cập nhật trạng thái cuối từ checkpoint state
-            final_doc = await RunService.get_run(run_id)
-            final_status = final_doc.status if final_doc else "completed"
-            yield f"data: {json.dumps({'type': 'completed', 'run_id': run_id, 'status': final_status})}\n\n"
+                        if current_task:
+                            run_doc.current_task = current_task
+                            task_dict = current_task.model_dump() if hasattr(current_task, "model_dump") else current_task
+                            yield f"data: {json.dumps({'type': 'task_update', 'task': task_dict})}\n\n"
+
+                        if plan:
+                            # Upsert tasks by ID
+                            updated_tasks = {t.id: t for t in plan}
+                            new_plan = []
+                            for t in run_doc.plan:
+                                if t.id in updated_tasks:
+                                    new_plan.append(updated_tasks[t.id])
+                                else:
+                                    new_plan.append(t)
+                            # Add any new tasks
+                            for t in plan:
+                                if not any(existing.id == t.id for existing in new_plan):
+                                    new_plan.append(t)
+                            run_doc.plan = sorted(new_plan, key=lambda x: x.id)
+                            yield f"data: {json.dumps({'type': 'plan_update', 'plan': [t.model_dump() for t in run_doc.plan]})}\n\n"
+
+                        if result_storage:
+                            run_doc.result_storage.extend(result_storage)
+                            yield f"data: {json.dumps({'type': 'results_update', 'results': run_doc.result_storage})}\n\n"
+
+                        run_doc.updated_at = datetime.utcnow()
+                        await RunService.save_run_doc(run_doc)
+
+            # Sau khi astream hoàn thành, cập nhật trạng thái cuối
+            all_finished = len(run_doc.plan) > 0 and all(t.status in ("done", "failed", "skipped") for t in run_doc.plan)
+            run_doc.status = "completed" if all_finished else "running"
+            run_doc.logs.append(f"[RunService] Run {run_id} execution completed with status: {run_doc.status}")
+            run_doc.updated_at = datetime.utcnow()
+            await RunService.save_run_doc(run_doc)
+
+            yield f"data: {json.dumps({'type': 'completed', 'run_id': run_id, 'status': run_doc.status, 'plan': [t.model_dump() for t in run_doc.plan], 'results': run_doc.result_storage})}\n\n"
 
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            run_doc.status = "failed"
+            err_msg = f"[RunService Error]: {e}"
+            run_doc.logs.append(err_msg)
+            run_doc.updated_at = datetime.utcnow()
+            await RunService.save_run_doc(run_doc)
+            yield f"data: {json.dumps({'type': 'error', 'message': err_msg})}\n\n"
             yield f"data: {json.dumps({'type': 'completed', 'run_id': run_id, 'status': 'failed'})}\n\n"

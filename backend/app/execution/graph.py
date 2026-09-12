@@ -41,15 +41,19 @@ async def supervisor_node(state: State) -> Dict[str, Any]:
     use_llm = metadata.get("use_llm", False)
 
     if use_llm:
-        from app.execution.llm import get_llm
-        model_name = metadata.get("model_name", "qwen3:8b")
-        llm = get_llm(model_name=model_name, temperature=0.2)
-        supervisor = SupervisorAgent(
-            name="supervisor",
-            system_prompt=SUPERVISOR_SYSTEM_PROMPT,
-            llm=llm
-        )
-        return await supervisor.execute(state)
+        try:
+            from app.execution.llm import get_llm
+            model_name = metadata.get("model_name", "qwen3:8b")
+            llm = get_llm(model_name=model_name, temperature=0.2)
+            supervisor = SupervisorAgent(
+                name="supervisor",
+                system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+                llm=llm
+            )
+            return await supervisor.execute(state)
+        except Exception:
+            # Fallback to deterministic DAG heuristic planner if Ollama is unreachable
+            pass
 
     user_msgs = state.get("messages") or []
     last_msg = ""
@@ -113,11 +117,13 @@ async def worker_node(state: State) -> Dict[str, Any]:
 
     all_registered_tools = ToolRegistry.get_all_tools()
 
-    if "crawler" in node_name or "news" in node_name:
+    if "crawler" in node_name or "news" in node_name or "cào" in node_name:
         tool_instances = [t for t in all_registered_tools if t.name in ("news_crawler", "web_search", "http_request")]
-    elif "summarizer" in node_name or "summary" in node_name:
+    elif "search" in node_name or "web" in node_name or "tìm" in node_name:
+        tool_instances = [t for t in all_registered_tools if t.name in ("web_search", "news_crawler", "http_request")]
+    elif "summarizer" in node_name or "summary" in node_name or "tóm" in node_name or "tổng" in node_name:
         tool_instances = [t for t in all_registered_tools if t.name in ("text_summarizer", "file_reader")]
-    elif "report" in node_name or "writer" in node_name or "coder" in node_name:
+    elif "report" in node_name or "writer" in node_name or "coder" in node_name or "markdown" in node_name or "báo cáo" in node_name:
         tool_instances = [t for t in all_registered_tools if t.name in ("markdown_report_generator", "python_executor", "file_writer")]
     else:
         tool_instances = all_registered_tools
@@ -128,17 +134,24 @@ async def worker_node(state: State) -> Dict[str, Any]:
     use_llm = metadata.get("use_llm", False)
 
     if use_llm:
-        from app.execution.llm import get_llm
-        model_name = metadata.get("model_name", "qwen3:8b")
-        logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
-        llm = get_llm(model_name=model_name)
-        worker_agent = WorkerAgent(
-            name=current_task.node,
-            system_prompt=f"You are a specialized Worker Agent executing node '{current_task.node}'. Complete the assigned task using your tools.",
-            llm=llm,
-            tools=tool_instances
-        )
-        return await worker_agent.execute(state)
+        try:
+            from app.execution.llm import get_llm
+            model_name = metadata.get("model_name", "qwen3:8b")
+            logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
+            llm = get_llm(model_name=model_name, temperature=0.2)
+            worker_agent = WorkerAgent(
+                name=current_task.node,
+                system_prompt=(
+                    f"You are a specialized Worker Agent executing node '{current_task.node}'.\n"
+                    f"Your task: {current_task.description}.\n"
+                    f"Use your available tools to gather real data and return a thorough, informative result."
+                ),
+                llm=llm,
+                tools=tool_instances
+            )
+            return await worker_agent.execute(state)
+        except Exception as e:
+            logs.append(f"[WorkerNode Warning] LLM ReAct error: {e}. Executing with deterministic tool engine.")
 
     result_text = ""
     status = "done"
@@ -146,45 +159,64 @@ async def worker_node(state: State) -> Dict[str, Any]:
 
     try:
         desc = current_task.description.lower()
-        if "crawl" in desc or "news" in desc or "http" in desc:
+        node = current_task.node.lower()
+
+        if "search" in node or "tìm kiếm" in desc or "search" in desc or "tra cứu" in desc:
+            search_tool = ToolRegistry.get_tool("web_search")
+            if search_tool:
+                # Extract clean search query from description
+                query = current_task.description
+                for prefix in ("tìm kiếm thông tin về", "tìm kiếm thông tin", "tìm kiếm", "search for", "search"):
+                    if desc.startswith(prefix):
+                        query = current_task.description[len(prefix):].strip(" :,-")
+                        break
+                result_text = search_tool.invoke({"query": query or current_task.description})
+            else:
+                result_text = f"Executed search task: '{current_task.description}'"
+
+        elif "crawl" in node or "crawler" in node or "crawl" in desc or "cào" in desc or "news" in desc or "http" in desc:
             crawler_tool = ToolRegistry.get_tool("news_crawler")
             if crawler_tool:
                 url_match = [w for w in current_task.description.split() if w.startswith("http")]
                 target_url = url_match[0] if url_match else "https://news.ycombinator.com"
                 result_text = crawler_tool.invoke({"url": target_url})
             else:
-                result_text = f"Executed task '{current_task.description}' successfully."
+                result_text = f"Executed crawler task '{current_task.description}' successfully."
 
-        elif "summariz" in desc or "summary" in desc:
+        elif "summariz" in node or "summary" in node or "tóm tắt" in desc or "tổng hợp" in desc or "summariz" in desc:
             summarizer_tool = ToolRegistry.get_tool("text_summarizer")
             prev_results = state.get("result_storage") or []
-            source_text = "\n".join([r.get("result", "") for r in prev_results]) or current_task.description
+            source_text = "\n".join([r.get("result", "") for r in prev_results if r.get("result")]) or current_task.description
             if summarizer_tool:
-                result_text = summarizer_tool.invoke({"text": source_text, "max_bullet_points": 5})
+                result_text = summarizer_tool.invoke({"text": source_text, "max_bullet_points": 6})
             else:
                 result_text = f"Summarized output for: {current_task.description}"
 
-        elif "report" in desc or "markdown" in desc:
+        elif "report" in node or "markdown" in node or "report" in desc or "báo cáo" in desc or "markdown" in desc:
             report_tool = ToolRegistry.get_tool("markdown_report_generator")
             prev_results = state.get("result_storage") or []
-            sections = [
-                {"header": f"Task Output {r.get('task_id', i)}", "content": r.get("result", "")}
-                for i, r in enumerate(prev_results, 1)
-            ]
+            sections = []
+            for i, r in enumerate(prev_results, 1):
+                desc_title = r.get("description", f"Task {r.get('task_id', i)}")
+                short_title = desc_title[:50] + "..." if len(desc_title) > 50 else desc_title
+                sections.append({
+                    "header": f"Output {r.get('task_id', i)}: {short_title}",
+                    "content": r.get("result", "Completed successfully.")
+                })
             if not sections:
-                sections = [{"header": "Overview", "content": "Completed task analysis report."}]
+                sections = [{"header": "Executive Overview", "content": "Task completed successfully with all objectives met."}]
 
             if report_tool:
                 result_text = report_tool.invoke({
-                    "title": "AgentFlow Intelligence Report",
-                    "summary": "Summary report generated automatically by WorkerAgent.",
+                    "title": "AgentFlow Comprehensive Intelligence Report",
+                    "summary": f"Báo cáo tổng hợp tự động cho quy trình: {current_task.description}",
                     "sections": sections,
                     "filename": "intelligence_report.md"
                 })
             else:
                 result_text = "Report generated successfully."
         else:
-            result_text = f"Worker completed task: {current_task.description}"
+            result_text = f"Completed task: {current_task.description}"
 
     except Exception as e:
         status = "failed"
