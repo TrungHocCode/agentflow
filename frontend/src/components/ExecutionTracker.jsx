@@ -1,8 +1,21 @@
-import React, { useRef, useEffect } from 'react';
-import { Terminal, CheckCircle2, Clock, Activity, FileText, AlertTriangle, RefreshCw } from 'lucide-react';
+import React, { useRef, useEffect, useState } from 'react';
+import { Terminal, CheckCircle2, Clock, Activity, FileText, AlertTriangle, RefreshCw, Timer } from 'lucide-react';
 
-export default function ExecutionTracker({ currentRun, logs, results, plan, isStreaming }) {
+export default function ExecutionTracker({ currentRun, logs, results, plan, isStreaming, executionDuration }) {
   const terminalEndRef = useRef(null);
+  const [liveSeconds, setLiveSeconds] = useState(0);
+
+  useEffect(() => {
+    let timer;
+    if (isStreaming) {
+      setLiveSeconds(0);
+      const start = Date.now();
+      timer = setInterval(() => {
+        setLiveSeconds(((Date.now() - start) / 1000).toFixed(1));
+      }, 100);
+    }
+    return () => clearInterval(timer);
+  }, [isStreaming]);
 
   useEffect(() => {
     if (terminalEndRef.current) {
@@ -26,17 +39,34 @@ export default function ExecutionTracker({ currentRun, logs, results, plan, isSt
           </div>
         </div>
 
-        <span className={`badge ${isStreaming ? 'badge-running' : 'badge-done'}`}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {/* Realtime Execution Timer Badge */}
           {isStreaming ? (
-            <>
-              <RefreshCw style={{ width: '12px', height: '12px' }} className="spin-slow" /> Streaming SSE Events...
-            </>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '0.375rem 0.75rem', borderRadius: '20px', background: 'rgba(6,182,212,0.15)', border: '1px solid rgba(6,182,212,0.4)', color: 'var(--accent-cyan)', fontSize: '0.8125rem', fontWeight: '600' }}>
+              <Timer style={{ width: '14px', height: '14px' }} className="spin-slow" />
+              Đang chạy: {liveSeconds}s
+            </span>
           ) : (
-            <>
-              <CheckCircle2 style={{ width: '12px', height: '12px' }} /> Stream Ready
-            </>
+            (executionDuration || currentRun?.execution_time_ms > 0) && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '0.375rem 0.75rem', borderRadius: '20px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', color: 'var(--accent-emerald)', fontSize: '0.8125rem', fontWeight: '600' }}>
+                <Clock style={{ width: '14px', height: '14px' }} />
+                Thời gian: {executionDuration || (currentRun.execution_time_ms / 1000).toFixed(2)}s
+              </span>
+            )
           )}
-        </span>
+
+          <span className={`badge ${isStreaming ? 'badge-running' : 'badge-done'}`}>
+            {isStreaming ? (
+              <>
+                <RefreshCw style={{ width: '12px', height: '12px' }} className="spin-slow" /> Streaming SSE Events...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 style={{ width: '12px', height: '12px' }} /> Stream Ready
+              </>
+            )}
+          </span>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', flex: 1 }}>

@@ -56,6 +56,16 @@ export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default
 }
 
 
+export async function sendChatMessage(runId, message) {
+  const res = await fetch(`${API_BASE}/runs/${runId}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
+  });
+  if (!res.ok) throw new Error(`Failed to send message: ${res.statusText}`);
+  return res.json();
+}
+
 export async function approveRun(runId) {
   const res = await fetch(`${API_BASE}/runs/${runId}/approve`, {
     method: 'POST',

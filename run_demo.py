@@ -1,13 +1,14 @@
 import asyncio
 import os
 import sys
+import uuid
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Ensure backend path is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "backend")))
 
 from app.execution.state import State, Task
-from app.execution.graph import build_execution_graph
+from app.execution.graph import build_execution_graph, get_graph_config
 
 
 async def main():
@@ -35,6 +36,8 @@ async def main():
     print(f"\n🔄 Đã chọn Model: [{model_name}]. Bắt đầu phiên hội thoại!\n")
 
     compiled_graph = build_execution_graph()
+    run_id = str(uuid.uuid4())
+    config = get_graph_config(run_id)
 
     # Shared conversation state across turns
     current_state: State = {
@@ -62,7 +65,7 @@ async def main():
         current_state["messages"].append(HumanMessage(content=user_input))
 
         print("\n🤔 SupervisorAgent đang suy luận & lập kế hoạch...")
-        current_state = await compiled_graph.ainvoke(current_state)
+        current_state = await compiled_graph.ainvoke(current_state, config=config)
 
         # Retrieve last message from Supervisor
         messages = current_state.get("messages", [])

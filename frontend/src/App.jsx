@@ -10,7 +10,9 @@ import {
   getCatalogTools, 
   getCatalogAgents, 
   startRun, 
+  sendChatMessage,
   approveRun, 
+  getRunDetails,
   subscribeRunSSEStream 
 } from './services/api';
 
@@ -31,6 +33,7 @@ export default function App() {
   const [executionResults, setExecutionResults] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [executionDuration, setExecutionDuration] = useState(null);
 
   // Load catalogs on mount
   useEffect(() => {
@@ -71,23 +74,33 @@ export default function App() {
   // Handle user sending message in Chat Studio
   const handleSendMessage = async (textPrompt) => {
     setIsProcessing(true);
+    const sendStartTime = Date.now();
     setMessages(prev => [...prev, { sender: 'user', text: textPrompt }]);
 
     // Check if user is approving an existing plan with approval keywords
-    const approvalKeywords = ['ok', 'đồng ý', 'chạy đi', 'thực thi', 'bắt đầu', 'yes', 'approve', 'run'];
+    const approvalKeywords = ['ok', 'đồng ý', 'chạy đi', 'thực thi', 'bắt đầu', 'yes', 'approve', 'run', 'thực hiện đi', 'thực hiện', 'duyệt', 'tiến hành'];
     const cleanInput = textPrompt.trim().toLowerCase();
-    const isApprovalMessage = approvalKeywords.some(kw => cleanInput === kw || cleanInput.startsWith(kw));
+    const isApprovalMessage = approvalKeywords.some(kw => cleanInput === kw || cleanInput.startsWith(kw) || cleanInput.includes(kw));
 
     if (activePlan && activePlan.length > 0 && isApprovalMessage) {
-      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt! Đang chuyển sang màn hình Realtime Execution Tracker để thực thi các Task...' }]);
+      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt! Đang chuyển sang màn hình Realtime Execution Tracker để thực thi các Task...', duration: '0.1' }]);
       await handleApprovePlan();
       return;
     }
 
     try {
       if (backendStatus) {
-        const runData = await startRun(textPrompt, selectedModel);
+        let runData;
+        if (currentRun?.run_id && currentRun?.status === 'pending') {
+          // Multi-turn continuation on existing run
+          runData = await sendChatMessage(currentRun.run_id, textPrompt);
+        } else {
+          // Start a new workflow run
+          runData = await startRun(textPrompt, selectedModel);
+        }
         setCurrentRun(runData);
+
+        const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
 
         // If backend returned proposed plan
         if (runData.plan && runData.plan.length > 0) {
@@ -96,7 +109,8 @@ export default function App() {
             ...prev,
             { 
               sender: 'supervisor', 
-              text: `Tôi đã lập xong Kế hoạch DAG gồm ${runData.plan.length} bước bên dưới cho bạn. Bạn có muốn duyệt và bắt đầu thực thi không?` 
+              text: `Tôi đã lập xong Kế hoạch DAG gồm ${runData.plan.length} bước bên dưới cho bạn. Bạn có thể bấm 'Duyệt & Bắt Đầu Thực Thi Workflow' hoặc gõ 'đồng ý' nhé!`,
+              duration: durationSec
             }
           ]);
         } else {
@@ -104,7 +118,8 @@ export default function App() {
             ...prev,
             { 
               sender: 'supervisor', 
-              text: `Tôi đã ghi nhận yêu cầu của bạn với mô hình ${selectedModel}. Bạn hãy làm rõ hơn thông tin nếu cần hoặc duyệt kế hoạch nhé!` 
+              text: `Tôi đã ghi nhận yêu cầu của bạn. Bạn hãy làm rõ thêm chi tiết hoặc xác nhận để tôi lập kế hoạch nhé!`,
+              duration: durationSec
             }
           ]);
         }
@@ -118,11 +133,13 @@ export default function App() {
             { id: 3, node: 'markdown_report_generator', status: 'pending', dependencies: [2], description: 'Xuất báo cáo Markdown lưu vào workspace_data/reports/' }
           ];
           setActivePlan(simulatedPlan);
+          const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
           setMessages(prev => [
             ...prev,
             { 
               sender: 'supervisor', 
-              text: `Tôi đã lập Kế hoạch 3 bước dựa trên yêu cầu "${textPrompt}". Bạn có đồng ý bấm 'Approve & Execute' để chạy không?` 
+              text: `Tôi đã lập Kế hoạch 3 bước dựa trên yêu cầu "${textPrompt}". Bạn có đồng ý bấm 'Approve & Execute' để chạy không?`,
+              duration: durationSec
             }
           ]);
           setIsProcessing(false);
@@ -130,7 +147,8 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error starting run:', err);
-      setMessages(prev => [...prev, { sender: 'supervisor', text: `Có lỗi kết nối: ${err.message}` }]);
+      const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
+      setMessages(prev => [...prev, { sender: 'supervisor', text: `Có lỗi kết nối: ${err.message}`, duration: durationSec }]);
     } finally {
       setIsProcessing(false);
     }
@@ -140,6 +158,8 @@ export default function App() {
   const handleApprovePlan = async () => {
     setIsProcessing(true);
     setIsStreaming(true);
+    setExecutionDuration(null);
+    const execStartTime = Date.now();
 
     // Switch view tab to Execution Runs Tracker
     setActiveTab('runs');
@@ -160,18 +180,41 @@ export default function App() {
               setExecutionLogs(prev => [...prev, ...eventData.logs]);
             }
 
-            if (eventData.type === 'status_update' || eventData.type === 'completed') {
-              try {
-                const latestDoc = await getRunDetails(currentRun.run_id);
-                if (latestDoc?.plan) setActivePlan(latestDoc.plan);
-                if (latestDoc?.result_storage) setExecutionResults(latestDoc.result_storage);
-                if (latestDoc?.logs) setExecutionLogs(latestDoc.logs);
-              } catch (e) {
-                console.warn('Error fetching run updates:', e);
-              }
+            if (eventData.type === 'task_update' && eventData.task) {
+              setActivePlan(prevPlan => {
+                const existing = prevPlan.find(t => t.id === eventData.task.id);
+                if (existing) {
+                  return prevPlan.map(t => t.id === eventData.task.id ? eventData.task : t);
+                } else {
+                  return [...prevPlan, eventData.task];
+                }
+              });
+            }
+
+            if (eventData.type === 'plan_update' && eventData.plan) {
+              setActivePlan(eventData.plan);
+            }
+
+            if (eventData.type === 'results_update' && eventData.results) {
+              setExecutionResults(eventData.results);
             }
 
             if (eventData.status === 'completed' || eventData.status === 'failed' || eventData.type === 'completed') {
+              if (eventData.plan && eventData.plan.length > 0) setActivePlan(eventData.plan);
+              if (eventData.results && eventData.results.length > 0) setExecutionResults(eventData.results);
+
+              try {
+                const latestDoc = await getRunDetails(currentRun.run_id);
+                if (latestDoc?.plan && latestDoc.plan.length > 0) setActivePlan(latestDoc.plan);
+                if (latestDoc?.result_storage && latestDoc.result_storage.length > 0) setExecutionResults(latestDoc.result_storage);
+                if (latestDoc?.logs && latestDoc.logs.length > 0) setExecutionLogs(latestDoc.logs);
+                if (latestDoc) setCurrentRun(latestDoc);
+              } catch (e) {
+                console.warn('Error fetching final run details:', e);
+              }
+
+              const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
+              setExecutionDuration(totalSec);
               setIsStreaming(false);
               setIsProcessing(false);
               unsubscribe();
@@ -179,6 +222,8 @@ export default function App() {
           },
           (err) => {
             console.error("SSE Stream error:", err);
+            const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
+            setExecutionDuration(totalSec);
             setIsStreaming(false);
             setIsProcessing(false);
           }
@@ -186,6 +231,8 @@ export default function App() {
 
       } catch (err) {
         console.error("Approve run error:", err);
+        const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
+        setExecutionDuration(totalSec);
         setIsStreaming(false);
         setIsProcessing(false);
       }
@@ -196,31 +243,28 @@ export default function App() {
 
       const interval = setInterval(() => {
         if (step < simulatedTasks.length) {
-          simulatedTasks[step].status = 'running';
+          simulatedTasks[step] = { ...simulatedTasks[step], status: 'running' };
           setActivePlan([...simulatedTasks]);
-          setExecutionLogs(prev => [
-            ...prev, 
-            `[TaskDispatcher] Dispatching Task ${simulatedTasks[step].id} (${simulatedTasks[step].description}) to node '${simulatedTasks[step].node}'...`,
-            `[WorkerNode] Initializing ReAct loop for ${simulatedTasks[step].node}...`
-          ]);
+          setExecutionLogs(prev => [...prev, `[TaskDispatcher] Dispatching Task ${step + 1} to node '${simulatedTasks[step].node}'...`]);
 
           setTimeout(() => {
-            simulatedTasks[step].status = 'done';
+            simulatedTasks[step] = { ...simulatedTasks[step], status: 'done' };
             setActivePlan([...simulatedTasks]);
-            setExecutionResults(prev => [
-              ...prev,
-              {
-                task_id: simulatedTasks[step].id,
-                node: simulatedTasks[step].node,
-                description: simulatedTasks[step].description,
-                result: `Completed task ${simulatedTasks[step].id} output successfully. Output saved to workspace_data/reports/intelligence_report.md`
-              }
-            ]);
+            setExecutionLogs(prev => [...prev, `[WorkerNode] Task ${step + 1} completed with output result.`]);
+            setExecutionResults(prev => [...prev, {
+              task_id: step + 1,
+              node: simulatedTasks[step].node,
+              description: simulatedTasks[step].description,
+              status: 'done',
+              result: `Mock execution output result data generated for Task ${step + 1} (${simulatedTasks[step].node})`
+            }]);
             step++;
           }, 1200);
         } else {
           clearInterval(interval);
           setExecutionLogs(prev => [...prev, "[TaskDispatcher] All tasks in plan finished execution successfully!"]);
+          const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
+          setExecutionDuration(totalSec);
           setIsStreaming(false);
           setIsProcessing(false);
         }
@@ -270,6 +314,7 @@ export default function App() {
               results={executionResults}
               plan={activePlan}
               isStreaming={isStreaming}
+              executionDuration={executionDuration}
             />
           )}
         </main>

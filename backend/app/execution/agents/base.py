@@ -104,8 +104,11 @@ class SupervisorAgent(BaseAgent):
                 updates["messages"] = [AIMessage(content=response.assistant_message)]
             if response.plan is not None:
                 updates["plan"] = response.plan
-            if response.metadata is not None:
-                updates["metadata"] = response.metadata
+
+            # Merge existing metadata (e.g. use_llm, model_name) with LLM metadata
+            existing_metadata = state.get("metadata") or {}
+            new_metadata = response.metadata or {}
+            updates["metadata"] = {**existing_metadata, **new_metadata}
 
             return updates
         except Exception:
@@ -115,6 +118,7 @@ class SupervisorAgent(BaseAgent):
             return {
                 "mode": "conversation",
                 "messages": [AIMessage(content=content)],
+                "metadata": state.get("metadata") or {},
                 "logs": ["[SupervisorAgent] Direct LLM conversational response generated."]
             }
 

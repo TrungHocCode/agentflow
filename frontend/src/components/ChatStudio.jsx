@@ -1,8 +1,24 @@
-import React, { useState } from 'react';
-import { Send, Bot, User, CheckCircle2, Play, Sparkles, AlertCircle, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Send, Bot, User, CheckCircle2, Play, Sparkles, AlertCircle, ArrowRight, Clock, Zap } from 'lucide-react';
 
 export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isProcessing, activePlan, selectedModel }) {
   const [inputPrompt, setInputPrompt] = useState('');
+  const [liveThinkingSeconds, setLiveThinkingSeconds] = useState(0);
+
+  // Live timer while AI is thinking
+  useEffect(() => {
+    let timer;
+    if (isProcessing) {
+      setLiveThinkingSeconds(0);
+      const start = Date.now();
+      timer = setInterval(() => {
+        setLiveThinkingSeconds(((Date.now() - start) / 1000).toFixed(1));
+      }, 100);
+    } else {
+      setLiveThinkingSeconds(0);
+    }
+    return () => clearInterval(timer);
+  }, [isProcessing]);
 
   const promptSuggestions = [
     "Cào tin tức từ https://news.ycombinator.com, tóm tắt và sinh báo cáo Markdown.",
@@ -90,8 +106,16 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
                   boxShadow: msg.sender === 'user' ? '0 4px 14px rgba(99,102,241,0.3)' : 'none'
                 }}
               >
-                <div style={{ fontSize: '0.75rem', color: msg.sender === 'user' ? '#e0e7ff' : 'var(--accent-cyan)', fontWeight: '600', marginBottom: '0.25rem' }}>
-                  {msg.sender === 'user' ? 'Bạn' : 'Supervisor Agent'}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.25rem' }}>
+                  <span style={{ fontSize: '0.75rem', color: msg.sender === 'user' ? '#e0e7ff' : 'var(--accent-cyan)', fontWeight: '600' }}>
+                    {msg.sender === 'user' ? 'Bạn' : 'Supervisor Agent'}
+                  </span>
+                  {msg.duration && (
+                    <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.25)', padding: '2px 6px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <Clock style={{ width: '10px', height: '10px', color: 'var(--accent-cyan)' }} />
+                      {msg.duration}s
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
                   {msg.text}
@@ -107,14 +131,19 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
           ))
         )}
 
-        {/* Typing 3-Dots Thinking Indicator */}
+        {/* Typing 3-Dots & Live Thinking Timer Indicator */}
         {isProcessing && (
           <div style={{ display: 'flex', gap: '0.875rem', alignSelf: 'flex-start', margin: '0.5rem 0' }}>
             <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Bot style={{ width: '18px', height: '18px', color: '#fff' }} />
             </div>
-            <div className="glass-card" style={{ padding: '0.75rem 1.125rem', display: 'flex', alignItems: 'center', gap: '0.625rem', borderRadius: '16px 16px 16px 4px' }}>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '500' }}>Supervisor đang suy nghĩ</span>
+            <div className="glass-card" style={{ padding: '0.75rem 1.125rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '16px 16px 16px 4px', border: '1px solid rgba(6,182,212,0.3)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)', fontWeight: '600' }}>Supervisor đang suy nghĩ</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)', background: 'rgba(6,182,212,0.15)', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
+                  ⏱️ {liveThinkingSeconds}s
+                </span>
+              </div>
               <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
                 <span className="typing-dot"></span>
                 <span className="typing-dot"></span>
