@@ -1,0 +1,34 @@
+"""Adapters that expose the execution engine to application modules."""
+
+from typing import Any, AsyncGenerator, Dict
+
+from app.execution.graph import build_execution_graph, get_graph_config
+from app.execution.ports import ExecutionPort
+from app.execution.state import State
+
+
+class LangGraphExecutionAdapter(ExecutionPort):
+    """Current in-process LangGraph adapter behind the execution port."""
+
+    async def create_plan(self, run_id: str, initial_state: State) -> State:
+        graph = build_execution_graph()
+        return await graph.ainvoke(initial_state, config=get_graph_config(run_id))
+
+    async def continue_conversation(self, run_id: str, message: str) -> State:
+        graph = build_execution_graph()
+        return await graph.ainvoke(
+            {"messages": [message]},
+            config=get_graph_config(run_id),
+        )
+
+    async def _stream(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        graph = build_execution_graph()
+        async for chunk in graph.astream(
+            {"mode": "executing"},
+            config=get_graph_config(run_id),
+            stream_mode="updates",
+        ):
+            yield chunk
+
+    def stream_execution(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        return self._stream(run_id)
