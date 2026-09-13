@@ -1,30 +1,19 @@
 from typing import List
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.db.postgres_client import get_db
-from app.modules.agent_catalog.models import AgentCatalogModel, ToolCatalogModel, AgentCatalogResponse, ToolCatalogResponse
+from app.api.dependencies import get_catalog_service
+from app.modules.catalog.domain import AgentDefinition, ToolDefinition
+from app.modules.catalog.service import CatalogService
 
 router = APIRouter(prefix="/catalog", tags=["Catalog"])
 
-@router.get("/agents", response_model=List[AgentCatalogResponse])
-async def list_agents(db: AsyncSession = Depends(get_db)):
-    if db is None:
-        return []
-    try:
-        result = await db.execute(select(AgentCatalogModel).where(AgentCatalogModel.is_active == True))
-        return result.scalars().all()
-    except Exception:
-        return []
+@router.get("/agents", response_model=List[AgentDefinition])
+async def list_agents(
+    service: CatalogService = Depends(get_catalog_service),
+):
+    return await service.list_agents()
 
-@router.get("/tools", response_model=List[ToolCatalogResponse])
-async def list_tools(db: AsyncSession = Depends(get_db)):
-    if db is None:
-        return []
-    try:
-        result = await db.execute(select(ToolCatalogModel).where(ToolCatalogModel.is_active == True))
-        return result.scalars().all()
-    except Exception:
-        return []
-
-
+@router.get("/tools", response_model=List[ToolDefinition])
+async def list_tools(
+    service: CatalogService = Depends(get_catalog_service),
+):
+    return await service.list_tools()
