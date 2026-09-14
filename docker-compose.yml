@@ -14,7 +14,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://localhost:5173
       - ARTIFACT_ROOT=/app/workspace_data
-      - AUTH_SIGNING_SECRET=change-this-in-local-env
+      - AUTH_SIGNING_SECRET=${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in .env before starting Compose}
     volumes:
       - artifacts_data:/app/workspace_data
     healthcheck:
