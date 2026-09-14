@@ -10,8 +10,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from app.execution.state import State, Task
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.service import CatalogService
+from app.modules.conversations.models import ConversationMessage, ConversationRecord
+from app.modules.conversations.service import ConversationService
 from app.modules.runs.models import RunDocument
 from app.modules.runs.service import RunService
+from app.shared.events import ExecutionEvent
+from app.infrastructure.redis.event_publisher import InMemoryRunEventPublisher
+from app.infrastructure.redis.run_queue import InMemoryRunCommandQueue
+from app.workers.run_worker import RunWorker
 from app.modules.workflows.domain import WorkflowRecord
 from app.modules.workflows.schemas import WorkflowCreateRequest
 from app.modules.workflows.service import WorkflowService
@@ -95,6 +101,7 @@ class FakeWorkflowRepository:
 class FakeRunRepository:
     def __init__(self) -> None:
         self.documents: Dict[str, RunDocument] = {}
+        self.events: Dict[str, List[ExecutionEvent]] = {}
 
     async def save(self, document: RunDocument) -> None:
         self.documents[document.run_id] = document
@@ -107,6 +114,43 @@ class FakeRunRepository:
         if flow_id:
             values = [document for document in values if document.flow_id == flow_id]
         return values[:limit]
+
+    async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:
+        return next(
+            (
+                document
+                for document in self.documents.values()
+                if document.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    async def claim(self, run_id: str) -> RunDocument | None:
+        document = self.documents.get(run_id)
+        if document is None or document.status != "queued":
+            return None
+        document.status = "running"
+        return document
+
+    async def append_event(self, event: ExecutionEvent) -> ExecutionEvent:
+        events = self.events.setdefault(event.run_id, [])
+        persisted = event.model_copy(update={"sequence": len(events) + 1})
+        events.append(persisted)
+        return persisted
+
+    async def list_events(
+        self,
+        run_id: str,
+        after_event_id: str | None = None,
+        limit: int = 200,
+    ) -> List[ExecutionEvent]:
+        events = self.events.get(run_id, [])
+        if after_event_id:
+            for index, event in enumerate(events):
+                if event.event_id == after_event_id:
+                    events = events[index + 1 :]
+                    break
+        return events[:limit]
 
 
 class FakeExecutionPort:
@@ -145,6 +189,13 @@ class FakeExecutionPort:
         }
 
     def stream_execution(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        return self._stream(run_id)
+
+    def execute_run(
+        self,
+        run_id: str,
+        initial_state: State,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         return self._stream(run_id)
 
 
@@ -212,16 +263,119 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(document.status, "pending")
 
         await service.approve_run(document.run_id)
+        await service.execute_queued_run(document.run_id)
         events = [
-            json.loads(event.removeprefix("data: ").strip())
+            json.loads(
+                next(
+                    line.removeprefix("data: ")
+                    for line in event.splitlines()
+                    if line.startswith("data: ")
+                )
+            )
             async for event in service.stream_run_events(document.run_id)
         ]
 
         self.assertTrue(events)
         self.assertTrue(all(event["event_id"] for event in events))
         self.assertTrue(all(event["run_id"] == document.run_id for event in events))
-        self.assertEqual(events[-1]["type"], "completed")
+        self.assertEqual(events[-1]["type"], "run_completed")
         self.assertEqual(events[-1]["status"], "completed")
+
+    async def test_worker_claims_and_executes_queued_run_once(self) -> None:
+        workflow_repository = FakeWorkflowRepository()
+        workflow_repository.records["workflow-1"] = WorkflowRecord(
+            id="workflow-1",
+            version_id="00000000-0000-0000-0000-000000000001",
+            version_number=1,
+            name="Research",
+            user_id="default_user",
+            definition={
+                "flow_id": "workflow-1",
+                "name": "Research",
+                "tasks": [make_task(1).model_dump()],
+            },
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        run_repository = FakeRunRepository()
+        queue = InMemoryRunCommandQueue()
+        service = RunService(
+            run_repository=run_repository,
+            workflow_repository=workflow_repository,
+            execution_port=FakeExecutionPort(),
+            command_queue=queue,
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+
+        document = await service.create_workflow_run(
+            workflow_id="workflow-1",
+            idempotency_key="request-1",
+        )
+        self.assertIsNotNone(document)
+        self.assertEqual(document.status, "queued")
+
+        worker = RunWorker(service=service, command_queue=queue)
+        self.assertTrue(await worker.process_next(timeout=1))
+        completed = await service.get_run(document.run_id)
+        self.assertEqual(completed.status, "completed")
+        self.assertFalse(await worker.process_next(timeout=0))
+
+        same_document = await service.create_workflow_run(
+            workflow_id="workflow-1",
+            idempotency_key="request-1",
+        )
+        self.assertEqual(same_document.run_id, document.run_id)
+
+
+class FakeConversationRepository:
+    def __init__(self) -> None:
+        self.conversations: Dict[str, ConversationRecord] = {}
+        self.messages: Dict[str, List[ConversationMessage]] = {}
+
+    async def create(self, conversation: ConversationRecord) -> ConversationRecord:
+        self.conversations[conversation.id] = conversation
+        return conversation
+
+    async def get(self, conversation_id: str, user_id: str) -> ConversationRecord | None:
+        conversation = self.conversations.get(conversation_id)
+        return conversation if conversation and conversation.user_id == user_id else None
+
+    async def list(self, user_id: str, limit: int = 50) -> List[ConversationRecord]:
+        return [c for c in self.conversations.values() if c.user_id == user_id][:limit]
+
+    async def save(self, conversation: ConversationRecord) -> ConversationRecord:
+        self.conversations[conversation.id] = conversation
+        return conversation
+
+    async def add_message(self, message: ConversationMessage) -> ConversationMessage:
+        self.messages.setdefault(message.conversation_id, []).append(message)
+        return message
+
+    async def list_messages(
+        self,
+        conversation_id: str,
+        limit: int = 200,
+    ) -> List[ConversationMessage]:
+        return self.messages.get(conversation_id, [])[:limit]
+
+
+class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
+    async def test_conversation_persists_user_message_and_draft_plan(self) -> None:
+        repository = FakeConversationRepository()
+        service = ConversationService(
+            repository=repository,
+            execution_port=FakeExecutionPort(),
+        )
+        conversation = await service.create_conversation(title="Research chat")
+        updated = await service.send_message(
+            conversation_id=conversation.id,
+            content="Research local LLMs",
+        )
+
+        self.assertEqual(updated.status, "waiting_for_user")
+        self.assertEqual(len(updated.draft_plan), 1)
+        messages = await service.list_messages(conversation.id)
+        self.assertEqual(messages[0].role, "user")
 
 
 if __name__ == "__main__":

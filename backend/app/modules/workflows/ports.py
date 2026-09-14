@@ -22,3 +22,10 @@ class WorkflowRepository(Protocol):
 
     async def get_definition(self, workflow_id: str, user_id: str = "default_user") -> Dict[str, Any] | None:
         ...
+
+    async def get_current_version(
+        self,
+        workflow_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowRecord | None:
+        ...

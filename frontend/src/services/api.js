@@ -35,6 +35,48 @@ export async function getRunDetails(runId) {
   return res.json();
 }
 
+export async function createWorkflowRun(workflowId, inputData = {}, metadata = {}) {
+  const res = await fetch(`${API_BASE}/workflows/${workflowId}/runs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': crypto.randomUUID()
+    },
+    body: JSON.stringify({ input_data: inputData, metadata })
+  });
+  if (!res.ok) throw new Error(`Failed to create workflow run (${res.status})`);
+  return res.json();
+}
+
+export async function createConversation(title = '', workflowId = null) {
+  const res = await fetch(`${API_BASE}/conversations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, workflow_id: workflowId })
+  });
+  if (!res.ok) throw new Error(`Failed to create conversation (${res.status})`);
+  return res.json();
+}
+
+export async function sendConversationMessage(conversationId, content) {
+  const res = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content })
+  });
+  if (!res.ok) throw new Error(`Failed to send conversation message (${res.status})`);
+  return res.json();
+}
+
+export async function getRunEvents(runId, afterEventId = null) {
+  const query = afterEventId
+    ? `?after_event_id=${encodeURIComponent(afterEventId)}`
+    : '';
+  const res = await fetch(`${API_BASE}/runs/${runId}/events${query}`);
+  if (!res.ok) throw new Error(`Failed to fetch events for ${runId}`);
+  return res.json();
+}
+
 export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default_flow') {
   const res = await fetch(`${API_BASE}/runs/start`, {
     method: 'POST',

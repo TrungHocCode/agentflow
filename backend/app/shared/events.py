@@ -12,6 +12,8 @@ class ExecutionEvent(BaseModel):
 
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     run_id: str
+    sequence: int = 0
+    schema_version: str = "1"
     type: str
     task_id: Optional[str] = None
     phase: Optional[str] = None

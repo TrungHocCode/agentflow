@@ -174,13 +174,14 @@ export default function App() {
         const unsubscribe = subscribeRunSSEStream(
           currentRun.run_id,
           async (eventData) => {
-            if (eventData.type === 'log' && eventData.message) {
+            const eventType = eventData.legacy_type || eventData.type;
+            if (eventType === 'log' && eventData.message) {
               setExecutionLogs(prev => [...prev, eventData.message]);
             } else if (eventData.logs) {
               setExecutionLogs(prev => [...prev, ...eventData.logs]);
             }
 
-            if (eventData.type === 'task_update' && eventData.task) {
+            if (eventType === 'task_update' && eventData.task) {
               setActivePlan(prevPlan => {
                 const existing = prevPlan.find(t => t.id === eventData.task.id);
                 if (existing) {
@@ -191,15 +192,15 @@ export default function App() {
               });
             }
 
-            if (eventData.type === 'plan_update' && eventData.plan) {
+            if (eventType === 'plan_update' && eventData.plan) {
               setActivePlan(eventData.plan);
             }
 
-            if (eventData.type === 'results_update' && eventData.results) {
+            if (eventType === 'results_update' && eventData.results) {
               setExecutionResults(eventData.results);
             }
 
-            if (eventData.status === 'completed' || eventData.status === 'failed' || eventData.type === 'completed') {
+            if (eventData.status === 'completed' || eventData.status === 'failed' || eventType === 'completed') {
               if (eventData.plan && eventData.plan.length > 0) setActivePlan(eventData.plan);
               if (eventData.results && eventData.results.length > 0) setExecutionResults(eventData.results);
 

@@ -10,6 +10,9 @@ from app.db.base import Base
 from app.db.postgres_client import engine, AsyncSessionLocal
 from app.modules.flows.models import FlowModel
 from app.modules.agent_catalog.models import AgentCatalogModel, ToolCatalogModel
+from app.modules.runs.orm import RunModel, RunEventModel
+from app.modules.conversations.orm import ConversationModel, ConversationMessageModel
+from app.modules.workflows.orm import WorkflowVersionModel
 
 async def init_tables():
     async with engine.begin() as conn:
