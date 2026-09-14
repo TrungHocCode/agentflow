@@ -2,7 +2,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_persisted_run_service, get_run_query_service
+from app.api.dependencies import (
+    get_current_user_id,
+    get_persisted_run_service,
+    get_run_query_service,
+)
 from app.modules.runs.models import (
     RunStartRequest,
     RunCreateRequest,
@@ -132,6 +136,7 @@ async def create_workflow_run(
     req: RunCreateRequest,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     service: RunService = Depends(get_persisted_run_service),
+    user_id: str = Depends(get_current_user_id),
 ):
     """Create and enqueue an asynchronous run from a workflow snapshot."""
 
@@ -141,6 +146,7 @@ async def create_workflow_run(
         execution_mode=req.execution_mode,
         metadata=req.metadata,
         idempotency_key=idempotency_key,
+        user_id=user_id,
     )
     if not run_doc:
         raise HTTPException(

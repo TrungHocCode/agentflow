@@ -3,6 +3,8 @@
 from typing import NewType
 
 
+DEFAULT_USER_ID = "default_user"
+
 UserId = NewType("UserId", str)
 WorkflowId = NewType("WorkflowId", str)
 WorkflowVersionId = NewType("WorkflowVersionId", str)

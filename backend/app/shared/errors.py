@@ -27,3 +27,9 @@ class ConflictError(ApplicationError):
     """Raised when an operation conflicts with current resource state."""
 
     code = "conflict"
+
+
+class PersistenceError(ApplicationError):
+    """Raised when the application cannot read or write durable state."""
+
+    code = "persistence_unavailable"

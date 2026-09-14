@@ -14,6 +14,20 @@ class WorkflowRepository(Protocol):
         definition: Dict[str, Any],
     ) -> WorkflowRecord:
         ...
+
+    async def update(
+        self,
+        workflow_id: str,
+        user_id: str,
+        name: str,
+        description: str | None,
+        definition: Dict[str, Any],
+    ) -> WorkflowRecord | None:
+        ...
+
+    async def archive(self, workflow_id: str, user_id: str) -> WorkflowRecord | None:
+        ...
+
     async def list(self, user_id: str) -> List[WorkflowRecord]:
         ...
 

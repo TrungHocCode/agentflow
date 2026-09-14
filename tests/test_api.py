@@ -60,5 +60,51 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages_response.status_code, 200)
         self.assertEqual(messages_response.json()[0]["role"], "user")
 
+    async def test_workflow_update_creates_version_and_archive_preserves_history(self):
+        create_response = await self.client.post(
+            "/api/v1/flows/",
+            json={
+                "name": "Versioned research",
+                "definition": {
+                    "flow_id": "versioned-research",
+                    "name": "Versioned research",
+                    "tasks": [
+                        {
+                            "id": 1,
+                            "node": "web_search",
+                            "status": "pending",
+                            "description": "Search sources",
+                            "dependencies": [],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(create_response.status_code, 201)
+        workflow = create_response.json()
+        self.assertEqual(workflow["version_number"], 1)
+        self.assertEqual(workflow["status"], "active")
+
+        update_response = await self.client.put(
+            f"/api/v1/flows/{workflow['id']}",
+            json={"name": "Versioned technology research"},
+        )
+        self.assertEqual(update_response.status_code, 200)
+        updated = update_response.json()
+        self.assertEqual(updated["version_number"], 2)
+        self.assertNotEqual(updated["version_id"], workflow["version_id"])
+
+        archive_response = await self.client.delete(
+            f"/api/v1/flows/{workflow['id']}"
+        )
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertEqual(archive_response.json()["status"], "archived")
+
+        run_response = await self.client.post(
+            f"/api/v1/workflows/{workflow['id']}/runs",
+            json={},
+        )
+        self.assertEqual(run_response.status_code, 404)
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.execution.adapters import LangGraphExecutionAdapter
 from app.execution.ports import ExecutionPort
+from app.infrastructure.health_probe import DatabaseHealthProbe
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
 from app.infrastructure.postgres.catalog_repository import PostgresCatalogRepository
 from app.infrastructure.postgres.conversation_repository import (
@@ -25,6 +26,7 @@ from app.modules.conversations.service import ConversationService
 from app.modules.runs.events import RunEventPublisher
 from app.modules.runs.queue import RunCommandQueue
 from app.modules.runs.service import RunService
+from app.modules.system.health import HealthService
 from app.modules.workflows.service import WorkflowService
 
 
@@ -32,6 +34,12 @@ def build_execution_port() -> ExecutionPort:
     """Return the current in-process execution adapter."""
 
     return LangGraphExecutionAdapter()
+
+
+def build_health_service() -> HealthService:
+    """Compose the operational health service."""
+
+    return HealthService(probe=DatabaseHealthProbe())
 
 
 def build_run_queue() -> RunCommandQueue:

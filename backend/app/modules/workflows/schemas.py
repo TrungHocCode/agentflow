@@ -13,6 +13,14 @@ class WorkflowCreateRequest(BaseModel):
     definition: Optional[FlowDefinition] = None
 
 
+class WorkflowUpdateRequest(BaseModel):
+    """Fields that can change while creating a new immutable version."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    definition: Optional[FlowDefinition] = None
+
+
 class WorkflowResponse(BaseModel):
     id: str
     version_id: Optional[str] = None
@@ -20,6 +28,7 @@ class WorkflowResponse(BaseModel):
     name: str
     description: Optional[str] = None
     user_id: str
+    status: str = "active"
     definition: Dict[str, Any]
     created_at: Any
     updated_at: Any

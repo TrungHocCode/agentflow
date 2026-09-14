@@ -25,6 +25,8 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY backend/app /app/app
+COPY backend/alembic /app/alembic
+COPY alembic.ini /app/alembic.ini
 
 EXPOSE 8000
 

@@ -8,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
+from app.infrastructure.postgres.models import ConversationMessageModel, ConversationModel
 from app.modules.conversations.models import ConversationMessage, ConversationRecord
-from app.modules.conversations.orm import ConversationMessageModel, ConversationModel
 from app.modules.conversations.ports import ConversationRepository
 from app.execution.state import Task
+from app.shared.errors import PersistenceError
 
 
 _T = TypeVar("_T")
@@ -53,9 +54,9 @@ class PostgresConversationRepository(ConversationRepository):
                 await session.commit()
 
             await self._with_session(operation)
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-            _IN_MEMORY_CONVERSATIONS[conversation.id] = conversation
+            raise PersistenceError("Could not create conversation.") from exc
         return conversation
 
     async def get(self, conversation_id: str, user_id: str) -> ConversationRecord | None:
@@ -72,8 +73,9 @@ class PostgresConversationRepository(ConversationRepository):
                 record = result.scalar_one_or_none()
                 if record:
                     return self._to_domain(record)
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not load conversation.") from exc
 
         conversation = _IN_MEMORY_CONVERSATIONS.get(conversation_id)
         if conversation and conversation.user_id == user_id:
@@ -94,8 +96,9 @@ class PostgresConversationRepository(ConversationRepository):
                 records = result.scalars().all()
                 if records:
                     return [self._to_domain(record) for record in records]
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not list conversations.") from exc
 
         records = [
             conversation
@@ -120,9 +123,9 @@ class PostgresConversationRepository(ConversationRepository):
                 await session.commit()
 
             await self._with_session(operation)
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-            _IN_MEMORY_CONVERSATIONS[conversation.id] = conversation
+            raise PersistenceError("Could not save conversation.") from exc
         return conversation
 
     async def add_message(self, message: ConversationMessage) -> ConversationMessage:
@@ -145,9 +148,9 @@ class PostgresConversationRepository(ConversationRepository):
                 await session.commit()
 
             await self._with_session(operation)
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-            _IN_MEMORY_MESSAGES.setdefault(message.conversation_id, []).append(message)
+            raise PersistenceError("Could not save conversation message.") from exc
         return message
 
     async def list_messages(
@@ -168,8 +171,9 @@ class PostgresConversationRepository(ConversationRepository):
                 records = result.scalars().all()
                 if records:
                     return [self._message_to_domain(record) for record in records]
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not list conversation messages.") from exc
         return _IN_MEMORY_MESSAGES.get(conversation_id, [])[:limit]
 
     @staticmethod
