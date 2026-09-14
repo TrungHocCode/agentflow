@@ -21,6 +21,26 @@ class LangGraphExecutionAdapter(ExecutionPort):
             config=get_graph_config(run_id),
         )
 
+    async def _execute(
+        self,
+        run_id: str,
+        initial_state: State,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        graph = build_execution_graph()
+        async for chunk in graph.astream(
+            initial_state,
+            config=get_graph_config(run_id),
+            stream_mode="updates",
+        ):
+            yield chunk
+
+    def execute_run(
+        self,
+        run_id: str,
+        initial_state: State,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        return self._execute(run_id, initial_state)
+
     async def _stream(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         graph = build_execution_graph()
         async for chunk in graph.astream(

@@ -1,44 +1,73 @@
-"""Application service for run lifecycle and execution progress."""
+"""Application service for workflow run lifecycle and execution progress."""
 
+import asyncio
+import hashlib
 import json
+import time
 import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.execution.ports import ExecutionPort
 from app.execution.state import State, Task
+from app.modules.runs.events import (
+    DiscardingRunEventPublisher,
+    RunEventPublisher,
+)
 from app.modules.runs.models import RunDocument
 from app.modules.runs.ports import RunRepository
+from app.modules.runs.queue import (
+    DiscardingRunCommandQueue,
+    RunCommandQueue,
+)
 from app.modules.workflows.ports import WorkflowRepository
+from app.shared.commands import RunCommand
+from app.shared.errors import ValidationError
 from app.shared.events import ExecutionEvent
 
 
-class RunService:
-    """Coordinates run use cases through persistence and execution ports.
+TERMINAL_RUN_STATUSES = {
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "abandoned",
+}
 
-    The service deliberately does not know whether a run is stored in MongoDB,
-    memory, or another database, nor whether execution is performed by the
-    current in-process LangGraph adapter or a future background worker.
-    """
+LEGACY_EVENT_TYPES = {
+    "run_started": "start",
+    "run_progress": "log",
+    "task_ready": "plan_update",
+    "task_started": "task_update",
+    "task_completed": "results_update",
+    "task_failed": "error",
+    "run_completed": "completed",
+    "run_failed": "error",
+    "run_interrupted": "error",
+}
+
+
+class RunService:
+    """Coordinates run use cases through persistence, queue and execution ports."""
 
     def __init__(
         self,
         run_repository: RunRepository,
         workflow_repository: WorkflowRepository | None,
         execution_port: ExecutionPort,
+        command_queue: RunCommandQueue | None = None,
+        event_publisher: RunEventPublisher | None = None,
     ) -> None:
         self.run_repository = run_repository
         self.workflow_repository = workflow_repository
         self.execution_port = execution_port
+        self.command_queue = command_queue or DiscardingRunCommandQueue()
+        self.event_publisher = event_publisher or DiscardingRunEventPublisher()
 
     async def save_run_doc(self, document: RunDocument) -> None:
-        """Persist the latest run snapshot through the repository port."""
-
         await self.run_repository.save(document)
 
     async def get_run(self, run_id: str) -> RunDocument | None:
-        """Load one run without exposing the underlying document store."""
-
         return await self.run_repository.get(run_id)
 
     async def list_runs(
@@ -46,8 +75,6 @@ class RunService:
         flow_id: Optional[str] = None,
         limit: int = 50,
     ) -> List[RunDocument]:
-        """List run history, optionally filtered by workflow."""
-
         return await self.run_repository.list(flow_id=flow_id, limit=limit)
 
     async def create_run(
@@ -56,7 +83,7 @@ class RunService:
         input_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> RunDocument:
-        """Create a pending run and build a plan when the workflow has none."""
+        """Legacy build-phase entry point retained for compatibility."""
 
         run_id = str(uuid.uuid4())
         plan = await self._load_workflow_plan(flow_id)
@@ -66,7 +93,6 @@ class RunService:
 
         mode = "conversation"
         result_storage: List[Dict[str, Any]] = []
-
         if not plan:
             try:
                 initial_state: State = {
@@ -89,7 +115,9 @@ class RunService:
         document = RunDocument(
             run_id=run_id,
             flow_id=flow_id,
+            workflow_version_id=self._version_id(flow_id, plan),
             status="pending",
+            approval_status="pending",
             mode=mode,
             plan=plan,
             logs=logs,
@@ -97,20 +125,85 @@ class RunService:
             metadata=metadata or {},
         )
         await self.save_run_doc(document)
+        await self._record_event(
+            run_id,
+            "run_progress",
+            phase="build",
+            status=document.status,
+            payload={"flow_id": flow_id, "plan_size": len(plan)},
+        )
         return document
+
+    async def create_workflow_run(
+        self,
+        workflow_id: str,
+        input_data: Optional[Dict[str, Any]] = None,
+        execution_mode: str = "manual",
+        metadata: Optional[Dict[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
+        user_id: str = "default_user",
+    ) -> RunDocument | None:
+        """Create and enqueue an asynchronous run from a workflow snapshot."""
+
+        if self.workflow_repository is None:
+            return None
+        if idempotency_key:
+            existing = await self.run_repository.find_by_idempotency_key(idempotency_key)
+            if existing:
+                return existing
+
+        definition = await self._load_workflow_definition(workflow_id, user_id)
+        if definition is None:
+            return None
+        plan = self._normalize_tasks(definition.get("tasks") or [])
+        if not plan:
+            raise ValidationError("Workflow must contain at least one task.")
+
+        run_id = str(uuid.uuid4())
+        version_id = await self._load_workflow_version_id(
+            workflow_id,
+            user_id,
+            definition,
+        )
+        document_metadata = {
+            **(metadata or {}),
+            "workflow_snapshot": definition,
+        }
+        document = RunDocument(
+            run_id=run_id,
+            flow_id=workflow_id,
+            user_id=user_id,
+            workflow_version_id=version_id,
+            status="queued",
+            approval_status="not_required",
+            execution_mode=execution_mode,
+            mode="executing",
+            plan=plan,
+            metadata=document_metadata,
+            input_data=input_data or {},
+            idempotency_key=idempotency_key,
+        )
+        await self.save_run_doc(document)
+        await self._record_event(
+            run_id,
+            "run_progress",
+            phase="execute",
+            status="queued",
+            payload={"workflow_id": workflow_id, "workflow_version_id": version_id},
+        )
+        return await self._enqueue_document(document)
 
     async def send_message(
         self,
         run_id: str,
         message: str,
     ) -> Optional[RunDocument]:
-        """Resume the build-phase conversation for a run."""
+        """Resume the build-phase conversation for a legacy run."""
 
         run_doc = await self.get_run(run_id)
         if not run_doc:
             return None
-
-        if run_doc.status in ("completed", "failed"):
+        if run_doc.status in TERMINAL_RUN_STATUSES:
             return run_doc
 
         try:
@@ -122,10 +215,17 @@ class RunService:
             run_doc.logs.extend(result_state.get("logs") or [])
             run_doc.logs.append(f"[User Message]: {message}")
             run_doc.updated_at = datetime.utcnow()
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_id,
+                "run_progress",
+                phase="build",
+                status=run_doc.status,
+                payload={"message": message},
+            )
         except Exception as exc:
             run_doc.logs.append(f"[RunService Warning] send_message error: {exc}")
-
-        await self.save_run_doc(run_doc)
+            await self.save_run_doc(run_doc)
         return run_doc
 
     async def approve_run(
@@ -134,31 +234,184 @@ class RunService:
         approved: bool = True,
         feedback: Optional[str] = None,
     ) -> Optional[RunDocument]:
-        """Approve or reject a proposed plan without blocking the HTTP request."""
+        """Approve a plan and enqueue it without blocking on execution."""
 
         run_doc = await self.get_run(run_id)
         if not run_doc:
             return None
+        if run_doc.status in TERMINAL_RUN_STATUSES or run_doc.status in {"queued", "running"}:
+            return run_doc
 
         if not approved:
             run_doc.logs.append(
                 f"[User Approval]: Plan rejected. Feedback: {feedback or 'None'}"
             )
             run_doc.status = "failed"
+            run_doc.approval_status = "rejected"
+            run_doc.error_code = "workflow_rejected"
+            run_doc.error_message = feedback or "Workflow plan rejected by user."
             run_doc.updated_at = datetime.utcnow()
             await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_id,
+                "run_failed",
+                phase="build",
+                status=run_doc.status,
+                payload={"reason": run_doc.error_message},
+            )
             return run_doc
 
         run_doc.logs.append(
             f"[User Approval]: Plan approved. Feedback: {feedback or 'None'}"
         )
-        run_doc.status = "running"
+        run_doc.status = "queued"
+        run_doc.approval_status = "approved"
         run_doc.updated_at = datetime.utcnow()
         await self.save_run_doc(run_doc)
+        await self._record_event(
+            run_id,
+            "run_progress",
+            phase="build",
+            status="queued",
+            payload={"feedback": feedback},
+        )
+        return await self._enqueue_document(run_doc)
+
+    async def cancel_run(self, run_id: str) -> Optional[RunDocument]:
+        """Cancel a run before or during execution."""
+
+        run_doc = await self.get_run(run_id)
+        if not run_doc:
+            return None
+        if run_doc.status in TERMINAL_RUN_STATUSES:
+            return run_doc
+
+        run_doc.status = "cancelled"
+        run_doc.error_code = "cancelled_by_user"
+        run_doc.error_message = "Run cancelled by user."
+        run_doc.updated_at = datetime.utcnow()
+        await self.save_run_doc(run_doc)
+        await self._record_event(
+            run_id,
+            "run_interrupted",
+            phase="execute",
+            status=run_doc.status,
+            payload={"reason": run_doc.error_message},
+        )
         return run_doc
 
-    async def stream_run_events(self, run_id: str) -> AsyncGenerator[str, None]:
-        """Stream run progress using a stable, frontend-compatible SSE envelope."""
+    async def execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
+        """Execute one queued run; called by the background worker only."""
+
+        run_doc = await self.run_repository.claim(run_id)
+        if not run_doc:
+            return await self.get_run(run_id)
+
+        await self._record_event(
+            run_id,
+            "run_started",
+            phase="execute",
+            status="running",
+            payload={"workflow_version_id": run_doc.workflow_version_id},
+        )
+        initial_state: State = {
+            "messages": [],
+            "plan": run_doc.plan,
+            "current_task": run_doc.current_task,
+            "logs": [],
+            "result_storage": run_doc.result_storage,
+            "mode": "executing",
+            "metadata": {
+                **run_doc.metadata,
+                "input_data": run_doc.input_data,
+                "resolved_model_config": run_doc.resolved_model_config,
+            },
+        }
+        execution_started_at = time.perf_counter()
+
+        try:
+            async for chunk in self.execution_port.execute_run(run_id, initial_state):
+                latest = await self.get_run(run_id)
+                if latest and latest.status == "cancelled":
+                    return latest
+                if not isinstance(chunk, dict):
+                    continue
+                for node_name, node_output in chunk.items():
+                    if not isinstance(node_output, dict):
+                        continue
+                    events = self._apply_execution_output(
+                        run_doc,
+                        node_name,
+                        node_output,
+                    )
+                    run_doc.updated_at = datetime.utcnow()
+                    await self.save_run_doc(run_doc)
+                    for event in events:
+                        await self._record_event_object(event)
+
+            all_finished = bool(run_doc.plan) and all(
+                task.status in ("done", "failed", "skipped")
+                for task in run_doc.plan
+            )
+            run_doc.status = "completed" if all_finished else "interrupted"
+            if run_doc.status == "interrupted":
+                run_doc.error_code = "execution_incomplete"
+                run_doc.error_message = "Execution ended before all tasks completed."
+            run_doc.execution_time_ms = (
+                time.perf_counter() - execution_started_at
+            ) * 1000
+            run_doc.updated_at = datetime.utcnow()
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_id,
+                "run_completed",
+                phase="execute",
+                status=run_doc.status,
+                payload={
+                    "plan": [self._task_data(task) for task in run_doc.plan],
+                    "results": run_doc.result_storage,
+                },
+            )
+        except Exception as exc:
+            run_doc.status = "failed"
+            run_doc.error_code = "execution_error"
+            run_doc.error_message = str(exc)
+            run_doc.logs.append(f"[RunService Error]: {exc}")
+            run_doc.execution_time_ms = (
+                time.perf_counter() - execution_started_at
+            ) * 1000
+            run_doc.updated_at = datetime.utcnow()
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_id,
+                "run_failed",
+                phase="execute",
+                status="failed",
+                payload={"message": str(exc)},
+            )
+        return run_doc
+
+    async def list_run_events(
+        self,
+        run_id: str,
+        after_event_id: str | None = None,
+        limit: int = 200,
+    ) -> List[ExecutionEvent]:
+        list_events = getattr(self.run_repository, "list_events", None)
+        if list_events is None:
+            return []
+        return await self.run_repository.list_events(
+            run_id=run_id,
+            after_event_id=after_event_id,
+            limit=limit,
+        )
+
+    async def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """Observe persisted and live events; never starts execution."""
 
         run_doc = await self.get_run(run_id)
         if not run_doc:
@@ -167,16 +420,28 @@ class RunService:
                 "error",
                 phase="run",
                 status="failed",
+                payload={"message": f"Run {run_id} not found"},
                 message=f"Run {run_id} not found",
             )
             return
 
-        yield self._sse_event(
+        seen_ids: set[str] = set()
+        if after_event_id is None:
+            yield self._sse_event(
+                run_id,
+                "start",
+                phase="run",
+                status=run_doc.status,
+                payload={},
+            )
+
+        persisted_events = await self.list_run_events(
             run_id,
-            "start",
-            phase="run",
-            status=run_doc.status,
+            after_event_id=after_event_id,
         )
+        for event in persisted_events:
+            seen_ids.add(event.event_id)
+            yield self._event_frame(event)
 
         if run_doc.status == "pending":
             plan_data = [self._task_data(task) for task in run_doc.plan]
@@ -193,158 +458,273 @@ class RunService:
                 "completed",
                 phase="run",
                 status="pending",
+                payload={},
             )
             return
 
-        if run_doc.status in ("completed", "failed"):
-            for log in run_doc.logs:
+        if run_doc.status in TERMINAL_RUN_STATUSES:
+            if not any(event.type == "run_completed" for event in persisted_events):
                 yield self._sse_event(
                     run_id,
-                    "log",
-                    phase="execute",
+                    "completed",
+                    phase="run",
                     status=run_doc.status,
-                    message=str(log),
+                    payload={},
                 )
-            yield self._sse_event(
-                run_id,
-                "completed",
-                phase="run",
-                status=run_doc.status,
-            )
             return
 
+        latest = await self.get_run(run_id)
+        if latest and latest.status in TERMINAL_RUN_STATUSES:
+            trailing = await self.list_run_events(run_id)
+            for event in trailing:
+                if event.event_id not in seen_ids:
+                    seen_ids.add(event.event_id)
+                    yield self._event_frame(event)
+            return
+
+        subscription = self.event_publisher.subscribe(run_id)
+        iterator = subscription.__aiter__()
         try:
-            yield self._sse_event(
-                run_id,
-                "log",
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        iterator.__anext__(),
+                        timeout=1.0,
+                    )
+                except asyncio.TimeoutError:
+                    latest = await self.get_run(run_id)
+                    trailing = await self.list_run_events(run_id)
+                    for trailing_event in trailing:
+                        if trailing_event.event_id not in seen_ids:
+                            seen_ids.add(trailing_event.event_id)
+                            yield self._event_frame(trailing_event)
+                    if latest and latest.status in TERMINAL_RUN_STATUSES:
+                        return
+                    continue
+
+                if event.event_id in seen_ids:
+                    continue
+                seen_ids.add(event.event_id)
+                yield self._event_frame(event)
+                if event.type in {"run_completed", "run_failed", "run_interrupted"}:
+                    return
+        finally:
+            close_subscription = getattr(iterator, "aclose", None)
+            if close_subscription is not None:
+                await close_subscription()
+
+    def _apply_execution_output(
+        self,
+        run_doc: RunDocument,
+        node_name: str,
+        node_output: Dict[str, Any],
+    ) -> List[ExecutionEvent]:
+        events: List[ExecutionEvent] = []
+        logs = node_output.get("logs") or []
+        for log in logs:
+            run_doc.logs.append(log)
+            events.append(
+                ExecutionEvent(
+                    run_id=run_doc.run_id,
+                    type="run_progress",
+                    phase="execute",
+                    status="running",
+                    label=node_name,
+                    payload={"message": str(log), "node": node_name},
+                )
+            )
+
+        current_task = node_output.get("current_task")
+        if current_task:
+            normalized_task = self._normalize_task(current_task)
+            run_doc.current_task = normalized_task
+            task_data = self._task_data(normalized_task)
+            events.append(
+                ExecutionEvent(
+                    run_id=run_doc.run_id,
+                    type="task_started",
+                    task_id=str(normalized_task.id),
+                    phase="execute",
+                    status="running",
+                    label=node_name,
+                    payload={"task": task_data},
+                )
+            )
+
+        plan = node_output.get("plan")
+        if plan:
+            run_doc.plan = self._merge_plan(run_doc.plan, plan)
+            plan_data = [self._task_data(task) for task in run_doc.plan]
+            events.append(
+                ExecutionEvent(
+                    run_id=run_doc.run_id,
+                    type="task_ready",
+                    phase="execute",
+                    status="running",
+                    label=node_name,
+                    payload={"plan": plan_data},
+                )
+            )
+
+        result_storage = node_output.get("result_storage")
+        if result_storage:
+            values = result_storage if isinstance(result_storage, list) else [result_storage]
+            run_doc.result_storage.extend(values)
+            events.append(
+                ExecutionEvent(
+                    run_id=run_doc.run_id,
+                    type="task_completed",
+                    phase="execute",
+                    status="running",
+                    label=node_name,
+                    payload={"results": run_doc.result_storage},
+                )
+            )
+        return events
+
+    async def _enqueue_document(self, document: RunDocument) -> RunDocument:
+        command = RunCommand(
+            command_id=str(uuid.uuid4()),
+            run_id=document.run_id,
+            workflow_id=document.flow_id,
+            workflow_version_id=document.workflow_version_id,
+            requested_by=document.user_id,
+            metadata={"input_data": document.input_data},
+        )
+        try:
+            await self.command_queue.enqueue(command)
+            await self._record_event(
+                document.run_id,
+                "run_progress",
                 phase="execute",
-                status="running",
-                message=(
-                    f"[ExecutionEngine] Resuming graph for Run {run_id} "
-                    "in mode: executing..."
-                ),
-            )
-
-            async for chunk in self.execution_port.stream_execution(run_id):
-                for node_name, node_output in chunk.items():
-                    if not isinstance(node_output, dict):
-                        continue
-
-                    logs = node_output.get("logs") or []
-                    for log in logs:
-                        run_doc.logs.append(log)
-                        yield self._sse_event(
-                            run_id,
-                            "log",
-                            phase="execute",
-                            status="running",
-                            label=node_name,
-                            message=str(log),
-                            payload={"node": node_name},
-                        )
-
-                    current_task = node_output.get("current_task")
-                    if current_task:
-                        current_task = self._normalize_task(current_task)
-                        run_doc.current_task = current_task
-                        task_data = self._task_data(current_task)
-                        yield self._sse_event(
-                            run_id,
-                            "task_update",
-                            phase="execute",
-                            status="running",
-                            task_id=str(current_task.id),
-                            label=node_name,
-                            payload={"task": task_data},
-                            task=task_data,
-                        )
-
-                    plan = node_output.get("plan")
-                    if plan:
-                        run_doc.plan = self._merge_plan(run_doc.plan, plan)
-                        plan_data = [self._task_data(task) for task in run_doc.plan]
-                        yield self._sse_event(
-                            run_id,
-                            "plan_update",
-                            phase="execute",
-                            status="running",
-                            label=node_name,
-                            payload={"plan": plan_data},
-                            plan=plan_data,
-                        )
-
-                    result_storage = node_output.get("result_storage")
-                    if result_storage:
-                        run_doc.result_storage.extend(result_storage)
-                        yield self._sse_event(
-                            run_id,
-                            "results_update",
-                            phase="execute",
-                            status="running",
-                            label=node_name,
-                            payload={"results": run_doc.result_storage},
-                            results=run_doc.result_storage,
-                        )
-
-                    run_doc.updated_at = datetime.utcnow()
-                    await self.save_run_doc(run_doc)
-
-            all_finished = bool(run_doc.plan) and all(
-                task.status in ("done", "failed", "skipped")
-                for task in run_doc.plan
-            )
-            run_doc.status = "completed" if all_finished else "running"
-            run_doc.logs.append(
-                f"[RunService] Run {run_id} execution completed with status: "
-                f"{run_doc.status}"
-            )
-            run_doc.updated_at = datetime.utcnow()
-            await self.save_run_doc(run_doc)
-
-            yield self._sse_event(
-                run_id,
-                "completed",
-                phase="run",
-                status=run_doc.status,
-                payload={
-                    "plan": [self._task_data(task) for task in run_doc.plan],
-                    "results": run_doc.result_storage,
-                },
-                plan=[self._task_data(task) for task in run_doc.plan],
-                results=run_doc.result_storage,
+                status="queued",
+                payload={"command_id": command.command_id},
             )
         except Exception as exc:
-            run_doc.status = "failed"
-            error_message = f"[RunService Error]: {exc}"
-            run_doc.logs.append(error_message)
-            run_doc.updated_at = datetime.utcnow()
-            await self.save_run_doc(run_doc)
-            yield self._sse_event(
-                run_id,
-                "error",
+            document.status = "interrupted"
+            document.error_code = "queue_unavailable"
+            document.error_message = "Execution queue is unavailable."
+            document.logs.append(f"[RunService Queue Error]: {exc}")
+            document.updated_at = datetime.utcnow()
+            await self.save_run_doc(document)
+            await self._record_event(
+                document.run_id,
+                "run_failed",
                 phase="execute",
-                status="failed",
-                message=error_message,
+                status=document.status,
+                payload={"message": document.error_message},
             )
-            yield self._sse_event(
-                run_id,
-                "completed",
-                phase="run",
-                status="failed",
-            )
+        return document
+
+    async def _load_workflow_definition(
+        self,
+        workflow_id: str,
+        user_id: str = "default_user",
+    ) -> Dict[str, Any] | None:
+        if self.workflow_repository is None:
+            return None
+        try:
+            return await self.workflow_repository.get_definition(workflow_id, user_id)
+        except Exception:
+            return None
 
     async def _load_workflow_plan(self, flow_id: str) -> List[Task]:
-        if self.workflow_repository is None:
-            return []
+        definition = await self._load_workflow_definition(flow_id)
+        return self._normalize_tasks(definition.get("tasks") or []) if definition else []
 
+    async def _load_workflow_version_id(
+        self,
+        workflow_id: str,
+        user_id: str,
+        definition: Dict[str, Any],
+    ) -> str:
+        if self.workflow_repository is not None:
+            get_current_version = getattr(
+                self.workflow_repository,
+                "get_current_version",
+                None,
+            )
+            if get_current_version is not None:
+                try:
+                    version = await get_current_version(workflow_id, user_id)
+                    if version is not None and version.version_id:
+                        return version.version_id
+                except Exception:
+                    pass
+        return self._version_id(workflow_id, definition)
+
+    async def _record_event(
+        self,
+        run_id: str,
+        event_type: str,
+        *,
+        phase: str,
+        status: str,
+        payload: Dict[str, Any],
+        task_id: str | None = None,
+        label: str | None = None,
+    ) -> ExecutionEvent:
+        return await self._record_event_object(
+            ExecutionEvent(
+                run_id=run_id,
+                type=event_type,
+                task_id=task_id,
+                phase=phase,
+                status=status,
+                label=label,
+                payload=payload,
+            )
+        )
+
+    async def _record_event_object(self, event: ExecutionEvent) -> ExecutionEvent:
+        append_event = getattr(self.run_repository, "append_event", None)
+        persisted = await append_event(event) if append_event else event
         try:
-            definition = await self.workflow_repository.get_definition(flow_id)
+            await self.event_publisher.publish(persisted)
         except Exception:
-            # A missing database must not prevent the local execution fallback.
-            return []
-        if not definition:
-            return []
-        return self._normalize_tasks(definition.get("tasks") or [])
+            # Durable event replay remains available when live fan-out is down.
+            pass
+        return persisted
+
+    @staticmethod
+    def _event_frame(event: ExecutionEvent) -> str:
+        data = event.model_dump(mode="json")
+        data["legacy_type"] = LEGACY_EVENT_TYPES.get(event.type, event.type)
+        for key in ("message", "task", "plan", "results"):
+            if key in event.payload:
+                data[key] = event.payload[key]
+        return (
+            f"id: {event.event_id}\n"
+            f"data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        )
+
+    @staticmethod
+    def _sse_event(
+        run_id: str,
+        event_type: str,
+        *,
+        phase: str,
+        status: str,
+        payload: Dict[str, Any],
+        message: str | None = None,
+        **compatibility_fields: Any,
+    ) -> str:
+        event = ExecutionEvent(
+            run_id=run_id,
+            type=event_type,
+            phase=phase,
+            status=status,
+            payload=payload,
+        )
+        data = event.model_dump(mode="json")
+        data["legacy_type"] = LEGACY_EVENT_TYPES.get(event_type, event_type)
+        if message is not None:
+            data["message"] = message
+        data.update(compatibility_fields)
+        return (
+            f"id: {event.event_id}\n"
+            f"data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        )
 
     @staticmethod
     def _normalize_task(value: Task | Dict[str, Any]) -> Task:
@@ -371,31 +751,11 @@ class RunService:
         return task.model_dump(mode="json")
 
     @staticmethod
-    def _sse_event(
-        run_id: str,
-        event_type: str,
-        *,
-        phase: Optional[str] = None,
-        status: Optional[str] = None,
-        task_id: Optional[str] = None,
-        label: Optional[str] = None,
-        payload: Optional[Dict[str, Any]] = None,
-        message: Optional[str] = None,
-        **compatibility_fields: Any,
-    ) -> str:
-        """Encode a stable event envelope while retaining the existing UI fields."""
-
-        event = ExecutionEvent(
-            run_id=run_id,
-            type=event_type,
-            task_id=task_id,
-            phase=phase,
-            status=status,
-            label=label,
-            payload=payload or {},
+    def _version_id(workflow_id: str, definition: Any) -> str:
+        serialized = json.dumps(
+            definition,
+            sort_keys=True,
+            default=lambda value: value.model_dump() if hasattr(value, "model_dump") else str(value),
         )
-        data = event.model_dump(mode="json")
-        if message is not None:
-            data["message"] = message
-        data.update(compatibility_fields)
-        return f"data: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:24]
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"agentflow:{workflow_id}:{digest}"))

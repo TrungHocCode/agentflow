@@ -1,10 +1,11 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies import get_persisted_run_service, get_run_query_service
 from app.modules.runs.models import (
     RunStartRequest,
+    RunCreateRequest,
     RunApproveRequest,
     RunChatRequest,
     RunResponse
@@ -12,6 +13,7 @@ from app.modules.runs.models import (
 from app.modules.runs.service import RunService
 
 router = APIRouter(prefix="/runs", tags=["Runs"])
+workflow_run_router = APIRouter(prefix="/workflows", tags=["Runs"])
 
 
 @router.post("/start", response_model=RunResponse, status_code=status.HTTP_201_CREATED)
@@ -60,6 +62,7 @@ async def get_run(
 
 
 @router.post("/{run_id}/approve", response_model=RunResponse)
+@router.post("/{run_id}/approval", response_model=RunResponse)
 async def approve_run(
     run_id: str,
     req: RunApproveRequest,
@@ -77,6 +80,72 @@ async def approve_run(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run with ID '{run_id}' not found."
+        )
+    return run_doc
+
+
+@router.post("/{run_id}/cancel", response_model=RunResponse)
+async def cancel_run(
+    run_id: str,
+    service: RunService = Depends(get_run_query_service),
+):
+    """Request cancellation of a queued or running run."""
+
+    run_doc = await service.cancel_run(run_id)
+    if not run_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run with ID '{run_id}' not found.",
+        )
+    return run_doc
+
+
+@router.get("/{run_id}/events")
+async def list_run_events(
+    run_id: str,
+    after_event_id: Optional[str] = Query(None, alias="after_event_id"),
+    limit: int = Query(200, ge=1, le=1000),
+    service: RunService = Depends(get_run_query_service),
+):
+    """List persisted progress events for replay and dashboard loading."""
+
+    run_doc = await service.get_run(run_id)
+    if not run_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run with ID '{run_id}' not found.",
+        )
+    return await service.list_run_events(
+        run_id,
+        after_event_id=after_event_id,
+        limit=limit,
+    )
+
+
+@workflow_run_router.post(
+    "/{workflow_id}/runs",
+    response_model=RunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_workflow_run(
+    workflow_id: str,
+    req: RunCreateRequest,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    service: RunService = Depends(get_persisted_run_service),
+):
+    """Create and enqueue an asynchronous run from a workflow snapshot."""
+
+    run_doc = await service.create_workflow_run(
+        workflow_id=workflow_id,
+        input_data=req.input_data,
+        execution_mode=req.execution_mode,
+        metadata=req.metadata,
+        idempotency_key=idempotency_key,
+    )
+    if not run_doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow with ID '{workflow_id}' not found.",
         )
     return run_doc
 
@@ -109,6 +178,7 @@ async def chat_run(
 @router.get("/{run_id}/stream")
 async def stream_run(
     run_id: str,
+    last_event_id: Optional[str] = Header(None, alias="Last-Event-ID"),
     service: RunService = Depends(get_run_query_service),
 ):
     """
@@ -122,7 +192,7 @@ async def stream_run(
         )
 
     return StreamingResponse(
-        service.stream_run_events(run_id),
+        service.stream_run_events(run_id, after_event_id=last_event_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

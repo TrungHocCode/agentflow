@@ -12,6 +12,8 @@ class WorkflowRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    version_id: str | None = None
+    version_number: int | None = None
     name: str
     description: Optional[str] = None
     user_id: str

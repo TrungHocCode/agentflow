@@ -11,5 +11,9 @@ class ExecutionPort(Protocol):
     async def continue_conversation(self, run_id: str, message: str) -> State:
         ...
 
+    def execute_run(self, run_id: str, initial_state: State) -> AsyncGenerator[Dict[str, Any], None]:
+        """Execute a durable run from its persisted state."""
+        ...
+
     def stream_execution(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
         ...

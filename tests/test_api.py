@@ -39,5 +39,26 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIsInstance(response.json(), list)
 
+    async def test_conversation_build_endpoint(self):
+        create_response = await self.client.post(
+            "/api/v1/conversations",
+            json={"title": "Technology research"},
+        )
+        self.assertEqual(create_response.status_code, 201)
+        conversation_id = create_response.json()["id"]
+
+        message_response = await self.client.post(
+            f"/api/v1/conversations/{conversation_id}/messages",
+            json={"content": "Research local LLMs"},
+        )
+        self.assertEqual(message_response.status_code, 200)
+        self.assertEqual(message_response.json()["status"], "waiting_for_user")
+
+        messages_response = await self.client.get(
+            f"/api/v1/conversations/{conversation_id}/messages"
+        )
+        self.assertEqual(messages_response.status_code, 200)
+        self.assertEqual(messages_response.json()[0]["role"], "user")
+
 if __name__ == "__main__":
     unittest.main()

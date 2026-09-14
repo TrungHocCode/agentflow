@@ -1,5 +1,7 @@
 from typing import List
+
 from fastapi import APIRouter, Depends
+
 from app.api.dependencies import get_catalog_service
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.service import CatalogService

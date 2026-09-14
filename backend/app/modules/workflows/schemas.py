@@ -15,6 +15,8 @@ class WorkflowCreateRequest(BaseModel):
 
 class WorkflowResponse(BaseModel):
     id: str
+    version_id: Optional[str] = None
+    version_number: Optional[int] = None
     name: str
     description: Optional[str] = None
     user_id: str
