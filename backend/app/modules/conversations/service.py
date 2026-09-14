@@ -1,5 +1,7 @@
 """Application service for the Build Phase conversation lifecycle."""
 
+import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
@@ -12,6 +14,7 @@ from app.modules.conversations.models import (
     ConversationMessage,
     ConversationRecord,
 )
+from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
 
 
@@ -22,9 +25,11 @@ class ConversationService:
         self,
         repository: ConversationRepository,
         execution_port: ExecutionPort,
+        event_publisher: ConversationEventPublisher | None = None,
     ) -> None:
         self.repository = repository
         self.execution_port = execution_port
+        self.event_publisher = event_publisher
 
     async def create_conversation(
         self,
@@ -121,6 +126,130 @@ class ConversationService:
                 )
             )
         return conversation
+
+    async def start_message(
+        self,
+        conversation_id: str,
+        content: str,
+        user_id: str = "default_user",
+    ) -> Dict[str, Any] | None:
+        """Persist a message and run planning asynchronously for the API contract."""
+
+        conversation = await self.get_conversation(conversation_id, user_id)
+        if conversation is None or conversation.status == "archived":
+            return None
+        user_message = ConversationMessage(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            role="user",
+            content=content,
+            created_at=datetime.utcnow(),
+        )
+        await self.repository.add_message(user_message)
+        turn_id = str(uuid.uuid4())
+        await self._publish(
+            ConversationEvent(
+                conversation_id=conversation.id,
+                turn_id=turn_id,
+                type="planning_started",
+                payload={"user_message_id": user_message.id},
+            )
+        )
+        asyncio.create_task(self._process_turn(conversation, content, turn_id))
+        return {
+            "turn_id": turn_id,
+            "conversation_id": conversation.id,
+            "user_message_id": user_message.id,
+            "status": "accepted",
+            "events_url": f"/api/v1/conversations/{conversation.id}/events?turn_id={turn_id}",
+        }
+
+    async def _process_turn(
+        self,
+        conversation: ConversationRecord,
+        content: str,
+        turn_id: str,
+    ) -> None:
+        try:
+            if conversation.draft_plan:
+                result_state = await self.execution_port.continue_conversation(conversation.id, content)
+            else:
+                initial_state: State = {
+                    "messages": [HumanMessage(content=content)],
+                    "plan": [],
+                    "current_task": None,
+                    "logs": [],
+                    "result_storage": [],
+                    "mode": "conversation",
+                    "metadata": conversation.metadata,
+                }
+                result_state = await self.execution_port.create_plan(conversation.id, initial_state)
+
+            conversation.draft_plan = self._normalize_tasks(result_state.get("plan") or [])
+            conversation.status = "waiting_for_user"
+            conversation.updated_at = datetime.utcnow()
+            await self.repository.save(conversation)
+            await self._publish(
+                ConversationEvent(
+                    conversation_id=conversation.id,
+                    turn_id=turn_id,
+                    type="workflow_draft_updated",
+                    payload={"plan": [task.model_dump(mode="json") for task in conversation.draft_plan]},
+                )
+            )
+            assistant_messages = self._assistant_messages(result_state.get("messages") or [])
+            for message in assistant_messages:
+                await self.repository.add_message(
+                    ConversationMessage(
+                        id=str(uuid.uuid4()),
+                        conversation_id=conversation.id,
+                        role="assistant",
+                        content=message,
+                        created_at=datetime.utcnow(),
+                    )
+                )
+                await self._publish(
+                    ConversationEvent(
+                        conversation_id=conversation.id,
+                        turn_id=turn_id,
+                        type="assistant_delta",
+                        payload={"content": message},
+                    )
+                )
+            await self._publish(
+                ConversationEvent(
+                    conversation_id=conversation.id,
+                    turn_id=turn_id,
+                    type="planning_completed",
+                    payload={"status": conversation.status},
+                )
+            )
+        except Exception as exc:
+            await self._publish(
+                ConversationEvent(
+                    conversation_id=conversation.id,
+                    turn_id=turn_id,
+                    type="planning_failed",
+                    payload={"message": str(exc)},
+                )
+            )
+
+    async def stream_events(
+        self,
+        conversation_id: str,
+        turn_id: str | None = None,
+    ):
+        if self.event_publisher is None:
+            return
+        async for event in self.event_publisher.subscribe(conversation_id, turn_id):
+            payload = event.model_dump(mode="json")
+            yield f"id: {event.event_id}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if event.type in {"planning_completed", "planning_failed"}:
+                return
+
+    async def _publish(self, event: ConversationEvent) -> None:
+        if self.event_publisher is not None:
+            await self.event_publisher.publish(event)
 
     @staticmethod
     def _assistant_messages(messages: List[Any]) -> List[str]:

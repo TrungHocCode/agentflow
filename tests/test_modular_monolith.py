@@ -392,6 +392,36 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         messages = await service.list_messages(conversation.id)
         self.assertEqual(messages[0].role, "user")
 
+    async def test_async_message_publishes_replayable_progress_events(self) -> None:
+        from app.infrastructure.redis.conversation_event_publisher import (
+            InMemoryConversationEventPublisher,
+        )
+
+        repository = FakeConversationRepository()
+        publisher = InMemoryConversationEventPublisher()
+        service = ConversationService(
+            repository=repository,
+            execution_port=FakeExecutionPort(),
+            event_publisher=publisher,
+        )
+        conversation = await service.create_conversation(title="Async research chat")
+        accepted = await service.start_message(
+            conversation_id=conversation.id,
+            content="Research local LLMs",
+        )
+
+        self.assertEqual(accepted["status"], "accepted")
+        events = []
+        async for frame in service.stream_events(
+            conversation.id,
+            turn_id=accepted["turn_id"],
+        ):
+            events.append(frame)
+
+        self.assertIn("planning_started", "".join(events))
+        self.assertIn("workflow_draft_updated", "".join(events))
+        self.assertIn("planning_completed", "".join(events))
+
 
 if __name__ == "__main__":
     unittest.main()

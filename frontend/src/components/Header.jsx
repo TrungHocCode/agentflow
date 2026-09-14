@@ -1,7 +1,7 @@
 import React from 'react';
-import { Cpu, Activity, Sparkles, Server } from 'lucide-react';
+import { Cpu, Activity, Sparkles, Server, LogOut } from 'lucide-react';
 
-export default function Header({ selectedModel, setSelectedModel, backendStatus }) {
+export default function Header({ selectedModel, setSelectedModel, backendStatus, user, onLogout }) {
   const models = [
     { id: 'qwen3:8b', name: 'Qwen3 8B (Recommended)' },
     { id: 'llama3:8b', name: 'Llama3 8B' },
@@ -30,7 +30,7 @@ export default function Header({ selectedModel, setSelectedModel, backendStatus 
       </div>
 
       {/* Right Controls: Model Selector + Backend Status */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
         {/* Model Dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(30,41,59,0.6)', padding: '0.375rem 0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--glass-border)' }}>
           <Cpu style={{ width: '16px', height: '16px', color: 'var(--accent-cyan)' }} />
@@ -54,6 +54,12 @@ export default function Header({ selectedModel, setSelectedModel, backendStatus 
             {backendStatus ? 'Backend Connected' : 'Connecting API...'}
           </span>
         </div>
+        {user && (
+          <button className="btn-secondary" onClick={onLogout} title="Đăng xuất" style={{ padding: '0.45rem 0.65rem' }}>
+            <LogOut size={14} />
+            <span>{user.display_name || user.email}</span>
+          </button>
+        )}
       </div>
     </header>
   );

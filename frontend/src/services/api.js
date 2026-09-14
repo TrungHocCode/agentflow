@@ -5,6 +5,48 @@
 
 const API_BASE = '/api/v1';
 
+async function requestJson(url, options = {}) {
+  const token = localStorage.getItem('agentflow_access_token');
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`${res.status}: ${detail || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function login(email, password) {
+  const response = await requestJson(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  localStorage.setItem('agentflow_access_token', response.access_token);
+  return response.user;
+}
+
+export async function register(email, password, displayName) {
+  const response = await requestJson(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, display_name: displayName })
+  });
+  localStorage.setItem('agentflow_access_token', response.access_token);
+  return response.user;
+}
+
+export async function logout() {
+  try {
+    await requestJson(`${API_BASE}/auth/logout`, { method: 'POST' });
+  } finally {
+    localStorage.removeItem('agentflow_access_token');
+  }
+}
+
 export async function getCatalogTools() {
   const res = await fetch(`${API_BASE}/catalog/tools`);
   if (!res.ok) throw new Error('Failed to fetch tools catalog');
@@ -30,13 +72,27 @@ export async function getRuns() {
 }
 
 export async function getRunDetails(runId) {
-  const res = await fetch(`${API_BASE}/runs/${runId}`);
-  if (!res.ok) throw new Error(`Failed to fetch run details for ${runId}`);
-  return res.json();
+  return requestJson(`${API_BASE}/runs/${runId}`);
+}
+
+export async function getRunResults(runId) {
+  return requestJson(`${API_BASE}/runs/${runId}/results`);
+}
+
+export async function getRunEvidence(runId) {
+  return requestJson(`${API_BASE}/runs/${runId}/evidence`);
+}
+
+export async function getRunArtifacts(runId) {
+  return requestJson(`${API_BASE}/runs/${runId}/artifacts`);
+}
+
+export async function retryRun(runId) {
+  return requestJson(`${API_BASE}/runs/${runId}/retry`, { method: 'POST' });
 }
 
 export async function createWorkflowRun(workflowId, inputData = {}, metadata = {}) {
-  const res = await fetch(`${API_BASE}/workflows/${workflowId}/runs`, {
+  return requestJson(`${API_BASE}/workflows/${workflowId}/runs`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -44,28 +100,34 @@ export async function createWorkflowRun(workflowId, inputData = {}, metadata = {
     },
     body: JSON.stringify({ input_data: inputData, metadata })
   });
-  if (!res.ok) throw new Error(`Failed to create workflow run (${res.status})`);
-  return res.json();
+}
+
+export async function createWorkflow(name, steps, description = '') {
+  return requestJson(`${API_BASE}/workflows`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name,
+      description,
+      definition: { steps }
+    })
+  });
 }
 
 export async function createConversation(title = '', workflowId = null) {
-  const res = await fetch(`${API_BASE}/conversations`, {
+  return requestJson(`${API_BASE}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, workflow_id: workflowId })
   });
-  if (!res.ok) throw new Error(`Failed to create conversation (${res.status})`);
-  return res.json();
 }
 
 export async function sendConversationMessage(conversationId, content) {
-  const res = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
+  return requestJson(`${API_BASE}/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content })
   });
-  if (!res.ok) throw new Error(`Failed to send conversation message (${res.status})`);
-  return res.json();
 }
 
 export async function getRunEvents(runId, afterEventId = null) {
@@ -140,4 +202,22 @@ export function subscribeRunSSEStream(runId, onMessage, onError) {
   return () => {
     eventSource.close();
   };
+}
+
+export function subscribeConversationEvents(conversationId, turnId, onMessage, onError) {
+  const url = `${API_BASE}/conversations/${conversationId}/events?turn_id=${encodeURIComponent(turnId)}`;
+  const eventSource = new EventSource(url);
+
+  eventSource.onmessage = (event) => {
+    try {
+      if (onMessage) onMessage(JSON.parse(event.data));
+    } catch (error) {
+      if (onError) onError(error);
+    }
+  };
+  eventSource.onerror = (error) => {
+    if (onError) onError(error);
+    eventSource.close();
+  };
+  return () => eventSource.close();
 }

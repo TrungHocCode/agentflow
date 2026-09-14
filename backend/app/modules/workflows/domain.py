@@ -21,3 +21,17 @@ class WorkflowRecord(BaseModel):
     definition: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class WorkflowVersionRecord(BaseModel):
+    """Immutable workflow version exposed by the application layer."""
+
+    id: str
+    workflow_id: str
+    version_number: int
+    status: str = "published"
+    definition: Dict[str, Any] = Field(default_factory=dict)
+    input_schema: Dict[str, Any] = Field(default_factory=dict)
+    output_schema: Dict[str, Any] = Field(default_factory=dict)
+    created_by: str = "default_user"
+    created_at: datetime

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -51,9 +52,17 @@ async def supervisor_node(state: State) -> Dict[str, Any]:
                 llm=llm
             )
             return await supervisor.execute(state)
-        except Exception:
-            # Fallback to deterministic DAG heuristic planner if Ollama is unreachable
-            pass
+        except Exception as exc:
+            # A configured live model must fail explicitly. A heuristic plan would
+            # look successful to the user while not representing the requested LLM.
+            return {
+                "mode": "conversation",
+                "messages": [
+                    "Local model is unavailable. Please start Ollama or check the configured model before continuing."
+                ],
+                "logs": [f"[SupervisorNode Error] LLM planning unavailable: {exc}"],
+                "metadata": {**metadata, "llm_error": str(exc)},
+            }
 
     user_msgs = state.get("messages") or []
     last_msg = ""
@@ -104,7 +113,7 @@ async def dispatcher_node(state: State) -> Dict[str, Any]:
     return result
 
 
-async def worker_node(state: State) -> Dict[str, Any]:
+async def _execute_worker_node(state: State) -> Dict[str, Any]:
     """
     Worker Node executes the current dispatched task using configured tools.
     """
@@ -151,7 +160,21 @@ async def worker_node(state: State) -> Dict[str, Any]:
             )
             return await worker_agent.execute(state)
         except Exception as e:
-            logs.append(f"[WorkerNode Warning] LLM ReAct error: {e}. Executing with deterministic tool engine.")
+            logs.append(f"[WorkerNode Error] LLM ReAct unavailable: {e}")
+            updated_task = current_task.model_copy(update={"status": "failed", "error": str(e)})
+            return {
+                "plan": [updated_task],
+                "current_task": updated_task,
+                "result_storage": [{
+                    "task_id": current_task.id,
+                    "node": current_task.node,
+                    "description": current_task.description,
+                    "result": "",
+                    "status": "failed",
+                    "error": f"Local model unavailable: {e}",
+                }],
+                "logs": logs,
+            }
 
     result_text = ""
     status = "done"
@@ -243,6 +266,39 @@ async def worker_node(state: State) -> Dict[str, Any]:
         "result_storage": [new_result],
         "logs": logs
     }
+
+
+async def worker_node(state: State) -> Dict[str, Any]:
+    """Run a worker with a per-task wall-clock limit."""
+
+    current_task = state.get("current_task")
+    if current_task is None or current_task.timeout_seconds is None:
+        return await _execute_worker_node(state)
+    try:
+        return await asyncio.wait_for(
+            _execute_worker_node(state),
+            timeout=max(float(current_task.timeout_seconds), 0.1),
+        )
+    except asyncio.TimeoutError:
+        failed_task = current_task.model_copy(
+            update={
+                "status": "failed",
+                "error": f"Task exceeded timeout of {current_task.timeout_seconds} seconds.",
+            }
+        )
+        return {
+            "plan": [failed_task],
+            "current_task": failed_task,
+            "result_storage": [{
+                "task_id": current_task.id,
+                "node": current_task.node,
+                "description": current_task.description,
+                "result": "",
+                "status": "failed",
+                "error": failed_task.error,
+            }],
+            "logs": [f"[WorkerNode Error] {failed_task.error}"],
+        }
 
 
 def route_after_supervisor(state: State) -> str:
@@ -353,4 +409,3 @@ def get_graph_config(run_id: str) -> Dict[str, Any]:
         config dict để truyền vào ainvoke/astream/astream_events
     """
     return {"configurable": {"thread_id": run_id}}
-

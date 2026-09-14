@@ -9,12 +9,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.postgres.models import FlowModel, WorkflowVersionModel
-from app.modules.workflows.domain import WorkflowRecord
+from app.modules.workflows.domain import WorkflowRecord, WorkflowVersionRecord
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.errors import PersistenceError
 
 
 _IN_MEMORY_WORKFLOWS: Dict[str, WorkflowRecord] = {}
+_IN_MEMORY_VERSIONS: Dict[str, List[WorkflowVersionRecord]] = {}
 
 
 class PostgresWorkflowRepository(WorkflowRepository):
@@ -51,6 +52,18 @@ class PostgresWorkflowRepository(WorkflowRepository):
                 updated_at=now,
             )
             _IN_MEMORY_WORKFLOWS[workflow_id] = record
+            _IN_MEMORY_VERSIONS[workflow_id] = [
+                WorkflowVersionRecord(
+                    id=record.version_id,
+                    workflow_id=workflow_id,
+                    version_number=1,
+                    definition=definition,
+                    input_schema={},
+                    output_schema={},
+                    created_by=user_id,
+                    created_at=now,
+                )
+            ]
             return record
         try:
             workflow = FlowModel(
@@ -71,6 +84,8 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     version_number=1,
                     definition=definition,
                     created_by=user_id,
+                    input_schema={},
+                    output_schema={},
                 )
             )
             await self.session.commit()
@@ -144,6 +159,8 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     version_number=version_number,
                     definition=definition,
                     created_by=user_id,
+                    input_schema={},
+                    output_schema={},
                 )
             )
             await self.session.commit()
@@ -294,6 +311,153 @@ class PostgresWorkflowRepository(WorkflowRepository):
         record.version_number = version.version_number
         record.definition = version.definition or {}
         return record
+
+    async def list_versions(
+        self,
+        workflow_id: str,
+        user_id: str = "default_user",
+    ) -> List[WorkflowVersionRecord]:
+        if self.use_memory:
+            workflow = _IN_MEMORY_WORKFLOWS.get(workflow_id)
+            if workflow is None or workflow.user_id != user_id:
+                return []
+            return list(reversed(_IN_MEMORY_VERSIONS.get(workflow_id, [])))
+        try:
+            result = await self.session.execute(
+                select(WorkflowVersionModel)
+                .join(FlowModel, FlowModel.id == WorkflowVersionModel.workflow_id)
+                .where(
+                    WorkflowVersionModel.workflow_id == workflow_id,
+                    FlowModel.user_id == user_id,
+                )
+                .order_by(WorkflowVersionModel.version_number.desc())
+            )
+            return [self._version_to_domain(row) for row in result.scalars().all()]
+        except Exception as exc:
+            raise PersistenceError("Could not list workflow versions.") from exc
+
+    async def get_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowVersionRecord | None:
+        versions = await self.list_versions(workflow_id, user_id)
+        return next((version for version in versions if version.id == version_id), None)
+
+    async def create_version(
+        self,
+        workflow_id: str,
+        user_id: str,
+        definition: Dict[str, Any],
+    ) -> WorkflowVersionRecord | None:
+        if self.use_memory:
+            workflow = _IN_MEMORY_WORKFLOWS.get(workflow_id)
+            if workflow is None or workflow.user_id != user_id or workflow.status == "archived":
+                return None
+            versions = _IN_MEMORY_VERSIONS.setdefault(workflow_id, [])
+            now = datetime.now(timezone.utc)
+            version = WorkflowVersionRecord(
+                id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                version_number=len(versions) + 1,
+                definition=definition,
+                input_schema={},
+                output_schema={},
+                created_by=user_id,
+                created_at=now,
+            )
+            versions.append(version)
+            _IN_MEMORY_WORKFLOWS[workflow_id] = workflow.model_copy(
+                update={
+                    "definition": definition,
+                    "version_id": version.id,
+                    "version_number": version.version_number,
+                    "updated_at": now,
+                }
+            )
+            return version
+        try:
+            result = await self.session.execute(
+                select(FlowModel)
+                .where(FlowModel.id == workflow_id, FlowModel.user_id == user_id)
+                .with_for_update()
+            )
+            workflow = result.scalar_one_or_none()
+            if workflow is None or workflow.status == "archived":
+                return None
+            maximum = await self.session.scalar(
+                select(func.max(WorkflowVersionModel.version_number)).where(
+                    WorkflowVersionModel.workflow_id == workflow_id
+                )
+            )
+            version = WorkflowVersionModel(
+                id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                version_number=(maximum or 0) + 1,
+                definition=definition,
+                created_by=user_id,
+                input_schema={},
+                output_schema={},
+            )
+            self.session.add(version)
+            workflow.definition = definition
+            await self.session.commit()
+            return self._version_to_domain(version)
+        except Exception as exc:
+            await self.session.rollback()
+            raise PersistenceError("Could not create workflow version.") from exc
+
+    async def publish_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str,
+    ) -> WorkflowVersionRecord | None:
+        if self.use_memory:
+            version = await self.get_version(workflow_id, version_id, user_id)
+            if version is None:
+                return None
+            versions = _IN_MEMORY_VERSIONS[workflow_id]
+            updated = version.model_copy(update={"status": "published"})
+            _IN_MEMORY_VERSIONS[workflow_id] = [
+                updated if item.id == version_id else item for item in versions
+            ]
+            return updated
+        try:
+            result = await self.session.execute(
+                select(WorkflowVersionModel)
+                .join(FlowModel, FlowModel.id == WorkflowVersionModel.workflow_id)
+                .where(
+                    WorkflowVersionModel.id == version_id,
+                    WorkflowVersionModel.workflow_id == workflow_id,
+                    FlowModel.user_id == user_id,
+                )
+                .with_for_update()
+            )
+            version = result.scalar_one_or_none()
+            if version is None:
+                return None
+            version.status = "published"
+            await self.session.commit()
+            return self._version_to_domain(version)
+        except Exception as exc:
+            await self.session.rollback()
+            raise PersistenceError("Could not publish workflow version.") from exc
+
+    @staticmethod
+    def _version_to_domain(version: WorkflowVersionModel) -> WorkflowVersionRecord:
+        return WorkflowVersionRecord(
+            id=version.id,
+            workflow_id=version.workflow_id,
+            version_number=version.version_number,
+            status=version.status,
+            definition=version.definition or {},
+            input_schema=version.input_schema or {},
+            output_schema=version.output_schema or {},
+            created_by=version.created_by,
+            created_at=version.created_at or datetime.now(timezone.utc),
+        )
 
     @staticmethod
     def _to_domain(workflow: FlowModel) -> WorkflowRecord:

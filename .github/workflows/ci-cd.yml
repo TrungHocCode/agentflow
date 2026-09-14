@@ -66,3 +66,13 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
         run: |
           python -m unittest discover -s tests
+
+      - name: Compile Python sources
+        run: python -m compileall -q backend/app
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build

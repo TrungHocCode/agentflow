@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import json
+import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -20,6 +22,8 @@ from app.modules.runs.queue import (
     DiscardingRunCommandQueue,
     RunCommandQueue,
 )
+from app.modules.results.models import EvidenceRecord, ResultRecord
+from app.modules.results.ports import ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
 from app.shared.errors import ValidationError
@@ -57,31 +61,54 @@ class RunService:
         execution_port: ExecutionPort,
         command_queue: RunCommandQueue | None = None,
         event_publisher: RunEventPublisher | None = None,
+        research_repository: ResearchDataRepository | None = None,
+        artifact_storage: Any | None = None,
     ) -> None:
         self.run_repository = run_repository
         self.workflow_repository = workflow_repository
         self.execution_port = execution_port
         self.command_queue = command_queue or DiscardingRunCommandQueue()
         self.event_publisher = event_publisher or DiscardingRunEventPublisher()
+        self.research_repository = research_repository
+        self.artifact_storage = artifact_storage
 
     async def save_run_doc(self, document: RunDocument) -> None:
         await self.run_repository.save(document)
 
-    async def get_run(self, run_id: str) -> RunDocument | None:
-        return await self.run_repository.get(run_id)
+    async def get_run(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
+        if user_id is None:
+            return await self.run_repository.get(run_id)
+        try:
+            return await self.run_repository.get(run_id, user_id)
+        except TypeError:
+            # Compatibility for small in-memory adapters that predate ownership.
+            document = await self.run_repository.get(run_id)
+            return document if document and document.user_id == user_id else None
 
     async def list_runs(
         self,
         flow_id: Optional[str] = None,
         limit: int = 50,
+        user_id: str | None = None,
     ) -> List[RunDocument]:
-        return await self.run_repository.list(flow_id=flow_id, limit=limit)
+        try:
+            documents = await self.run_repository.list(
+                flow_id=flow_id,
+                limit=limit,
+                user_id=user_id,
+            )
+        except TypeError:
+            documents = await self.run_repository.list(flow_id=flow_id, limit=limit)
+        if user_id is not None:
+            return [document for document in documents if document.user_id == user_id]
+        return documents
 
     async def create_run(
         self,
         flow_id: str,
         input_message: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        user_id: str = "default_user",
     ) -> RunDocument:
         """Legacy build-phase entry point retained for compatibility."""
 
@@ -115,6 +142,7 @@ class RunService:
         document = RunDocument(
             run_id=run_id,
             flow_id=flow_id,
+            user_id=user_id,
             workflow_version_id=self._version_id(flow_id, plan),
             status="pending",
             approval_status="pending",
@@ -233,10 +261,11 @@ class RunService:
         run_id: str,
         approved: bool = True,
         feedback: Optional[str] = None,
+        user_id: str | None = None,
     ) -> Optional[RunDocument]:
         """Approve a plan and enqueue it without blocking on execution."""
 
-        run_doc = await self.get_run(run_id)
+        run_doc = await self.get_run(run_id, user_id=user_id)
         if not run_doc:
             return None
         if run_doc.status in TERMINAL_RUN_STATUSES or run_doc.status in {"queued", "running"}:
@@ -277,10 +306,14 @@ class RunService:
         )
         return await self._enqueue_document(run_doc)
 
-    async def cancel_run(self, run_id: str) -> Optional[RunDocument]:
+    async def cancel_run(
+        self,
+        run_id: str,
+        user_id: str | None = None,
+    ) -> Optional[RunDocument]:
         """Cancel a run before or during execution."""
 
-        run_doc = await self.get_run(run_id)
+        run_doc = await self.get_run(run_id, user_id=user_id)
         if not run_doc:
             return None
         if run_doc.status in TERMINAL_RUN_STATUSES:
@@ -299,6 +332,53 @@ class RunService:
             payload={"reason": run_doc.error_message},
         )
         return run_doc
+
+    async def retry_run(
+        self,
+        run_id: str,
+        user_id: str | None = None,
+    ) -> Optional[RunDocument]:
+        """Create a new attempt from a failed/interrupted run snapshot."""
+
+        source = await self.get_run(run_id, user_id=user_id)
+        if source is None or source.status not in {"failed", "interrupted", "cancelled"}:
+            return None
+        retry_plan = [
+            task.model_copy(update={"status": "pending", "error": None})
+            if task.status in {"failed", "skipped"}
+            else task
+            for task in source.plan
+        ]
+        retry_count = int(source.metadata.get("retry_count", 0)) + 1
+        retry = RunDocument(
+            run_id=str(uuid.uuid4()),
+            flow_id=source.flow_id,
+            user_id=source.user_id,
+            conversation_id=source.conversation_id,
+            workflow_version_id=source.workflow_version_id,
+            status="queued",
+            approval_status="not_required",
+            execution_mode=source.execution_mode,
+            mode="executing",
+            plan=retry_plan,
+            result_storage=list(source.result_storage),
+            metadata={
+                **source.metadata,
+                "retry_of": source.run_id,
+                "retry_count": retry_count,
+            },
+            input_data=dict(source.input_data),
+            resolved_model_config=dict(source.resolved_model_config),
+        )
+        await self.save_run_doc(retry)
+        await self._record_event(
+            retry.run_id,
+            "run_progress",
+            phase="execute",
+            status="queued",
+            payload={"retry_of": source.run_id, "retry_count": retry_count},
+        )
+        return await self._enqueue_document(retry)
 
     async def execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
         """Execute one queued run; called by the background worker only."""
@@ -340,6 +420,11 @@ class RunService:
                     if not isinstance(node_output, dict):
                         continue
                     events = self._apply_execution_output(
+                        run_doc,
+                        node_name,
+                        node_output,
+                    )
+                    await self._persist_research_output(
                         run_doc,
                         node_name,
                         node_output,
@@ -405,6 +490,31 @@ class RunService:
             after_event_id=after_event_id,
             limit=limit,
         )
+
+    async def list_run_results(self, run_id: str, limit: int = 200):
+        if self.research_repository is None:
+            return []
+        return await self.research_repository.list_results(run_id, limit)
+
+    async def list_run_evidence(self, run_id: str, limit: int = 200):
+        if self.research_repository is None:
+            return []
+        return await self.research_repository.list_evidence(run_id, limit)
+
+    async def get_run_evidence(self, run_id: str, evidence_id: str):
+        if self.research_repository is None:
+            return None
+        return await self.research_repository.get_evidence(evidence_id, run_id)
+
+    async def list_run_artifacts(self, run_id: str, limit: int = 200):
+        if self.research_repository is None:
+            return []
+        return await self.research_repository.list_artifacts(run_id, limit)
+
+    async def get_run_artifact(self, run_id: str, artifact_id: str):
+        if self.research_repository is None:
+            return None
+        return await self.research_repository.get_artifact(artifact_id, run_id)
 
     async def stream_run_events(
         self,
@@ -581,6 +691,107 @@ class RunService:
                 )
             )
         return events
+
+    async def _persist_research_output(
+        self,
+        run_doc: RunDocument,
+        node_name: str,
+        node_output: Dict[str, Any],
+    ) -> None:
+        """Project execution output into queryable results, evidence and artifacts."""
+
+        if self.research_repository is None:
+            return
+        values = node_output.get("result_storage")
+        if not values:
+            return
+        items = values if isinstance(values, list) else [values]
+        for item in items:
+            if not isinstance(item, dict):
+                item = {"result": item}
+            content = item.get("result", item.get("content", item))
+            if hasattr(content, "model_dump"):
+                content = content.model_dump(mode="json")
+            task_id = item.get("task_id") or item.get("task") or item.get("id")
+            result = ResultRecord(
+                id=str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"agentflow:result:{run_doc.run_id}:{task_id}:{json.dumps(content, sort_keys=True, default=str)}",
+                    )
+                ),
+                run_id=run_doc.run_id,
+                task_id=str(task_id) if task_id is not None else None,
+                result_type=self._infer_result_type(node_name, item),
+                content=content,
+                metadata={"node": node_name, "status": item.get("status", "done")},
+            )
+            await self.research_repository.save_result(result)
+
+            serialized = json.dumps(content, ensure_ascii=False, default=str)
+            for source_url in sorted(set(re.findall(r"https?://[^\s<>\"']+", serialized))):
+                evidence_id = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"agentflow:evidence:{run_doc.run_id}:{task_id}:{source_url}",
+                    )
+                )
+                await self.research_repository.save_evidence(
+                    EvidenceRecord(
+                        id=evidence_id,
+                        run_id=run_doc.run_id,
+                        task_execution_id=str(task_id) if task_id is not None else None,
+                        source_url=source_url.rstrip(".,);"),
+                        source_type=self._infer_source_type(source_url),
+                        excerpt=serialized[:500],
+                        metadata={"node": node_name},
+                    )
+                )
+
+            if self.artifact_storage is not None:
+                for source_path in self._find_artifact_paths(serialized):
+                    artifact = self.artifact_storage.ingest_file(
+                        source_path=source_path,
+                        user_id=run_doc.user_id,
+                        run_id=run_doc.run_id,
+                        task_execution_id=str(task_id) if task_id is not None else None,
+                    )
+                    if artifact is not None:
+                        await self.research_repository.save_artifact(artifact)
+
+    @staticmethod
+    def _infer_result_type(node_name: str, item: Dict[str, Any]) -> str:
+        explicit = item.get("result_type")
+        if explicit in {"raw_data", "normalized_data", "summary", "comparison", "chart_spec", "report"}:
+            return explicit
+        lowered = node_name.lower()
+        if "chart" in lowered:
+            return "chart_spec"
+        if "report" in lowered:
+            return "report"
+        if "summar" in lowered:
+            return "summary"
+        return "raw_data"
+
+    @staticmethod
+    def _infer_source_type(source_url: str) -> str:
+        lowered = source_url.lower()
+        if "github.com" in lowered or "gitlab.com" in lowered:
+            return "repository"
+        if "/docs" in lowered or "readthedocs" in lowered:
+            return "documentation"
+        if "/api" in lowered:
+            return "api"
+        return "article"
+
+    @staticmethod
+    def _find_artifact_paths(serialized: str) -> List[str]:
+        paths = []
+        for match in re.findall(r"(?:File Path|Chart Spec Path):\s*([^.,\n]+)", serialized):
+            path = match.strip().strip("`")
+            if os.path.isfile(path):
+                paths.append(path)
+        return list(dict.fromkeys(paths))
 
     async def _enqueue_document(self, document: RunDocument) -> RunDocument:
         command = RunCommand(

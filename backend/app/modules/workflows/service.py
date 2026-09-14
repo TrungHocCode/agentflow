@@ -2,7 +2,8 @@
 
 from typing import List
 
-from app.modules.workflows.domain import WorkflowRecord
+from app.execution.state import FlowDefinition
+from app.modules.workflows.domain import WorkflowRecord, WorkflowVersionRecord
 from app.modules.workflows.ports import WorkflowRepository
 from app.modules.workflows.schemas import WorkflowCreateRequest, WorkflowUpdateRequest
 from app.modules.workflows.validator import validate_workflow_definition
@@ -77,3 +78,41 @@ class WorkflowService:
         user_id: str = "default_user",
     ) -> WorkflowRecord | None:
         return await self.repository.get(workflow_id=workflow_id, user_id=user_id)
+
+    async def list_versions(
+        self,
+        workflow_id: str,
+        user_id: str = "default_user",
+    ) -> List[WorkflowVersionRecord]:
+        method = getattr(self.repository, "list_versions", None)
+        return await method(workflow_id, user_id) if method else []
+
+    async def get_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowVersionRecord | None:
+        method = getattr(self.repository, "get_version", None)
+        return await method(workflow_id, version_id, user_id) if method else None
+
+    async def create_version(
+        self,
+        workflow_id: str,
+        definition: FlowDefinition,
+        user_id: str = "default_user",
+    ) -> WorkflowVersionRecord | None:
+        validate_workflow_definition(definition)
+        method = getattr(self.repository, "create_version", None)
+        if method is None:
+            return None
+        return await method(workflow_id, user_id, definition.model_dump(mode="json"))
+
+    async def publish_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowVersionRecord | None:
+        method = getattr(self.repository, "publish_version", None)
+        return await method(workflow_id, version_id, user_id) if method else None

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Bot, User, CheckCircle2, Play, Sparkles, AlertCircle, ArrowRight, Clock, Zap } from 'lucide-react';
+import StructuredText from './StructuredText';
 
 export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isProcessing, activePlan, selectedModel }) {
   const [inputPrompt, setInputPrompt] = useState('');
@@ -117,8 +118,8 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                  {msg.text}
+                <div style={{ fontSize: '0.875rem', lineHeight: 1.5 }}>
+                  <StructuredText text={msg.text} />
                 </div>
               </div>
 

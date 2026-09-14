@@ -13,6 +13,9 @@ from app.infrastructure.postgres.conversation_repository import (
     PostgresConversationRepository,
 )
 from app.infrastructure.postgres.workflow_repository import PostgresWorkflowRepository
+from app.infrastructure.postgres.identity_repository import PostgresUserRepository
+from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+from app.infrastructure.artifacts.storage import LocalArtifactStorage
 from app.infrastructure.redis.event_publisher import (
     RedisRunEventPublisher,
     get_in_memory_publisher,
@@ -21,6 +24,10 @@ from app.infrastructure.redis.run_queue import (
     RedisRunCommandQueue,
     get_in_memory_queue,
 )
+from app.infrastructure.redis.conversation_event_publisher import (
+    RedisConversationEventPublisher,
+    get_in_memory_conversation_publisher,
+)
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
 from app.modules.runs.events import RunEventPublisher
@@ -28,6 +35,9 @@ from app.modules.runs.queue import RunCommandQueue
 from app.modules.runs.service import RunService
 from app.modules.system.health import HealthService
 from app.modules.workflows.service import WorkflowService
+from app.modules.identity.service import IdentityService
+from app.modules.results.service import ResearchResultService
+from app.core.config import settings
 
 
 def build_execution_port() -> ExecutionPort:
@@ -70,12 +80,27 @@ def build_workflow_service(session: AsyncSession) -> WorkflowService:
     return WorkflowService(repository=PostgresWorkflowRepository(session))
 
 
+def build_auth_service(session: AsyncSession | None = None) -> IdentityService:
+    """Compose the identity service."""
+
+    return IdentityService(
+        repository=PostgresUserRepository(session),
+        signing_secret=settings.AUTH_SIGNING_SECRET,
+        token_ttl=settings.ACCESS_TOKEN_TTL,
+    )
+
+
 def build_conversation_service(session: AsyncSession | None = None) -> ConversationService:
     """Compose the Build Phase conversation service."""
 
     return ConversationService(
         repository=PostgresConversationRepository(session),
         execution_port=build_execution_port(),
+        event_publisher=(
+            get_in_memory_conversation_publisher()
+            if os.getenv("TESTING", "").lower() == "true"
+            else RedisConversationEventPublisher()
+        ),
     )
 
 
@@ -88,4 +113,12 @@ def build_run_service(session: AsyncSession | None = None) -> RunService:
         execution_port=build_execution_port(),
         command_queue=build_run_queue(),
         event_publisher=build_event_publisher(),
+        research_repository=PostgresResearchRepository(session),
+        artifact_storage=LocalArtifactStorage(),
     )
+
+
+def build_research_result_service(session: AsyncSession | None = None) -> ResearchResultService:
+    """Compose the structured research output query service."""
+
+    return ResearchResultService(PostgresResearchRepository(session))

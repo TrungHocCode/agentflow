@@ -1,25 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatStudio from './components/ChatStudio';
 import FlowCanvas from './components/FlowCanvas';
 import CatalogBrowser from './components/CatalogBrowser';
 import ExecutionTracker from './components/ExecutionTracker';
+import AuthScreen from './components/AuthScreen';
 
 import { 
   getCatalogTools, 
   getCatalogAgents, 
-  startRun, 
-  sendChatMessage,
+  createConversation,
+  sendConversationMessage,
+  subscribeConversationEvents,
+  createWorkflow,
+  createWorkflowRun,
   approveRun, 
   getRunDetails,
-  subscribeRunSSEStream 
+  subscribeRunSSEStream,
+  logout as logoutUser
 } from './services/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio');
   const [selectedModel, setSelectedModel] = useState('qwen3:8b');
   const [backendStatus, setBackendStatus] = useState(false);
+  const [authUser, setAuthUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('agentflow_user') || 'null'); } catch { return null; }
+  });
 
   // Catalogs
   const [tools, setTools] = useState([]);
@@ -27,6 +35,7 @@ export default function App() {
 
   // Conversational & Execution State
   const [messages, setMessages] = useState([]);
+  const [conversationId, setConversationId] = useState(null);
   const [currentRun, setCurrentRun] = useState(null);
   const [activePlan, setActivePlan] = useState([]);
   const [executionLogs, setExecutionLogs] = useState([]);
@@ -34,6 +43,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [executionDuration, setExecutionDuration] = useState(null);
+  const conversationStreamRef = useRef(null);
 
   // Load catalogs on mount
   useEffect(() => {
@@ -71,6 +81,25 @@ export default function App() {
     loadCatalogs();
   }, []);
 
+  useEffect(() => () => {
+    if (conversationStreamRef.current) conversationStreamRef.current();
+  }, []);
+
+  const handleAuthenticated = (user) => {
+    localStorage.setItem('agentflow_user', JSON.stringify(user));
+    setAuthUser(user);
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    localStorage.removeItem('agentflow_user');
+    setAuthUser(null);
+  };
+
+  if (backendStatus && !authUser) {
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
+
   // Handle user sending message in Chat Studio
   const handleSendMessage = async (textPrompt) => {
     setIsProcessing(true);
@@ -88,40 +117,55 @@ export default function App() {
       return;
     }
 
+    let awaitingConversationStream = false;
     try {
       if (backendStatus) {
-        let runData;
-        if (currentRun?.run_id && currentRun?.status === 'pending') {
-          // Multi-turn continuation on existing run
-          runData = await sendChatMessage(currentRun.run_id, textPrompt);
-        } else {
-          // Start a new workflow run
-          runData = await startRun(textPrompt, selectedModel);
+        let activeConversationId = conversationId;
+        if (!activeConversationId) {
+          const conversation = await createConversation('Technology research studio');
+          activeConversationId = conversation.id;
+          setConversationId(activeConversationId);
         }
-        setCurrentRun(runData);
-
-        const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-
-        // If backend returned proposed plan
-        if (runData.plan && runData.plan.length > 0) {
-          setActivePlan(runData.plan);
-          setMessages(prev => [
-            ...prev,
-            { 
-              sender: 'supervisor', 
-              text: `Tôi đã lập xong Kế hoạch DAG gồm ${runData.plan.length} bước bên dưới cho bạn. Bạn có thể bấm 'Duyệt & Bắt Đầu Thực Thi Workflow' hoặc gõ 'đồng ý' nhé!`,
-              duration: durationSec
+        const accepted = await sendConversationMessage(activeConversationId, textPrompt);
+        if (accepted.status === 'accepted' && accepted.turn_id) {
+          awaitingConversationStream = true;
+          if (conversationStreamRef.current) conversationStreamRef.current();
+          conversationStreamRef.current = subscribeConversationEvents(
+            activeConversationId,
+            accepted.turn_id,
+            (eventData) => {
+              const payload = eventData.payload || {};
+              if (eventData.type === 'planning_started') {
+                setMessages(prev => [...prev, { sender: 'supervisor', text: 'Đã nhận yêu cầu. Supervisor đang phân tích và dựng workflow...' }]);
+              } else if (eventData.type === 'workflow_draft_updated') {
+                setActivePlan(payload.plan || []);
+              } else if (eventData.type === 'assistant_delta' && payload.content) {
+                setMessages(prev => [...prev, { sender: 'supervisor', text: payload.content }]);
+              } else if (eventData.type === 'planning_completed') {
+                setMessages(prev => [...prev, { sender: 'supervisor', text: 'Workflow đã được dựng xong. Bạn có thể review rồi bấm duyệt để thực thi.' }]);
+                setIsProcessing(false);
+                if (conversationStreamRef.current) conversationStreamRef.current();
+              } else if (eventData.type === 'planning_failed') {
+                setMessages(prev => [...prev, { sender: 'supervisor', text: `Không thể dựng workflow: ${payload.message || 'Lỗi không xác định.'}` }]);
+                setIsProcessing(false);
+                if (conversationStreamRef.current) conversationStreamRef.current();
+              }
+            },
+            () => {
+              setIsProcessing(false);
+              setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kết nối progress bị gián đoạn. Bạn có thể gửi lại yêu cầu.' }]);
             }
-          ]);
+          );
         } else {
-          setMessages(prev => [
-            ...prev,
-            { 
-              sender: 'supervisor', 
-              text: `Tôi đã ghi nhận yêu cầu của bạn. Bạn hãy làm rõ thêm chi tiết hoặc xác nhận để tôi lập kế hoạch nhé!`,
-              duration: durationSec
-            }
-          ]);
+          const plan = accepted.plan || accepted.draft_plan || [];
+          if (plan.length > 0) setActivePlan(plan);
+          setMessages(prev => [...prev, {
+            sender: 'supervisor',
+            text: plan.length > 0
+              ? `Tôi đã lập xong Kế hoạch DAG gồm ${plan.length} bước. Bạn có thể review và duyệt để thực thi.`
+              : 'Tôi đã ghi nhận yêu cầu. Bạn hãy làm rõ thêm chi tiết nhé!',
+            duration: ((Date.now() - sendStartTime) / 1000).toFixed(2)
+          }]);
         }
       } else {
 
@@ -150,7 +194,7 @@ export default function App() {
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
       setMessages(prev => [...prev, { sender: 'supervisor', text: `Có lỗi kết nối: ${err.message}`, duration: durationSec }]);
     } finally {
-      setIsProcessing(false);
+      if (!awaitingConversationStream) setIsProcessing(false);
     }
   };
 
@@ -166,13 +210,28 @@ export default function App() {
 
     setExecutionLogs(prev => [...prev, "[System] Plan approved by user. Starting LangGraph Execution Engine..."]);
 
-    if (backendStatus && currentRun?.run_id) {
+    if (backendStatus) {
       try {
-        await approveRun(currentRun.run_id);
+        let runId = currentRun?.run_id;
+        if (!runId) {
+          const steps = activePlan.map((task, index) => ({
+            task_key: String(task.id || index + 1),
+            name: task.node || `Task ${index + 1}`,
+            description: task.description || `Research task ${index + 1}`,
+            dependencies: (task.dependencies || []).map(String),
+            expected_output_type: task.node?.toLowerCase().includes('report') ? 'report' : 'raw_data'
+          }));
+          const workflow = await createWorkflow('Technology research workflow', steps, 'Generated from the research chat.');
+          const run = await createWorkflowRun(workflow.id, { model: selectedModel }, { model_name: selectedModel, use_llm: true });
+          runId = run.run_id;
+          setCurrentRun(run);
+        } else {
+          await approveRun(runId);
+        }
 
         // Subscribe to SSE Realtime Stream
         const unsubscribe = subscribeRunSSEStream(
-          currentRun.run_id,
+          runId,
           async (eventData) => {
             const eventType = eventData.legacy_type || eventData.type;
             if (eventType === 'log' && eventData.message) {
@@ -205,7 +264,7 @@ export default function App() {
               if (eventData.results && eventData.results.length > 0) setExecutionResults(eventData.results);
 
               try {
-                const latestDoc = await getRunDetails(currentRun.run_id);
+                const latestDoc = await getRunDetails(runId);
                 if (latestDoc?.plan && latestDoc.plan.length > 0) setActivePlan(latestDoc.plan);
                 if (latestDoc?.result_storage && latestDoc.result_storage.length > 0) setExecutionResults(latestDoc.result_storage);
                 if (latestDoc?.logs && latestDoc.logs.length > 0) setExecutionLogs(latestDoc.logs);
@@ -280,6 +339,8 @@ export default function App() {
         selectedModel={selectedModel}
         setSelectedModel={setSelectedModel}
         backendStatus={backendStatus}
+        user={authUser}
+        onLogout={handleLogout}
       />
 
       {/* Main Layout Body */}

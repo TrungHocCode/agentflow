@@ -9,10 +9,15 @@ from app.shared.events import ExecutionEvent
 class RunRepository(Protocol):
     async def save(self, document: RunDocument) -> None:
         ...
-    async def get(self, run_id: str) -> RunDocument | None:
+    async def get(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
         ...
 
-    async def list(self, flow_id: str | None = None, limit: int = 50) -> List[RunDocument]:
+    async def list(
+        self,
+        flow_id: str | None = None,
+        limit: int = 50,
+        user_id: str | None = None,
+    ) -> List[RunDocument]:
         ...
 
     async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:

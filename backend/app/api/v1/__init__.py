@@ -1,14 +1,20 @@
 from fastapi import APIRouter
 from app.api.v1.health import router as health_router
+from app.api.v1.auth import router as auth_router
 from app.api.v1.flows import router as flows_router
+from app.api.v1.catalog import compat_router as catalog_compat_router
 from app.api.v1.catalog import router as catalog_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.runs import router as runs_router, workflow_run_router
+from app.api.v1.workflows import router as workflows_router
 
 api_v1_router = APIRouter(prefix="/v1")
 api_v1_router.include_router(health_router)
+api_v1_router.include_router(auth_router)
 api_v1_router.include_router(flows_router)
 api_v1_router.include_router(catalog_router)
+api_v1_router.include_router(catalog_compat_router)
 api_v1_router.include_router(conversations_router)
 api_v1_router.include_router(runs_router)
 api_v1_router.include_router(workflow_run_router)
+api_v1_router.include_router(workflows_router)

@@ -10,7 +10,13 @@ from app.infrastructure.postgres.models.conversation import (
 )
 from app.infrastructure.postgres.models.flow import FlowModel
 from app.infrastructure.postgres.models.run import RunEventModel, RunModel
+from app.infrastructure.postgres.models.identity import UserModel
 from app.infrastructure.postgres.models.workflow import WorkflowVersionModel
+from app.infrastructure.postgres.models.results import (
+    ArtifactModel,
+    EvidenceModel,
+    ResultModel,
+)
 
 __all__ = [
     "AgentCatalogModel",
@@ -21,4 +27,8 @@ __all__ = [
     "RunEventModel",
     "RunModel",
     "WorkflowVersionModel",
+    "UserModel",
+    "ResultModel",
+    "EvidenceModel",
+    "ArtifactModel",
 ]

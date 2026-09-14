@@ -10,11 +10,20 @@ services:
     environment:
       - POSTGRES_URL=postgresql+asyncpg://agentflow:agentflow_password@postgres:5432/agentflow_db
       - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
+      - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
+      - CORS_ORIGINS=http://localhost:5173
+      - ARTIFACT_ROOT=/app/workspace_data
+      - AUTH_SIGNING_SECRET=change-this-in-local-env
+    volumes:
+      - artifacts_data:/app/workspace_data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/live')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
-        condition: service_healthy
-      mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -31,11 +40,13 @@ services:
     environment:
       - POSTGRES_URL=postgresql+asyncpg://agentflow:agentflow_password@postgres:5432/agentflow_db
       - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
+      - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
+      - ARTIFACT_ROOT=/app/workspace_data
+    volumes:
+      - artifacts_data:/app/workspace_data
     depends_on:
       postgres:
-        condition: service_healthy
-      mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -51,10 +62,23 @@ services:
     environment:
       - POSTGRES_URL=postgresql+asyncpg://agentflow:agentflow_password@postgres:5432/agentflow_db
       - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
+      - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: agentflow_frontend
+    restart: always
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_started
 
   postgres:
     image: postgres:16-alpine
@@ -123,3 +147,4 @@ volumes:
   postgres_data:
   mongodb_data:
   redis_data:
+  artifacts_data:

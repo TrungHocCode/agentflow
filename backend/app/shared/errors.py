@@ -6,9 +6,11 @@ class ApplicationError(Exception):
 
     code = "application_error"
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, code: str | None = None):
         super().__init__(message)
         self.message = message
+        if code is not None:
+            self.code = code
 
 
 class ValidationError(ApplicationError):

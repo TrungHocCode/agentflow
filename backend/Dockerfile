@@ -28,6 +28,12 @@ COPY backend/app /app/app
 COPY backend/alembic /app/alembic
 COPY alembic.ini /app/alembic.ini
 
+RUN addgroup --system agentflow && adduser --system --ingroup agentflow agentflow \
+    && mkdir -p /app/workspace_data \
+    && chown -R agentflow:agentflow /app
+
+USER agentflow
+
 EXPOSE 8000
 
 ENV PYTHONPATH=/app

@@ -22,6 +22,8 @@ class WorkflowVersionModel(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="published")
     definition: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    input_schema: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    output_schema: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_by: Mapped[str] = mapped_column(
         String(36),
         nullable=False,

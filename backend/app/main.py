@@ -5,6 +5,7 @@ from app.api.v1 import api_v1_router
 from app.db.mongo_client import close_mongo_connection
 from app.db.redis_client import close_redis_connection
 from app.shared.errors import ApplicationError, PersistenceError, ValidationError
+from app.core.config import settings
 
 app = FastAPI(
     title="AgentFlow Platform API",
@@ -15,7 +16,7 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

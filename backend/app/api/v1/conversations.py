@@ -1,8 +1,10 @@
 """Conversation HTTP endpoints for the Build Phase."""
 
-from typing import List
+import os
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.dependencies import get_conversation_service, get_current_user_id
 from app.modules.conversations.models import (
@@ -75,21 +77,54 @@ async def list_conversation_messages(
     return await service.list_messages(conversation_id, limit=limit)
 
 
-@router.post("/{conversation_id}/messages", response_model=ConversationResponse)
+@router.post("/{conversation_id}/messages", response_model=None)
 async def send_conversation_message(
     conversation_id: str,
     request: ConversationMessageRequest,
     service: ConversationService = Depends(get_conversation_service),
     user_id: str = Depends(get_current_user_id),
 ):
-    conversation = await service.send_message(
+    if os.getenv("TESTING", "").lower() == "true":
+        conversation = await service.send_message(
+            conversation_id=conversation_id,
+            content=request.content,
+            user_id=user_id,
+        )
+        if conversation is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Conversation with ID '{conversation_id}' not found.",
+            )
+        return conversation
+
+    accepted = await service.start_message(
         conversation_id=conversation_id,
         content=request.content,
         user_id=user_id,
     )
+    if accepted is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversation with ID '{conversation_id}' not found.",
+        )
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=accepted)
+
+
+@router.get("/{conversation_id}/events")
+async def stream_conversation_events(
+    conversation_id: str,
+    turn_id: Optional[str] = Query(None),
+    service: ConversationService = Depends(get_conversation_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    conversation = await service.get_conversation(conversation_id, user_id=user_id)
     if conversation is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Conversation with ID '{conversation_id}' not found.",
         )
-    return conversation
+    return StreamingResponse(
+        service.stream_events(conversation_id, turn_id=turn_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )

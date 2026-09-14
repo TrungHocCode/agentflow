@@ -65,15 +65,20 @@ class PostgresRunRepository(RunRepository):
             await self._rollback()
             raise PersistenceError("Could not save run state.") from exc
 
-    async def get(self, run_id: str) -> RunDocument | None:
+    async def get(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
         if self.use_memory:
             data = _IN_MEMORY_RUNS.get(run_id)
+            if data and user_id is not None and data.get("user_id") != user_id:
+                data = None
             return RunDocument(**data) if data else None
         if not self.use_memory:
             try:
                 result = await self._with_session(
                     lambda session: session.execute(
-                        select(RunModel).where(RunModel.run_id == run_id)
+                        select(RunModel).where(
+                            RunModel.run_id == run_id,
+                            *( [RunModel.user_id == user_id] if user_id is not None else [] ),
+                        )
                     )
                 )
                 record = result.scalar_one_or_none()
@@ -85,12 +90,18 @@ class PostgresRunRepository(RunRepository):
 
         return None
 
-    async def list(self, flow_id: str | None = None, limit: int = 50) -> List[RunDocument]:
+    async def list(
+        self,
+        flow_id: str | None = None,
+        limit: int = 50,
+        user_id: str | None = None,
+    ) -> List[RunDocument]:
         if self.use_memory:
             documents = [
                 RunDocument(**data)
                 for data in _IN_MEMORY_RUNS.values()
-                if flow_id is None or data.get("flow_id") == flow_id
+                if (flow_id is None or data.get("flow_id") == flow_id)
+                and (user_id is None or data.get("user_id") == user_id)
             ]
             return documents[:limit]
         if not self.use_memory:
@@ -98,6 +109,8 @@ class PostgresRunRepository(RunRepository):
                 statement = select(RunModel).order_by(RunModel.created_at.desc()).limit(limit)
                 if flow_id:
                     statement = statement.where(RunModel.flow_id == flow_id)
+                if user_id:
+                    statement = statement.where(RunModel.user_id == user_id)
                 result = await self._with_session(lambda session: session.execute(statement))
                 records = result.scalars().all()
                 if records:

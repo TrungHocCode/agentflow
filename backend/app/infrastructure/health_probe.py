@@ -1,5 +1,6 @@
-"""Infrastructure probes for PostgreSQL, MongoDB and Redis."""
+"""Infrastructure probes for PostgreSQL, optional MongoDB and Redis."""
 
+import os
 from typing import Any, Dict
 
 from sqlalchemy import text
@@ -18,7 +19,7 @@ class DatabaseHealthProbe(HealthProbe):
         await self._check_postgres(database_status)
         await self._check_mongodb(database_status)
         await self._check_redis(database_status)
-        healthy = all(value == "online" for value in database_status.values())
+        healthy = all(value in {"online", "disabled"} for value in database_status.values())
         return {
             "status": "ok" if healthy else "degraded",
             "databases": database_status,
@@ -35,6 +36,9 @@ class DatabaseHealthProbe(HealthProbe):
 
     @staticmethod
     async def _check_mongodb(database_status: Dict[str, str]) -> None:
+        if os.getenv("ENABLE_MONGODB", "false").lower() != "true":
+            database_status["mongodb"] = "disabled"
+            return
         try:
             await get_mongo_db().command("ping")
             database_status["mongodb"] = "online"

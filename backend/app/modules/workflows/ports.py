@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Protocol
 
-from app.modules.workflows.domain import WorkflowRecord
+from app.modules.workflows.domain import WorkflowRecord, WorkflowVersionRecord
 
 
 class WorkflowRepository(Protocol):
@@ -42,4 +42,31 @@ class WorkflowRepository(Protocol):
         workflow_id: str,
         user_id: str = "default_user",
     ) -> WorkflowRecord | None:
+        ...
+
+    async def list_versions(self, workflow_id: str, user_id: str = "default_user") -> List[WorkflowVersionRecord]:
+        ...
+
+    async def get_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowVersionRecord | None:
+        ...
+
+    async def create_version(
+        self,
+        workflow_id: str,
+        user_id: str,
+        definition: Dict[str, Any],
+    ) -> WorkflowVersionRecord | None:
+        ...
+
+    async def publish_version(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str,
+    ) -> WorkflowVersionRecord | None:
         ...
