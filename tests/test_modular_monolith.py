@@ -1,8 +1,10 @@
 import json
 import os
+import re
 import sys
 import unittest
 from datetime import datetime
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
@@ -200,6 +202,19 @@ class FakeExecutionPort:
 
 
 class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
+    def test_modules_do_not_depend_on_infrastructure_or_sqlalchemy(self) -> None:
+        modules_root = Path(__file__).resolve().parents[1] / "backend" / "app" / "modules"
+        for source_path in modules_root.rglob("*.py"):
+            source = source_path.read_text(encoding="utf-8")
+            self.assertIsNone(
+                re.search(r"^\s*(from|import)\s+sqlalchemy", source, re.MULTILINE),
+                str(source_path),
+            )
+            self.assertIsNone(
+                re.search(r"^\s*(from|import)\s+app\.infrastructure", source, re.MULTILINE),
+                str(source_path),
+            )
+
     def test_workflow_validator_rejects_invalid_dag(self) -> None:
         from app.execution.state import FlowDefinition
 

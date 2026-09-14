@@ -8,9 +8,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
-from app.modules.runs.models import RunDocument, Task
-from app.modules.runs.orm import RunEventModel, RunModel
+from app.infrastructure.postgres.models import RunEventModel, RunModel
+from app.modules.runs.models import RunDocument
 from app.modules.runs.ports import RunRepository
+from app.shared.errors import PersistenceError
 from app.shared.events import ExecutionEvent
 
 
@@ -60,11 +61,14 @@ class PostgresRunRepository(RunRepository):
                 await session.commit()
 
             await self._with_session(operation)
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-            self._save_memory(document)
+            raise PersistenceError("Could not save run state.") from exc
 
     async def get(self, run_id: str) -> RunDocument | None:
+        if self.use_memory:
+            data = _IN_MEMORY_RUNS.get(run_id)
+            return RunDocument(**data) if data else None
         if not self.use_memory:
             try:
                 result = await self._with_session(
@@ -75,13 +79,20 @@ class PostgresRunRepository(RunRepository):
                 record = result.scalar_one_or_none()
                 if record is not None:
                     return self._to_domain(record)
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not load run state.") from exc
 
-        data = _IN_MEMORY_RUNS.get(run_id)
-        return RunDocument(**data) if data else None
+        return None
 
     async def list(self, flow_id: str | None = None, limit: int = 50) -> List[RunDocument]:
+        if self.use_memory:
+            documents = [
+                RunDocument(**data)
+                for data in _IN_MEMORY_RUNS.values()
+                if flow_id is None or data.get("flow_id") == flow_id
+            ]
+            return documents[:limit]
         if not self.use_memory:
             try:
                 statement = select(RunModel).order_by(RunModel.created_at.desc()).limit(limit)
@@ -91,18 +102,19 @@ class PostgresRunRepository(RunRepository):
                 records = result.scalars().all()
                 if records:
                     return [self._to_domain(record) for record in records]
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not list run state.") from exc
 
-        documents = [
-            RunDocument(**data)
-            for data in _IN_MEMORY_RUNS.values()
-            if flow_id is None or data.get("flow_id") == flow_id
-        ]
-        return documents[:limit]
+        return []
 
     async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:
         if not idempotency_key:
+            return None
+        if self.use_memory:
+            for data in _IN_MEMORY_RUNS.values():
+                if data.get("idempotency_key") == idempotency_key:
+                    return RunDocument(**data)
             return None
         if not self.use_memory:
             try:
@@ -114,12 +126,10 @@ class PostgresRunRepository(RunRepository):
                 record = result.scalar_one_or_none()
                 if record is not None:
                     return self._to_domain(record)
-            except Exception:
+            except Exception as exc:
                 await self._rollback()
+                raise PersistenceError("Could not find run by idempotency key.") from exc
 
-        for data in _IN_MEMORY_RUNS.values():
-            if data.get("idempotency_key") == idempotency_key:
-                return RunDocument(**data)
         return None
 
     async def claim(self, run_id: str) -> RunDocument | None:
@@ -150,15 +160,9 @@ class PostgresRunRepository(RunRepository):
             claimed = await self._with_session(operation)
             if claimed is not None:
                 return claimed
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-
-        data = _IN_MEMORY_RUNS.get(run_id)
-        if not data or data.get("status") != "queued":
-            return None
-        data["status"] = "running"
-        data["updated_at"] = datetime.utcnow()
-        return RunDocument(**data)
+            raise PersistenceError("Could not claim run for execution.") from exc
 
     async def append_event(self, event: ExecutionEvent) -> ExecutionEvent:
         if self.use_memory:
@@ -166,6 +170,11 @@ class PostgresRunRepository(RunRepository):
 
         try:
             async def operation(session: AsyncSession) -> ExecutionEvent:
+                await session.execute(
+                    select(RunModel.run_id)
+                    .where(RunModel.run_id == event.run_id)
+                    .with_for_update()
+                )
                 maximum = await session.scalar(
                     select(func.max(RunEventModel.sequence)).where(
                         RunEventModel.run_id == event.run_id
@@ -193,9 +202,9 @@ class PostgresRunRepository(RunRepository):
                 return persisted
 
             return await self._with_session(operation)
-        except Exception:
+        except Exception as exc:
             await self._rollback()
-            return self._append_event_memory(event)
+            raise PersistenceError("Could not append run event.") from exc
 
     async def list_events(
         self,
@@ -203,28 +212,34 @@ class PostgresRunRepository(RunRepository):
         after_event_id: str | None = None,
         limit: int = 200,
     ) -> List[ExecutionEvent]:
-        if not self.use_memory:
-            try:
-                result = await self._with_session(
-                    lambda session: session.execute(
-                        select(RunEventModel)
-                        .where(RunEventModel.run_id == run_id)
-                        .order_by(RunEventModel.sequence.asc())
-                        .limit(limit)
+        if self.use_memory:
+            events = list(_IN_MEMORY_EVENTS.get(run_id, []))
+            if after_event_id:
+                events = self._after_event_id(events, after_event_id)
+            return events[:limit]
+
+        try:
+            statement = select(RunEventModel).where(RunEventModel.run_id == run_id)
+            if after_event_id:
+                after_sequence = await self._with_session(
+                    lambda session: session.scalar(
+                        select(RunEventModel.sequence).where(
+                            RunEventModel.event_id == after_event_id,
+                            RunEventModel.run_id == run_id,
+                        )
                     )
                 )
-                events = [self._event_to_domain(record) for record in result.scalars().all()]
-                if after_event_id:
-                    events = self._after_event_id(events, after_event_id)
-                if events:
-                    return events[:limit]
-            except Exception:
-                await self._rollback()
-
-        events = list(_IN_MEMORY_EVENTS.get(run_id, []))
-        if after_event_id:
-            events = self._after_event_id(events, after_event_id)
-        return events[:limit]
+                if after_sequence is not None:
+                    statement = statement.where(RunEventModel.sequence > after_sequence)
+            statement = statement.order_by(RunEventModel.sequence.asc()).limit(limit)
+            result = await self._with_session(lambda session: session.execute(statement))
+            return [
+                self._event_to_domain(record)
+                for record in result.scalars().all()
+            ]
+        except Exception as exc:
+            await self._rollback()
+            raise PersistenceError("Could not list run events.") from exc
 
     @staticmethod
     def _to_orm_values(document: RunDocument) -> Dict[str, Any]:

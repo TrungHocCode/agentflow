@@ -623,10 +623,7 @@ class RunService:
     ) -> Dict[str, Any] | None:
         if self.workflow_repository is None:
             return None
-        try:
-            return await self.workflow_repository.get_definition(workflow_id, user_id)
-        except Exception:
-            return None
+        return await self.workflow_repository.get_definition(workflow_id, user_id)
 
     async def _load_workflow_plan(self, flow_id: str) -> List[Task]:
         definition = await self._load_workflow_definition(flow_id)
@@ -645,12 +642,9 @@ class RunService:
                 None,
             )
             if get_current_version is not None:
-                try:
-                    version = await get_current_version(workflow_id, user_id)
-                    if version is not None and version.version_id:
-                        return version.version_id
-                except Exception:
-                    pass
+                version = await get_current_version(workflow_id, user_id)
+                if version is not None and version.version_id:
+                    return version.version_id
         return self._version_id(workflow_id, definition)
 
     async def _record_event(

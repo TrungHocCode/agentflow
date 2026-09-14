@@ -17,6 +17,7 @@ class WorkflowRecord(BaseModel):
     name: str
     description: Optional[str] = None
     user_id: str
+    status: str = "active"
     definition: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
