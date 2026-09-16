@@ -26,6 +26,7 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState('qwen3:8b');
   const [backendStatus, setBackendStatus] = useState(false);
   const [authUser, setAuthUser] = useState(() => {
+    if (!localStorage.getItem('agentflow_access_token')) return null;
     try { return JSON.parse(localStorage.getItem('agentflow_user') || 'null'); } catch { return null; }
   });
 

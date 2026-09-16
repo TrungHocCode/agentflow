@@ -21,10 +21,9 @@ function withAuthHeaders(headers = {}) {
 }
 
 async function requestJson(url, options = {}) {
-  const hadToken = Boolean(localStorage.getItem('agentflow_access_token'));
   const headers = withAuthHeaders(options.headers);
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401 && hadToken) clearStoredSession();
+  if (res.status === 401) clearStoredSession();
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`${res.status}: ${detail || res.statusText}`);
