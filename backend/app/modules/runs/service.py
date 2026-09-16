@@ -594,11 +594,14 @@ class RunService:
 
         subscription = self.event_publisher.subscribe(run_id)
         iterator = subscription.__aiter__()
+        pending_event: asyncio.Task[ExecutionEvent] | None = asyncio.create_task(
+            iterator.__anext__()
+        )
         try:
             while True:
                 try:
                     event = await asyncio.wait_for(
-                        iterator.__anext__(),
+                        asyncio.shield(pending_event),
                         timeout=1.0,
                     )
                 except asyncio.TimeoutError:
@@ -611,14 +614,25 @@ class RunService:
                     if latest and latest.status in TERMINAL_RUN_STATUSES:
                         return
                     continue
+                except StopAsyncIteration:
+                    return
 
+                pending_event = None
                 if event.event_id in seen_ids:
+                    pending_event = asyncio.create_task(iterator.__anext__())
                     continue
                 seen_ids.add(event.event_id)
                 yield self._event_frame(event)
                 if event.type in {"run_completed", "run_failed", "run_interrupted"}:
                     return
+                pending_event = asyncio.create_task(iterator.__anext__())
         finally:
+            if pending_event is not None and not pending_event.done():
+                pending_event.cancel()
+                try:
+                    await pending_event
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
             close_subscription = getattr(iterator, "aclose", None)
             if close_subscription is not None:
                 await close_subscription()
