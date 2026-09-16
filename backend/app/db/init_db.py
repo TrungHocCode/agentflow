@@ -77,25 +77,69 @@ async def seed_defaults() -> None:
             ]
             session.add_all(tools)
 
-        # Seed default agents if empty
-        result = await session.execute(select(AgentCatalogModel).limit(1))
-        if result.scalar_one_or_none() is None:
-            print("[Init DB] Seeding default agents...")
-            agents = [
-                AgentCatalogModel(
-                    name="supervisor",
-                    description="Supervisor Agent for intent planning",
-                    system_prompt="You are a supervisor.",
-                    tool_names=[],
+        # Seed default agent profiles idempotently so existing databases also
+        # receive the role-specific profiles used by execution runtime.
+        default_agents = [
+            AgentCatalogModel(
+                name="supervisor",
+                description="Supervisor Agent for intent planning",
+                system_prompt="You are a supervisor.",
+                tool_names=[],
+            ),
+            AgentCatalogModel(
+                name="worker",
+                description="Generic Worker Agent",
+                system_prompt="You execute assigned tasks.",
+                tool_names=["web_search", "file_reader"],
+            ),
+            AgentCatalogModel(
+                name="source_researcher",
+                description="Collects web sources and extracts source content.",
+                system_prompt=(
+                    "You collect reliable primary sources for technology research. "
+                    "Preserve URLs and distinguish source content from interpretation."
                 ),
-                AgentCatalogModel(
-                    name="worker",
-                    description="Generic Worker Agent",
-                    system_prompt="You execute assigned tasks.",
-                    tool_names=["web_search", "file_reader"],
+                tool_names=["web_search", "news_crawler", "http_request"],
+            ),
+            AgentCatalogModel(
+                name="synthesis_agent",
+                description="Synthesizes source material into supported findings.",
+                system_prompt=(
+                    "You synthesize earlier research outputs into concise findings "
+                    "without inventing evidence."
                 ),
-            ]
-            session.add_all(agents)
+                tool_names=["text_summarizer", "file_reader"],
+            ),
+            AgentCatalogModel(
+                name="report_agent",
+                description="Produces structured Markdown research reports.",
+                system_prompt=(
+                    "You produce structured Markdown research reports and clearly "
+                    "label limitations and source references."
+                ),
+                tool_names=["markdown_report_generator", "python_executor", "file_writer"],
+            ),
+            AgentCatalogModel(
+                name="chart_agent",
+                description="Creates chart specifications from structured research data.",
+                system_prompt=(
+                    "You turn structured research data into accurate and readable "
+                    "chart specifications."
+                ),
+                tool_names=["python_executor", "file_reader", "file_writer"],
+            ),
+        ]
+        existing_names_result = await session.execute(select(AgentCatalogModel.name))
+        existing_names = set(existing_names_result.scalars().all())
+        missing_agents = [
+            agent for agent in default_agents if agent.name not in existing_names
+        ]
+        if missing_agents:
+            print(
+                "[Init DB] Seeding missing agent profiles: "
+                f"{', '.join(agent.name for agent in missing_agents)}"
+            )
+            session.add_all(missing_agents)
 
         await session.commit()
         print("[Init DB] Default seeding complete.")

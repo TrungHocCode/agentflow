@@ -243,7 +243,10 @@ export default function App() {
             name: task.node || `Task ${index + 1}`,
             description: task.description || `Research task ${index + 1}`,
             dependencies: (task.dependencies || []).map(String),
-            expected_output_type: task.node?.toLowerCase().includes('report') ? 'report' : 'raw_data'
+            expected_output_type: task.node?.toLowerCase().includes('report') ? 'report' : 'raw_data',
+            ...(task.agent_id ? { agent_id: task.agent_id } : {}),
+            ...(task.capability ? { capability: task.capability } : {}),
+            ...(task.tool_names?.length ? { tool_names: task.tool_names } : {})
           }));
           const workflow = await createWorkflow('Technology research workflow', steps, 'Generated from the research chat.');
           const run = await createWorkflowRun(workflow.id, { model: selectedModel }, { model_name: selectedModel, use_llm: true });

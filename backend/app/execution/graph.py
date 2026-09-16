@@ -6,6 +6,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from app.execution.state import State, Task
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
+from app.execution.agents.resolver import AgentResolver
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.registry import autodiscover_tools
 from app.execution.checkpointer import get_checkpointer
@@ -17,7 +18,9 @@ autodiscover_tools()
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are SupervisorAgent, an AI Agent Planner for AgentFlow platform.\n"
     "Your job is to converse with the user, clarify their requirements, and construct a DAG plan.\n"
-    "Available Worker Nodes: 'news_crawler', 'text_summarizer', 'markdown_report_generator', 'python_executor', 'web_search'.\n"
+    "Available agent roles: 'source_researcher', 'synthesis_agent', 'report_agent', and 'chart_agent'.\n"
+    "Use the concrete role name in each Task.node instead of the generic 'worker' whenever the role is known.\n"
+    "Available tools are selected by the assigned agent profile; do not treat tool names as agent roles.\n"
     "If the user's request is vague, ask clarifying questions (keep mode='conversation').\n"
     "If the request is clear, propose a list of Tasks and ask if they agree to execute it (keep mode='conversation').\n"
     "If the user approves (e.g. 'ok', 'chạy đi', 'đồng ý', 'yes', 'run', 'approve'), set mode='executing'."
@@ -113,7 +116,10 @@ async def dispatcher_node(state: State) -> Dict[str, Any]:
     return result
 
 
-async def _execute_worker_node(state: State) -> Dict[str, Any]:
+async def _execute_worker_node(
+    state: State,
+    agent_resolver: AgentResolver | None = None,
+) -> Dict[str, Any]:
     """
     Worker Node executes the current dispatched task using configured tools.
     """
@@ -146,19 +152,32 @@ async def _execute_worker_node(state: State) -> Dict[str, Any]:
         try:
             from app.execution.llm import get_llm
             model_name = metadata.get("model_name", "qwen3:8b")
+            resolver = agent_resolver or AgentResolver()
+            resolved_agent = await resolver.resolve(current_task)
+            logs.append(
+                f"[WorkerNode] Resolved agent '{resolved_agent.profile.name}' "
+                f"with tools: {', '.join(tool.name for tool in resolved_agent.tools) or 'none'}."
+            )
+            if resolved_agent.missing_tool_names:
+                logs.append(
+                    "[WorkerNode Warning] Catalog tools unavailable in runtime: "
+                    f"{', '.join(resolved_agent.missing_tool_names)}."
+                )
+            if resolved_agent.denied_tool_names:
+                logs.append(
+                    "[WorkerNode Warning] Task tool override was restricted by "
+                    f"agent policy: {', '.join(resolved_agent.denied_tool_names)}."
+                )
             logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
             llm = get_llm(model_name=model_name, temperature=0.2)
-            worker_agent = WorkerAgent(
-                name=current_task.node,
-                system_prompt=(
-                    f"You are a specialized Worker Agent executing node '{current_task.node}'.\n"
-                    f"Your task: {current_task.description}.\n"
-                    f"Use your available tools to gather real data and return a thorough, informative result."
-                ),
+            worker_agent = AgentResolver.create_agent(
+                resolved=resolved_agent,
                 llm=llm,
-                tools=tool_instances
+                task=current_task,
             )
-            return await worker_agent.execute(state)
+            agent_output = await worker_agent.execute(state)
+            agent_output["logs"] = logs + (agent_output.get("logs") or [])
+            return agent_output
         except Exception as e:
             logs.append(f"[WorkerNode Error] LLM ReAct unavailable: {e}")
             updated_task = current_task.model_copy(update={"status": "failed", "error": str(e)})
@@ -268,15 +287,25 @@ async def _execute_worker_node(state: State) -> Dict[str, Any]:
     }
 
 
-async def worker_node(state: State) -> Dict[str, Any]:
+async def worker_node(
+    state: State,
+    agent_resolver: AgentResolver | None = None,
+) -> Dict[str, Any]:
     """Run a worker with a per-task wall-clock limit."""
 
     current_task = state.get("current_task")
     if current_task is None or current_task.timeout_seconds is None:
-        return await _execute_worker_node(state)
+        if agent_resolver is None:
+            return await _execute_worker_node(state)
+        return await _execute_worker_node(state, agent_resolver=agent_resolver)
+    worker_execution = (
+        _execute_worker_node(state)
+        if agent_resolver is None
+        else _execute_worker_node(state, agent_resolver=agent_resolver)
+    )
     try:
         return await asyncio.wait_for(
-            _execute_worker_node(state),
+            worker_execution,
             timeout=max(float(current_task.timeout_seconds), 0.1),
         )
     except asyncio.TimeoutError:
@@ -337,7 +366,8 @@ def route_after_dispatch(state: State) -> str:
 
 
 def build_execution_graph(
-    checkpointer: Optional[BaseCheckpointSaver] = None
+    checkpointer: Optional[BaseCheckpointSaver] = None,
+    agent_resolver: AgentResolver | None = None,
 ) -> "CompiledGraph":
     """
     Constructs and compiles the AgentFlow LangGraph StateGraph.
@@ -359,7 +389,12 @@ def build_execution_graph(
     workflow.add_node("supervisor_node", supervisor_node)
     workflow.add_node("hitl_gate", hitl_gate_node)  # HITL checkpoint: PAUSE khi mode=conversation
     workflow.add_node("dispatcher_node", dispatcher_node)
-    workflow.add_node("worker_node", worker_node)
+    resolver = agent_resolver or AgentResolver()
+
+    async def resolved_worker_node(state: State) -> Dict[str, Any]:
+        return await worker_node(state, agent_resolver=resolver)
+
+    workflow.add_node("worker_node", resolved_worker_node)
 
     # supervisor -> hitl_gate (conversation) | dispatcher (executing)
     workflow.set_entry_point("supervisor_node")

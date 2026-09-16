@@ -5,6 +5,7 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.execution.adapters import LangGraphExecutionAdapter
+from app.execution.agents.resolver import AgentResolver
 from app.execution.ports import ExecutionPort
 from app.infrastructure.health_probe import DatabaseHealthProbe
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
@@ -15,6 +16,7 @@ from app.infrastructure.postgres.conversation_repository import (
 from app.infrastructure.postgres.workflow_repository import PostgresWorkflowRepository
 from app.infrastructure.postgres.identity_repository import PostgresUserRepository
 from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider
 from app.infrastructure.artifacts.storage import LocalArtifactStorage
 from app.infrastructure.redis.event_publisher import (
     RedisRunEventPublisher,
@@ -43,7 +45,9 @@ from app.core.config import settings
 def build_execution_port() -> ExecutionPort:
     """Return the current in-process execution adapter."""
 
-    return LangGraphExecutionAdapter()
+    return LangGraphExecutionAdapter(
+        agent_resolver=AgentResolver(provider=PostgresAgentProfileProvider())
+    )
 
 
 def build_health_service() -> HealthService:

@@ -49,6 +49,9 @@ class LogEntry(BaseModel):
 class Task(BaseModel):
     id: int
     node: str
+    agent_id: Optional[str] = None
+    capability: Optional[str] = None
+    tool_names: List[str] = Field(default_factory=list)
     status: Literal["done", "pending", "running", "failed", "skipped"]
     error: Optional[str] = None
     description: str

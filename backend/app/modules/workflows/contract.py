@@ -53,10 +53,34 @@ def normalize_workflow_definition(
                     ) from exc
             dependencies.append(dependency_id)
         config = step.get("config") or {}
+        node = str(
+            step.get("node")
+            or step.get("agent_name")
+            or step.get("agent_id")
+            or "worker"
+        )
         tasks.append(
             Task(
                 id=index,
-                node=str(step.get("node") or step.get("agent_name") or step.get("agent_id") or "worker"),
+                node=node,
+                agent_id=(
+                    str(step["agent_id"])
+                    if step.get("agent_id") is not None
+                    else None
+                ),
+                capability=(
+                    str(step["capability"])
+                    if step.get("capability") is not None
+                    else None
+                ),
+                tool_names=[
+                    str(tool_name)
+                    for tool_name in (
+                        step.get("tool_names")
+                        or config.get("tool_names")
+                        or []
+                    )
+                ],
                 status=str(step.get("status") or "pending"),
                 description=str(step.get("description") or step.get("name") or step.get("task_key") or index),
                 dependencies=dependencies,
@@ -84,7 +108,9 @@ def canonicalize_workflow_definition(definition: Dict[str, Any]) -> Dict[str, An
                 "task_key": str(task["id"]),
                 "name": task.get("node", f"Task {task['id']}"),
                 "description": task.get("description", ""),
-                "agent_id": task.get("node"),
+                "agent_id": task.get("agent_id") or task.get("node"),
+                "capability": task.get("capability"),
+                "tool_names": task.get("tool_names", []),
                 "dependencies": [str(value) for value in task.get("dependencies", [])],
                 "config": {
                     key: task[key]
