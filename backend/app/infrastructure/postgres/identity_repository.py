@@ -81,6 +81,9 @@ class PostgresUserRepository(UserRepository):
                 return None
             row.last_login_at = now
             await self.session.commit()
+            # Server-side timestamp columns can be expired by commit. Refresh
+            # explicitly inside the async session before mapping the ORM row.
+            await self.session.refresh(row)
             return self._to_user(row)
         except Exception as exc:
             await self.session.rollback()

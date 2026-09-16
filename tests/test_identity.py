@@ -11,6 +11,7 @@ from app.modules.identity.models import LoginRequest, RegisterRequest
 from app.modules.identity.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.modules.identity.service import IdentityService
 from app.modules.identity.models import UserRecord
+from app.infrastructure.postgres.models.identity import UserModel
 from app.main import app
 
 
@@ -62,6 +63,12 @@ class TestIdentitySecurity(unittest.IsolatedAsyncioTestCase):
         current = await service.current_user(logged_in.access_token)
         self.assertEqual(current.id, registered.user.id)
         self.assertEqual(current.email, "user@example.com")
+
+
+class TestIdentityPersistenceMapping(unittest.TestCase):
+    def test_last_login_timestamp_preserves_timezone(self):
+        column_type = UserModel.__table__.c.last_login_at.type
+        self.assertTrue(column_type.timezone)
 
 
 class TestIdentityAPI(unittest.IsolatedAsyncioTestCase):
