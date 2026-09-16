@@ -43,6 +43,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [executionDuration, setExecutionDuration] = useState(null);
+  const [authMessage, setAuthMessage] = useState('');
   const conversationStreamRef = useRef(null);
 
   // Load catalogs on mount
@@ -85,9 +86,31 @@ export default function App() {
     if (conversationStreamRef.current) conversationStreamRef.current();
   }, []);
 
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      if (conversationStreamRef.current) {
+        conversationStreamRef.current();
+        conversationStreamRef.current = null;
+      }
+      setAuthUser(null);
+      setAuthMessage('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.');
+      setConversationId(null);
+      setCurrentRun(null);
+      setActivePlan([]);
+      setExecutionLogs([]);
+      setExecutionResults([]);
+      setIsProcessing(false);
+      setIsStreaming(false);
+    };
+
+    window.addEventListener('agentflow:auth-expired', handleAuthExpired);
+    return () => window.removeEventListener('agentflow:auth-expired', handleAuthExpired);
+  }, []);
+
   const handleAuthenticated = (user) => {
     localStorage.setItem('agentflow_user', JSON.stringify(user));
     setAuthUser(user);
+    setAuthMessage('');
   };
 
   const handleLogout = async () => {
@@ -97,7 +120,7 @@ export default function App() {
   };
 
   if (backendStatus && !authUser) {
-    return <AuthScreen onAuthenticated={handleAuthenticated} />;
+    return <AuthScreen onAuthenticated={handleAuthenticated} initialMessage={authMessage} />;
   }
 
   // Handle user sending message in Chat Studio

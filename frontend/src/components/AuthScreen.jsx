@@ -2,12 +2,12 @@ import React, { useState } from 'react';
 import { KeyRound, LogIn, UserPlus } from 'lucide-react';
 import { login, register } from '../services/api';
 
-export default function AuthScreen({ onAuthenticated }) {
+export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialMessage);
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async (event) => {
