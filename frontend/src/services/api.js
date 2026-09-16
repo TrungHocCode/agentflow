@@ -5,12 +5,16 @@
 
 const API_BASE = '/api/v1';
 
-async function requestJson(url, options = {}) {
+function withAuthHeaders(headers = {}) {
   const token = localStorage.getItem('agentflow_access_token');
-  const headers = {
-    ...(options.headers || {}),
+  return {
+    ...headers,
     ...(token ? { Authorization: `Bearer ${token}` } : {})
   };
+}
+
+async function requestJson(url, options = {}) {
+  const headers = withAuthHeaders(options.headers);
   const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const detail = await res.text();
@@ -60,15 +64,11 @@ export async function getCatalogAgents() {
 }
 
 export async function getFlows() {
-  const res = await fetch(`${API_BASE}/flows`);
-  if (!res.ok) throw new Error('Failed to fetch flows');
-  return res.json();
+  return requestJson(`${API_BASE}/flows`);
 }
 
 export async function getRuns() {
-  const res = await fetch(`${API_BASE}/runs`);
-  if (!res.ok) throw new Error('Failed to fetch runs');
-  return res.json();
+  return requestJson(`${API_BASE}/runs`);
 }
 
 export async function getRunDetails(runId) {
@@ -134,13 +134,11 @@ export async function getRunEvents(runId, afterEventId = null) {
   const query = afterEventId
     ? `?after_event_id=${encodeURIComponent(afterEventId)}`
     : '';
-  const res = await fetch(`${API_BASE}/runs/${runId}/events${query}`);
-  if (!res.ok) throw new Error(`Failed to fetch events for ${runId}`);
-  return res.json();
+  return requestJson(`${API_BASE}/runs/${runId}/events${query}`);
 }
 
 export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default_flow') {
-  const res = await fetch(`${API_BASE}/runs/start`, {
+  return requestJson(`${API_BASE}/runs/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -152,72 +150,85 @@ export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default
       }
     })
   });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Failed to start workflow run (${res.status}): ${errorText}`);
-  }
-  return res.json();
 }
 
 
 export async function sendChatMessage(runId, message) {
-  const res = await fetch(`${API_BASE}/runs/${runId}/chat`, {
+  return requestJson(`${API_BASE}/runs/${runId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message })
   });
-  if (!res.ok) throw new Error(`Failed to send message: ${res.statusText}`);
-  return res.json();
 }
 
 export async function approveRun(runId) {
-  const res = await fetch(`${API_BASE}/runs/${runId}/approve`, {
+  return requestJson(`${API_BASE}/runs/${runId}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approved: true })
   });
-  if (!res.ok) throw new Error('Failed to approve run');
-  return res.json();
 }
 
-export function subscribeRunSSEStream(runId, onMessage, onError) {
-  const url = `${API_BASE}/runs/${runId}/stream`;
-  const eventSource = new EventSource(url);
+function subscribeAuthenticatedSSE(url, onMessage, onError) {
+  const controller = new window.AbortController();
+  let closed = false;
 
-  eventSource.onmessage = (event) => {
+  const consume = async () => {
     try {
-      const data = JSON.parse(event.data);
-      if (onMessage) onMessage(data);
-    } catch (e) {
-      console.error("Error parsing SSE event data:", e);
+      const response = await fetch(url, {
+        headers: withAuthHeaders({ Accept: 'text/event-stream' }),
+        cache: 'no-store',
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(`${response.status}: ${detail || response.statusText}`);
+      }
+      if (!response.body) throw new Error('The browser does not support streaming responses.');
+
+      const reader = response.body.getReader();
+      const decoder = new window.TextDecoder();
+      let buffer = '';
+
+      const handleFrame = (frame) => {
+        const data = frame
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).replace(/^ /, ''))
+          .join('\n');
+        if (!data) return;
+        if (onMessage) onMessage(JSON.parse(data));
+      };
+
+      while (!closed) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() || '';
+        frames.forEach(handleFrame);
+      }
+
+      buffer += decoder.decode();
+      if (buffer.trim()) handleFrame(buffer);
+    } catch (error) {
+      if (!closed && error.name !== 'AbortError' && onError) onError(error);
     }
   };
 
-  eventSource.onerror = (err) => {
-    console.error("SSE stream error:", err);
-    if (onError) onError(err);
-    eventSource.close();
-  };
-
+  consume();
   return () => {
-    eventSource.close();
+    closed = true;
+    controller.abort();
   };
+}
+
+export function subscribeRunSSEStream(runId, onMessage, onError) {
+  return subscribeAuthenticatedSSE(`${API_BASE}/runs/${runId}/stream`, onMessage, onError);
 }
 
 export function subscribeConversationEvents(conversationId, turnId, onMessage, onError) {
   const url = `${API_BASE}/conversations/${conversationId}/events?turn_id=${encodeURIComponent(turnId)}`;
-  const eventSource = new EventSource(url);
-
-  eventSource.onmessage = (event) => {
-    try {
-      if (onMessage) onMessage(JSON.parse(event.data));
-    } catch (error) {
-      if (onError) onError(error);
-    }
-  };
-  eventSource.onerror = (error) => {
-    if (onError) onError(error);
-    eventSource.close();
-  };
-  return () => eventSource.close();
+  return subscribeAuthenticatedSSE(url, onMessage, onError);
 }
