@@ -201,6 +201,29 @@ class FakeExecutionPort:
         return self._stream(run_id)
 
 
+class FailedExecutionPort(FakeExecutionPort):
+    async def _stream(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        yield {
+            "worker_node": {
+                "logs": ["worker failed"],
+                "plan": [
+                    make_task(
+                        1,
+                        status="failed",
+                    ).model_copy(update={"error": "source unavailable"})
+                ],
+                "result_storage": [
+                    {
+                        "task_id": 1,
+                        "result": "",
+                        "status": "failed",
+                        "error": "source unavailable",
+                    }
+                ],
+            }
+        }
+
+
 class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
     def test_modules_do_not_depend_on_infrastructure_or_sqlalchemy(self) -> None:
         modules_root = Path(__file__).resolve().parents[1] / "backend" / "app" / "modules"
@@ -340,6 +363,29 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
             idempotency_key="request-1",
         )
         self.assertEqual(same_document.run_id, document.run_id)
+
+    async def test_failed_task_marks_run_failed(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=FailedExecutionPort(),
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+        document = RunDocument(
+            run_id="failed-task-run",
+            flow_id="workflow-1",
+            status="queued",
+            mode="executing",
+            plan=[make_task(1)],
+        )
+        await repository.save(document)
+
+        completed = await service.execute_queued_run(document.run_id)
+
+        self.assertEqual(completed.status, "failed")
+        self.assertEqual(completed.error_code, "task_execution_failed")
+        self.assertEqual(repository.events[document.run_id][-1].type, "run_failed")
 
 
 class FakeConversationRepository:

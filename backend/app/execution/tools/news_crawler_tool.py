@@ -2,6 +2,7 @@ import re
 import requests
 from html.parser import HTMLParser
 from typing import Optional
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from app.execution.tools.base import ToolRegistry
@@ -44,6 +45,21 @@ class NewsCrawlerInput(BaseModel):
     url: str = Field(description="The news article URL to crawl and extract content from.")
 
 
+def normalize_news_url(raw_url: str) -> tuple[str | None, str | None]:
+    """Normalize common LLM URL formatting and validate HTTP(S) URLs."""
+
+    candidate = str(raw_url or "").strip()
+    match = re.search(r"https?://[^\s<>\[\]\\\"']+", candidate)
+    if match:
+        candidate = match.group(0)
+    candidate = candidate.strip("<>").rstrip(".,;:!?)]}")
+
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None, "URL must be an absolute HTTP(S) URL."
+    return candidate, None
+
+
 @ToolRegistry.register_tool(name="news_crawler")
 @tool("news_crawler", args_schema=NewsCrawlerInput)
 def news_crawler(url: str) -> str:
@@ -51,14 +67,18 @@ def news_crawler(url: str) -> str:
     Crawls a news article or web page URL and extracts the title, headings, and main article paragraphs.
     Use this to fetch live news articles, blog posts, or editorial web content.
     """
+    normalized_url, validation_error = normalize_news_url(url)
+    if validation_error:
+        return f"Error: Invalid news URL '{url}': {validation_error}"
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AgentFlowNewsCrawler/1.0"
     }
 
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(normalized_url, headers=headers, timeout=10)
         if res.status_code != 200:
-            return f"Error: Failed to fetch URL '{url}' (HTTP Status Code: {res.status_code})."
+            return f"Error: Failed to fetch URL '{normalized_url}' (HTTP Status Code: {res.status_code})."
 
         parser = SimpleHTMLTextExtractor()
         parser.feed(res.text)
@@ -68,11 +88,11 @@ def news_crawler(url: str) -> str:
 
         return (
             f"=== CRAWLED ARTICLE ===\n"
-            f"URL: {url}\n"
+            f"URL: {normalized_url}\n"
             f"Title: {title}\n"
             f"Extracted Paragraphs ({len(parser.paragraphs)} paragraphs found):\n\n"
             f"{body_content}\n"
             f"======================="
         )
     except Exception as e:
-        return f"Error crawling news URL '{url}': {str(e)}"
+        return f"Error crawling news URL '{normalized_url}': {str(e)}"

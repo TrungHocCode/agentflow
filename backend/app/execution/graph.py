@@ -143,7 +143,10 @@ async def _execute_worker_node(
     else:
         tool_instances = all_registered_tools
 
-    logs = [f"[WorkerNode] Executing Task {current_task.id} ('{current_task.description}') on node '{current_task.node}' with {len(tool_instances)} tools."]
+    logs = [
+        f"[WorkerNode] Executing Task {current_task.id} "
+        f"('{current_task.description}') on node '{current_task.node}'."
+    ]
 
     metadata = state.get("metadata") or {}
     use_llm = metadata.get("use_llm", False)
@@ -156,7 +159,8 @@ async def _execute_worker_node(
             resolved_agent = await resolver.resolve(current_task)
             logs.append(
                 f"[WorkerNode] Resolved agent '{resolved_agent.profile.name}' "
-                f"with tools: {', '.join(tool.name for tool in resolved_agent.tools) or 'none'}."
+                f"with {len(resolved_agent.tools)} authorized tools: "
+                f"{', '.join(tool.name for tool in resolved_agent.tools) or 'none'}."
             )
             if resolved_agent.missing_tool_names:
                 logs.append(
@@ -198,6 +202,7 @@ async def _execute_worker_node(
     result_text = ""
     status = "done"
     error_msg = None
+    logs.append(f"[WorkerNode] Legacy execution path selected with {len(tool_instances)} tools.")
 
     try:
         desc = current_task.description.lower()
@@ -264,6 +269,15 @@ async def _execute_worker_node(
         status = "failed"
         error_msg = str(e)
         logs.append(f"[WorkerNode] Error executing task: {error_msg}")
+
+    if (
+        status == "done"
+        and isinstance(result_text, str)
+        and result_text.strip().lower().startswith("error:")
+    ):
+        status = "failed"
+        error_msg = result_text
+        logs.append(f"[WorkerNode] Task failed because the tool returned an error: {error_msg}")
 
     updated_task = current_task.model_copy(update={
         "status": "done" if status == "done" else "failed",

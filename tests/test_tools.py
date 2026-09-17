@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import app.execution.tools.registry
 from app.execution.state import Task, add_messages, add_results, update_plan
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.news_crawler_tool import normalize_news_url
 
 
 class TestToolsAndReducers(unittest.TestCase):
@@ -171,6 +172,17 @@ class TestToolsAndReducers(unittest.TestCase):
         self.assertTrue("AI Breakthrough News" in res)
         self.assertTrue("Paragraph 1:" in res)
 
+    def test_news_crawler_normalizes_markdown_url(self):
+        normalized, error = normalize_news_url(
+            "[https://news.example.com/article](https://news.example.com/article)"
+        )
+        self.assertEqual(normalized, "https://news.example.com/article")
+        self.assertIsNone(error)
+
+        normalized, error = normalize_news_url("example.com/article")
+        self.assertIsNone(normalized)
+        self.assertIn("HTTP(S)", error)
+
     def test_text_summarizer_tool(self):
         """Test text summarizer tool extracts bullet points."""
         summarizer = ToolRegistry.get_tool("text_summarizer")
@@ -202,4 +214,3 @@ class TestToolsAndReducers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

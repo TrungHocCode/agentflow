@@ -21,6 +21,8 @@ import {
   logout as logoutUser
 } from './services/api';
 
+const APPROVAL_KEYWORDS = ['ok', 'đồng ý', 'chạy đi', 'thực thi', 'bắt đầu', 'yes', 'approve', 'run', 'thực hiện đi', 'thực hiện', 'duyệt', 'tiến hành'];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio');
   const [selectedModel, setSelectedModel] = useState('qwen3:8b');
@@ -46,6 +48,18 @@ export default function App() {
   const [executionDuration, setExecutionDuration] = useState(null);
   const [authMessage, setAuthMessage] = useState('');
   const conversationStreamRef = useRef(null);
+
+  const appendExecutionLogs = (entries, createdAt = null) => {
+    const values = Array.isArray(entries) ? entries : [entries];
+    setExecutionLogs(prev => [
+      ...prev,
+      ...values.map(entry => (
+        typeof entry === 'object'
+          ? entry
+          : { message: String(entry), created_at: createdAt }
+      ))
+    ]);
+  };
 
   // Load catalogs on mount
   useEffect(() => {
@@ -131,9 +145,8 @@ export default function App() {
     setMessages(prev => [...prev, { sender: 'user', text: textPrompt }]);
 
     // Check if user is approving an existing plan with approval keywords
-    const approvalKeywords = ['ok', 'đồng ý', 'chạy đi', 'thực thi', 'bắt đầu', 'yes', 'approve', 'run', 'thực hiện đi', 'thực hiện', 'duyệt', 'tiến hành'];
     const cleanInput = textPrompt.trim().toLowerCase();
-    const isApprovalMessage = approvalKeywords.some(kw => cleanInput === kw || cleanInput.startsWith(kw) || cleanInput.includes(kw));
+    const isApprovalMessage = APPROVAL_KEYWORDS.some(kw => cleanInput === kw || cleanInput.startsWith(kw) || cleanInput.includes(kw));
 
     if (activePlan && activePlan.length > 0 && isApprovalMessage) {
       setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt! Đang chuyển sang màn hình Realtime Execution Tracker để thực thi các Task...', duration: '0.1' }]);
@@ -232,7 +245,7 @@ export default function App() {
     // Switch view tab to Execution Runs Tracker
     setActiveTab('runs');
 
-    setExecutionLogs(prev => [...prev, "[System] Plan approved by user. Starting LangGraph Execution Engine..."]);
+    appendExecutionLogs("[System] Plan approved by user. Starting LangGraph Execution Engine...");
 
     if (backendStatus) {
       try {
@@ -244,12 +257,30 @@ export default function App() {
             description: task.description || `Research task ${index + 1}`,
             dependencies: (task.dependencies || []).map(String),
             expected_output_type: task.node?.toLowerCase().includes('report') ? 'report' : 'raw_data',
-            ...(task.agent_id ? { agent_id: task.agent_id } : {}),
+            ...(
+              task.agent_id || (
+                task.node && !['worker', 'generic_worker'].includes(task.node.toLowerCase())
+                  ? task.node
+                  : null
+              )
+                ? { agent_id: task.agent_id || task.node }
+                : {}
+            ),
             ...(task.capability ? { capability: task.capability } : {}),
             ...(task.tool_names?.length ? { tool_names: task.tool_names } : {})
           }));
           const workflow = await createWorkflow('Technology research workflow', steps, 'Generated from the research chat.');
-          const run = await createWorkflowRun(workflow.id, { model: selectedModel }, { model_name: selectedModel, use_llm: true });
+          const userPrompt = messages
+            .filter(message => message.sender === 'user')
+            .map(message => message.text)
+            .filter(Boolean)
+            .filter(message => !APPROVAL_KEYWORDS.some(kw => message.trim().toLowerCase() === kw))
+            .join('\n\n');
+          const run = await createWorkflowRun(
+            workflow.id,
+            { user_prompt: userPrompt },
+            { model_name: selectedModel, use_llm: true }
+          );
           runId = run.run_id;
           setCurrentRun(run);
         } else {
@@ -262,9 +293,9 @@ export default function App() {
           async (eventData) => {
             const eventType = eventData.legacy_type || eventData.type;
             if (eventType === 'log' && eventData.message) {
-              setExecutionLogs(prev => [...prev, eventData.message]);
+              appendExecutionLogs(eventData.message, eventData.created_at);
             } else if (eventData.logs) {
-              setExecutionLogs(prev => [...prev, ...eventData.logs]);
+              appendExecutionLogs(eventData.logs, eventData.created_at);
             }
 
             if (eventType === 'task_update' && eventData.task) {
@@ -294,7 +325,17 @@ export default function App() {
                 const latestDoc = await getRunDetails(runId);
                 if (latestDoc?.plan && latestDoc.plan.length > 0) setActivePlan(latestDoc.plan);
                 if (latestDoc?.result_storage && latestDoc.result_storage.length > 0) setExecutionResults(latestDoc.result_storage);
-                if (latestDoc?.logs && latestDoc.logs.length > 0) setExecutionLogs(latestDoc.logs);
+                if (latestDoc?.logs && latestDoc.logs.length > 0) {
+                  setExecutionLogs(prev => {
+                    const existing = new Set(
+                      prev.map(log => typeof log === 'string' ? log : log?.message)
+                    );
+                    const missing = latestDoc.logs
+                      .filter(log => !existing.has(log))
+                      .map(log => ({ message: log, created_at: null }));
+                    return [...prev, ...missing];
+                  });
+                }
                 if (latestDoc) setCurrentRun(latestDoc);
               } catch (e) {
                 console.warn('Error fetching final run details:', e);

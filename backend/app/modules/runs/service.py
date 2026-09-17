@@ -438,7 +438,13 @@ class RunService:
                 task.status in ("done", "failed", "skipped")
                 for task in run_doc.plan
             )
-            run_doc.status = "completed" if all_finished else "interrupted"
+            has_failed_task = any(task.status == "failed" for task in run_doc.plan)
+            if has_failed_task:
+                run_doc.status = "failed"
+                run_doc.error_code = "task_execution_failed"
+                run_doc.error_message = "One or more workflow tasks failed."
+            else:
+                run_doc.status = "completed" if all_finished else "interrupted"
             if run_doc.status == "interrupted":
                 run_doc.error_code = "execution_incomplete"
                 run_doc.error_message = "Execution ended before all tasks completed."
@@ -447,14 +453,16 @@ class RunService:
             ) * 1000
             run_doc.updated_at = datetime.utcnow()
             await self.save_run_doc(run_doc)
+            terminal_event_type = "run_failed" if run_doc.status == "failed" else "run_completed"
             await self._record_event(
                 run_id,
-                "run_completed",
+                terminal_event_type,
                 phase="execute",
                 status=run_doc.status,
                 payload={
                     "plan": [self._task_data(task) for task in run_doc.plan],
                     "results": run_doc.result_storage,
+                    "message": run_doc.error_message,
                 },
             )
         except Exception as exc:

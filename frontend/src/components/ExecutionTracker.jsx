@@ -109,7 +109,10 @@ export default function ExecutionTracker({ currentRun, logs, results, plan, isSt
               ) : (
                 logs.map((log, i) => (
                   <div key={i} style={{ lineHeight: 1.4, wordBreak: 'break-all' }}>
-                    <span style={{ color: 'var(--accent-cyan)' }}>[{new Date().toLocaleTimeString()}]</span> {typeof log === 'string' ? log : JSON.stringify(log, null, 2)}
+                    <span style={{ color: 'var(--accent-cyan)' }}>
+                      [{log?.created_at ? new Date(log.created_at).toLocaleTimeString() : new Date().toLocaleTimeString()}]
+                    </span>{' '}
+                    {typeof log === 'string' ? log : (log?.message || JSON.stringify(log, null, 2))}
                   </div>
                 ))
               )}

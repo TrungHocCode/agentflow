@@ -1,9 +1,61 @@
+import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
+
+
+_URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
+
+
+def _run_input_context(state: State) -> str:
+    """Render user-provided run input as explicit execution context."""
+
+    metadata = state.get("metadata") or {}
+    input_data = metadata.get("input_data") or {}
+    if not isinstance(input_data, dict):
+        input_data = {"value": input_data}
+
+    user_prompt = str(input_data.get("user_prompt") or "").strip()
+    raw_urls = input_data.get("urls") or []
+    if isinstance(raw_urls, str):
+        raw_urls = [raw_urls]
+    urls = [
+        str(url).strip().rstrip(".,;:!?)]}")
+        for url in raw_urls
+        if str(url).strip()
+    ]
+    if user_prompt:
+        urls.extend(
+            url.rstrip(".,;:!?)]}")
+            for url in _URL_PATTERN.findall(user_prompt)
+        )
+    urls = list(dict.fromkeys(urls))
+
+    if not user_prompt and not urls:
+        return "\n--- Run Input ---\nNo explicit user input was provided.\n-----------------\n"
+
+    lines = ["\n--- Run Input (user-provided data) ---"]
+    if user_prompt:
+        lines.append(f"User request: {user_prompt}")
+    if urls:
+        lines.append("URLs from user input (use these exact URLs; do not invent placeholders):")
+        lines.extend(f"- {url}" for url in urls)
+    lines.append("Do not replace a provided URL with example.com or another invented URL.")
+    lines.append("---------------------------------------\n")
+    return "\n".join(lines)
+
+
+def _is_tool_error(value: Any) -> bool:
+    """Detect normalized tool failures returned as text by current tools."""
+
+    if not isinstance(value, str):
+        return False
+    lowered = value.strip().lower()
+    return lowered.startswith(("error:", "failed:", "http error:"))
+
 
 class BaseAgent(ABC):
     """
@@ -142,6 +194,7 @@ class WorkerAgent(BaseAgent):
             f"Description: {current_task.description}\n"
             f"---------------------------------\n"
         )
+        task_context += _run_input_context(state)
 
         # Build context from previous results
         results = state.get("result_storage") or []
@@ -169,6 +222,7 @@ class WorkerAgent(BaseAgent):
         status = "done"
         error_msg = None
         final_result = ""
+        last_tool_error: Optional[str] = None
 
         try:
             if self.tools:
@@ -210,6 +264,11 @@ class WorkerAgent(BaseAgent):
                             tool_result = f"Tool '{tool_name}' not found in registry."
                             logs.append(f"[{self.name}] {tool_result}")
 
+                        if _is_tool_error(tool_result):
+                            last_tool_error = str(tool_result)
+                        else:
+                            last_tool_error = None
+
                         # Prompt injection defense: wrap tool output in XML tags
                         wrapped_output = f"<tool_output>\n{str(tool_result)}\n</tool_output>"
 
@@ -225,6 +284,11 @@ class WorkerAgent(BaseAgent):
                 status = "failed"
                 error_msg = f"Agent exceeded maximum tool execution iterations ({max_iterations})."
                 logs.append(f"[{self.name}] Error: {error_msg}")
+
+            if status == "done" and last_tool_error:
+                status = "failed"
+                error_msg = last_tool_error
+                logs.append(f"[{self.name}] Task failed because the final tool call failed: {error_msg}")
 
         except Exception as e:
             status = "failed"
@@ -252,4 +316,3 @@ class WorkerAgent(BaseAgent):
             "result_storage": [new_result],
             "logs": logs
         }
-

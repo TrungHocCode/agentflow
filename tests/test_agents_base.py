@@ -116,6 +116,40 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["result_storage"][0]["result"], "def hello(): pass")
         self.assertEqual(updates["result_storage"][0]["status"], "done")
 
+    async def test_worker_agent_includes_run_input_context(self):
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="You research sources.",
+            llm=self.mock_llm,
+        )
+        self.mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Done"))
+        current_task = Task(
+            id=1,
+            node="worker",
+            status="running",
+            description="Crawl the requested article",
+        )
+
+        await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {
+                    "input_data": {
+                        "user_prompt": "Summarize https://news.example.com/article",
+                    }
+                },
+            }
+        )
+
+        system_message = self.mock_llm.ainvoke.call_args.args[0][0]
+        self.assertIn("https://news.example.com/article", system_message.content)
+        self.assertIn("do not invent placeholders", system_message.content.lower())
+
     async def test_worker_agent_execution_with_tools_loop(self):
         """Test WorkerAgent executing with a tool loop (ReAct)."""
         @tool
@@ -163,6 +197,49 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].status, "done")
         self.assertEqual(updates["result_storage"][0]["result"], "The result is 5.")
         self.assertTrue(any("Executing tool 'add' with args {'a': 2, 'b': 3}" in log for log in updates["logs"]))
+
+    async def test_worker_agent_marks_final_tool_error_as_failed(self):
+        @tool
+        def broken_tool() -> str:
+            """Returns a deterministic tool failure for testing."""
+            return "Error: upstream service unavailable"
+
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="You research sources.",
+            llm=self.mock_llm,
+            tools=[broken_tool],
+        )
+        mock_llm_with_tools = AsyncMock()
+        self.mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm_with_tools.ainvoke.side_effect = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "broken_tool", "args": {}, "id": "call-error"}],
+            ),
+            AIMessage(content="I could not fetch the source."),
+        ]
+        current_task = Task(
+            id=1,
+            node="worker",
+            status="running",
+            description="Fetch source",
+        )
+
+        updates = await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {},
+            }
+        )
+
+        self.assertEqual(updates["current_task"].status, "failed")
+        self.assertIn("upstream service unavailable", updates["current_task"].error)
 
 
 
