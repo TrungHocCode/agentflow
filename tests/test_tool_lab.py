@@ -212,6 +212,30 @@ class TestToolLab(unittest.TestCase):
         self.assertTrue(result.data["file_path"].endswith("unsafe_name.md"))
         self.assertEqual(result.data["source_urls"], ["https://example.com/research"])
 
+    def test_report_collects_source_from_structured_tool_envelope(self):
+        evidence = json.dumps({
+            "ok": True,
+            "status": "success",
+            "data": {"text": "Collected evidence."},
+            "source": {
+                "requested_url": "https://example.com/requested",
+                "final_url": "https://example.com/final",
+            },
+        })
+        result = parse_tool_result(
+            ToolRegistry.get_tool("markdown_report_generator").invoke({
+                "title": "Structured evidence",
+                "sections": [{"header": "Evidence", "content": evidence}],
+                "filename": "structured_evidence.md",
+            })
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            result.data["source_urls"],
+            ["https://example.com/requested", "https://example.com/final"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
