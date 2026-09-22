@@ -1,79 +1,148 @@
-import os
-from datetime import datetime
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field
-from langchain_core.tools import tool
-from app.execution.tools.base import ToolRegistry
+"""Evidence-aware Markdown report artifact generator."""
 
-# Path to sandboxed workspace data directory
+from __future__ import annotations
+
+import json
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlparse
+
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+
+from app.execution.tools.base import ToolRegistry
+from app.execution.tools.contracts import failure_result, success_result
+
+
 WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "workspace_data"))
+MAX_REPORT_BYTES = 5 * 1024 * 1024
 
 
 class SectionItem(BaseModel):
-    header: str = Field(description="Section heading/title.")
-    content: str = Field(description="Section markdown text content.")
+    header: str = Field(min_length=1, max_length=200, description="Section heading/title.")
+    content: str = Field(min_length=1, description="Section markdown text content or structured evidence.")
 
 
 class MarkdownReportInput(BaseModel):
-    title: str = Field(description="Title of the Markdown report.")
-    summary: Optional[str] = Field(default=None, description="Executive summary or key highlights of the report.")
-    sections: List[SectionItem] = Field(description="List of sections containing header and content.")
-    filename: str = Field(default="summary_report.md", description="Output Markdown filename (e.g. 'news_summary.md').")
+    title: str = Field(min_length=1, max_length=300, description="Title of the Markdown report.")
+    summary: str | None = Field(default=None, description="Executive summary or key highlights.")
+    sections: list[SectionItem] = Field(min_length=1, description="Report sections containing evidence.")
+    filename: str = Field(default="summary_report.md", max_length=200)
+
+
+def _safe_report_filename(filename: str) -> str:
+    basename = os.path.basename(filename).replace("\x00", "")
+    basename = re.sub(r"[^a-zA-Z0-9._-]+", "_", basename)
+    basename = basename[:120] or "summary_report.md"
+    return basename if basename.lower().endswith(".md") else f"{basename}.md"
+
+
+def _extract_source_urls(content: str) -> list[str]:
+    urls = re.findall(r"https?://[^\s<>\[\]\\\"']+", content)
+    valid: list[str] = []
+    for url in urls:
+        candidate = url.rstrip(".,;:!?)]}")
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and candidate not in valid:
+            valid.append(candidate)
+    return valid
+
+
+def _render_section_content(content: str) -> str:
+    """Render structured tool data readably while retaining evidence."""
+
+    try:
+        payload: Any = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+    if not isinstance(payload, dict) or "data" not in payload:
+        return content
+    if payload.get("ok") is False:
+        return f"Tool status: {payload.get('status', 'error')}\n\n{payload.get('error', {})}"
+    data = payload.get("data")
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 @ToolRegistry.register_tool(name="markdown_report_generator")
 @tool("markdown_report_generator", args_schema=MarkdownReportInput)
 def markdown_report_generator(
     title: str,
-    sections: List[SectionItem],
-    summary: Optional[str] = None,
-    filename: str = "summary_report.md"
+    sections: list[SectionItem],
+    summary: str | None = None,
+    filename: str = "summary_report.md",
 ) -> str:
-    """
-    Generates a structured Markdown report file from collected insights and saves it in the workspace_data/reports directory.
-    Use this to publish research reports, summaries, or compiled task artifacts.
-    """
+    """Generate a Markdown report only when at least one evidence section exists."""
+
+    if not sections or not any(section.content.strip() for section in sections):
+        return failure_result(
+            "empty",
+            code="no_report_evidence",
+            message="Cannot generate a report without evidence sections.",
+            tool_name="markdown_report_generator",
+        ).to_json()
+
     try:
         reports_dir = os.path.join(WORKSPACE_DIR, "reports")
         os.makedirs(reports_dir, exist_ok=True)
+        safe_filename = _safe_report_filename(filename)
+        file_path = os.path.join(reports_dir, safe_filename)
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        if not filename.endswith(".md"):
-            filename += ".md"
-
-        file_path = os.path.join(reports_dir, filename)
-
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        rendered_sections = [(section.header, _render_section_content(section.content)) for section in sections]
+        source_urls: list[str] = []
+        for _, content in rendered_sections:
+            for url in _extract_source_urls(content):
+                if url not in source_urls:
+                    source_urls.append(url)
 
         md_content = [
             f"# {title}\n",
             f"> **Generated by AgentFlow Platform** | *{now_str}*\n",
-            "---\n"
+            "---\n",
         ]
-
         if summary:
             md_content.append(f"## Executive Summary\n\n{summary}\n\n---\n")
-
         md_content.append("## Table of Contents\n")
-        for idx, sec in enumerate(sections, 1):
-            anchor = sec.header.lower().replace(" ", "-")
-            md_content.append(f"{idx}. [{sec.header}](#{anchor})")
+        for index, (header, _) in enumerate(rendered_sections, 1):
+            anchor = re.sub(r"[^a-z0-9-]+", "-", header.lower()).strip("-")
+            md_content.append(f"{index}. [{header}](#{anchor})")
         md_content.append("\n---\n")
-
-        for sec in sections:
-            md_content.append(f"## {sec.header}\n\n{sec.content}\n\n")
+        for header, content in rendered_sections:
+            md_content.append(f"## {header}\n\n{content}\n\n")
+        if source_urls:
+            md_content.append("## Sources\n\n")
+            md_content.extend(f"- {url}\n" for url in source_urls)
 
         full_text = "\n".join(md_content)
+        if len(full_text.encode("utf-8")) > MAX_REPORT_BYTES:
+            return failure_result(
+                "blocked",
+                code="report_too_large",
+                message=f"Report exceeds the {MAX_REPORT_BYTES} byte limit.",
+                tool_name="markdown_report_generator",
+            ).to_json()
 
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(full_text)
-
-        rel_path = os.path.relpath(file_path, WORKSPACE_DIR)
-
-        return (
-            f"Successfully generated Markdown report!\n"
-            f"File Path: {file_path}\n"
-            f"Relative Sandbox Path: workspace_data/{rel_path}\n"
-            f"Report Size: {len(full_text)} characters, {len(sections)} sections."
-        )
-    except Exception as e:
-        return f"Error generating Markdown report: {str(e)}"
+        with open(file_path, "w", encoding="utf-8") as stream:
+            stream.write(full_text)
+        relative_path = os.path.relpath(file_path, WORKSPACE_DIR).replace(os.sep, "/")
+        return success_result(
+            {
+                "message": "Successfully generated Markdown report!",
+                "file_path": file_path,
+                "relative_path": f"workspace_data/{relative_path}",
+                "characters": len(full_text),
+                "sections": len(rendered_sections),
+                "source_urls": source_urls,
+            },
+            tool_name="markdown_report_generator",
+            metadata={"artifact_type": "markdown_report", "source_count": len(source_urls)},
+        ).to_json()
+    except Exception as exc:
+        return failure_result(
+            "internal_error",
+            code="report_generation_failed",
+            message=str(exc),
+            tool_name="markdown_report_generator",
+        ).to_json()

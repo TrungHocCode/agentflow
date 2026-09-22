@@ -140,7 +140,8 @@ def parse_tool_result(value: Any, *, tool_name: str | None = None) -> ToolResult
             return ToolResult.model_validate(decoded)
 
         text = value.strip()
-        if text.lower().startswith(("error:", "failed:", "http error:")):
+        lowered = text.lower()
+        if lowered.startswith(("error:", "error ", "failed:", "http error:")):
             return failure_result(
                 "internal_error",
                 code="legacy_tool_error",

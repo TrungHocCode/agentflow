@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from app.execution.tools.base import ToolRegistry, _get_safe_path
 
+
+MAX_FILE_BYTES = 5 * 1024 * 1024
+
 class FileReadInput(BaseModel):
     filename: str = Field(description="The name of the file to read (e.g. 'report.txt').")
 
@@ -17,6 +20,10 @@ def file_reader(filename: str) -> str:
         path = _get_safe_path(filename)
         if not os.path.exists(path):
             return f"Error: File '{filename}' not found in workspace_data."
+        if not os.path.isfile(path):
+            return f"Error: '{filename}' is not a regular file."
+        if os.path.getsize(path) > MAX_FILE_BYTES:
+            return f"Error: File '{filename}' exceeds the {MAX_FILE_BYTES} byte limit."
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
         return content
@@ -36,6 +43,10 @@ def file_writer(filename: str, content: str) -> str:
     Use this to save outputs, summaries, or data records.
     """
     try:
+        if "\x00" in filename:
+            return "Error: Filename contains an invalid null character."
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            return f"Error: Content exceeds the {MAX_FILE_BYTES} byte limit."
         path = _get_safe_path(filename)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
