@@ -13,7 +13,9 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
+from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient_backoff
 
 
 SEARCH_URL = "https://html.duckduckgo.com/html/"
@@ -138,17 +140,29 @@ def web_search(query: str, max_results: int = 5) -> str:
             tool_name="web_search",
         ).to_json()
 
+    cache_key = f"web_search:{normalized_query.lower()}:{max_results}"
+    cached_result = get_cached(cache_key)
+    if isinstance(cached_result, str):
+        return cached_result
+
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowWebSearch/2.0",
         "Accept": "text/html,application/xhtml+xml",
     }
     try:
-        response = requests.post(
-            SEARCH_URL,
-            headers=headers,
-            data={"q": normalized_query},
-            timeout=SEARCH_TIMEOUT,
-        )
+        for attempt in range(MAX_TRANSIENT_ATTEMPTS):
+            try:
+                response = requests.post(
+                    SEARCH_URL,
+                    headers=headers,
+                    data={"q": normalized_query},
+                    timeout=SEARCH_TIMEOUT,
+                )
+                break
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == MAX_TRANSIENT_ATTEMPTS - 1:
+                    raise
+                transient_backoff(attempt)
     except requests.Timeout:
         return failure_result(
             "timeout",
@@ -227,9 +241,11 @@ def web_search(query: str, max_results: int = 5) -> str:
             metadata=metadata,
         ).model_copy(update={"data": {"query": normalized_query, "results": []}}).to_json()
 
-    return success_result(
+    result = success_result(
         {"query": normalized_query, "results": results},
         tool_name="web_search",
         source=source,
         metadata=metadata,
     ).to_json()
+    set_cached(cache_key, result)
+    return result

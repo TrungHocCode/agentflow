@@ -6,12 +6,15 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 import app.execution.tools.registry  # noqa: F401
 from app.execution.tools.contracts import is_tool_failure, parse_tool_result
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.cache import clear_cache
 from app.execution.tools.tool_runner import run_tool
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.state import Task
@@ -49,6 +52,7 @@ class TestToolContracts(unittest.TestCase):
 
 class TestToolLab(unittest.TestCase):
     def tearDown(self):
+        clear_cache()
         workspace_data = os.path.join(os.getcwd(), "workspace_data")
         if os.path.exists(workspace_data):
             shutil.rmtree(workspace_data)
@@ -235,6 +239,38 @@ class TestToolLab(unittest.TestCase):
             result.data["source_urls"],
             ["https://example.com/requested", "https://example.com/final"],
         )
+
+    @patch.dict(os.environ, {"AGENTFLOW_TOOL_CACHE_TTL_SECONDS": "60"})
+    @patch("app.execution.tools.news_crawler_tool.requests.get")
+    def test_crawler_cache_avoids_duplicate_fetches(self, mock_get):
+        response = MagicMock()
+        response.status_code = 200
+        response.url = "https://example.com/cached"
+        response.headers = {"content-type": "text/html"}
+        response.content = b"<html>"
+        response.text = "<html><body><p>This is enough article content to satisfy the crawler quality threshold for caching.</p></body></html>"
+        mock_get.return_value = response
+
+        first = run_tool("news_crawler", {"url": "https://example.com/cached"})
+        second = run_tool("news_crawler", {"url": "https://example.com/cached"})
+
+        self.assertTrue(first.ok)
+        self.assertTrue(second.ok)
+        mock_get.assert_called_once()
+
+    @patch("app.execution.tools.network_policy.time.sleep")
+    @patch("app.execution.tools.web_search_tool.requests.post")
+    def test_search_retries_transient_connection_failure(self, mock_post, mock_sleep):
+        response = MagicMock()
+        response.status_code = 200
+        response.text = '<div class="result"><a class="result__a" href="https://example.com">Result</a><a class="result__url" href="https://example.com">example.com</a></div>'
+        mock_post.side_effect = [requests.ConnectionError("temporary"), response]
+
+        result = run_tool("web_search", {"query": "retry test"})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(mock_post.call_count, 2)
+        mock_sleep.assert_called_once()
 
 
 if __name__ == "__main__":

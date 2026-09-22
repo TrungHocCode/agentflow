@@ -5,7 +5,17 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import time
 from urllib.parse import urlparse
+
+
+MAX_TRANSIENT_ATTEMPTS = 2
+
+
+def transient_backoff(attempt: int) -> None:
+    """Apply a short bounded exponential backoff between transient attempts."""
+
+    time.sleep(min(0.15 * (2**attempt), 0.5))
 
 
 def _is_private_address(value: str) -> bool:
