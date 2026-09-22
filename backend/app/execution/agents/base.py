@@ -5,6 +5,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
+from app.execution.tools.contracts import is_tool_failure, parse_tool_result
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
@@ -49,12 +50,9 @@ def _run_input_context(state: State) -> str:
 
 
 def _is_tool_error(value: Any) -> bool:
-    """Detect normalized tool failures returned as text by current tools."""
+    """Detect both structured failures and legacy text errors."""
 
-    if not isinstance(value, str):
-        return False
-    lowered = value.strip().lower()
-    return lowered.startswith(("error:", "failed:", "http error:"))
+    return is_tool_failure(value)
 
 
 class BaseAgent(ABC):
@@ -265,7 +263,12 @@ class WorkerAgent(BaseAgent):
                             logs.append(f"[{self.name}] {tool_result}")
 
                         if _is_tool_error(tool_result):
-                            last_tool_error = str(tool_result)
+                            normalized_tool_result = parse_tool_result(tool_result)
+                            last_tool_error = (
+                                normalized_tool_result.error.message
+                                if normalized_tool_result.error
+                                else str(tool_result)
+                            )
                         else:
                             last_tool_error = None
 

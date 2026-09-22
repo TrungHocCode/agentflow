@@ -8,6 +8,7 @@ from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.agents.resolver import AgentResolver
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.contracts import is_tool_failure, parse_tool_result
 from app.execution.tools.registry import autodiscover_tools
 from app.execution.checkpointer import get_checkpointer
 
@@ -270,13 +271,10 @@ async def _execute_worker_node(
         error_msg = str(e)
         logs.append(f"[WorkerNode] Error executing task: {error_msg}")
 
-    if (
-        status == "done"
-        and isinstance(result_text, str)
-        and result_text.strip().lower().startswith("error:")
-    ):
+    if status == "done" and is_tool_failure(result_text):
         status = "failed"
-        error_msg = result_text
+        normalized_result = parse_tool_result(result_text)
+        error_msg = normalized_result.error.message if normalized_result.error else str(result_text)
         logs.append(f"[WorkerNode] Task failed because the tool returned an error: {error_msg}")
 
     updated_task = current_task.model_copy(update={

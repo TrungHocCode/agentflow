@@ -13,7 +13,40 @@ class TaskDispatcher:
             return {"current_task": None, "logs": ["[TaskDispatcher] Plan is empty."]}
 
         completed_task_ids = {t.id for t in plan if t.status == "done"}
-        failed_task_ids = {t.id for t in plan if t.status == "failed"}
+        failed_task_ids = {t.id for t in plan if t.status in {"failed", "skipped"}}
+
+        # Propagate a failed prerequisite through the whole dependency chain in
+        # one dispatch pass. Without this, a single failed task could leave
+        # grandchildren in ``pending`` when the graph reaches END.
+        skipped_tasks: list[Task] = []
+        known_failed_ids = set(failed_task_ids)
+        while True:
+            newly_skipped = [
+                task
+                for task in plan
+                if task.status == "pending"
+                and task.id not in known_failed_ids
+                and any(dep_id in known_failed_ids for dep_id in task.dependencies)
+            ]
+            if not newly_skipped:
+                break
+            for task in newly_skipped:
+                skipped_task = task.model_copy(update={
+                    "status": "skipped",
+                    "error": "Skipped due to failed dependency."
+                })
+                skipped_tasks.append(skipped_task)
+                known_failed_ids.add(task.id)
+
+        if skipped_tasks:
+            return {
+                "plan": skipped_tasks,
+                "current_task": None,
+                "logs": [
+                    f"[TaskDispatcher] Task {task.id} ('{task.description}') skipped due to dependency failure."
+                    for task in skipped_tasks
+                ],
+            }
 
         # Find first runnable pending task whose dependencies are satisfied
         runnable_task: Optional[Task] = None
@@ -21,19 +54,6 @@ class TaskDispatcher:
             if task.status == "pending":
                 # Check dependencies
                 deps_met = all(dep_id in completed_task_ids for dep_id in task.dependencies)
-                deps_failed = any(dep_id in failed_task_ids for dep_id in task.dependencies)
-                
-                if deps_failed:
-                    # Skip task if prerequisite failed
-                    skipped_task = task.model_copy(update={
-                        "status": "skipped",
-                        "error": "Skipped due to failed dependency."
-                    })
-                    return {
-                        "plan": [skipped_task],
-                        "logs": [f"[TaskDispatcher] Task {task.id} ('{task.description}') skipped due to dependency failure."]
-                    }
-                
                 if deps_met:
                     runnable_task = task
                     break
