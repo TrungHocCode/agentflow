@@ -15,12 +15,13 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import (
     SourceMetadata,
     failure_result,
     success_result,
 )
-from app.execution.tools.network_policy import validate_external_url
+from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient_backoff, validate_external_url
 
 
 MIN_ARTICLE_TEXT_LENGTH = 80
@@ -247,6 +248,10 @@ def news_crawler(url: str) -> str:
             tool_name="news_crawler",
         ).to_json()
 
+    cached_result = get_cached(f"news_crawler:{normalized_url}")
+    if isinstance(cached_result, str):
+        return cached_result
+
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowNewsCrawler/2.0",
         "Accept": "text/html,application/xhtml+xml",
@@ -256,12 +261,19 @@ def news_crawler(url: str) -> str:
     response = None
     try:
         for _ in range(MAX_REDIRECTS + 1):
-            response = requests.get(
-                current_url,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT,
-                allow_redirects=False,
-            )
+            for attempt in range(MAX_TRANSIENT_ATTEMPTS):
+                try:
+                    response = requests.get(
+                        current_url,
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT,
+                        allow_redirects=False,
+                    )
+                    break
+                except (requests.Timeout, requests.ConnectionError):
+                    if attempt == MAX_TRANSIENT_ATTEMPTS - 1:
+                        raise
+                    transient_backoff(attempt)
             status_code = getattr(response, "status_code", None)
             if status_code not in {301, 302, 303, 307, 308}:
                 break
@@ -398,9 +410,11 @@ def news_crawler(url: str) -> str:
             metadata=metadata,
         ).model_copy(update={"data": data}).to_json()
 
-    return success_result(
+    result = success_result(
         data,
         tool_name="news_crawler",
         source=source,
         metadata=metadata,
     ).to_json()
+    set_cached(f"news_crawler:{normalized_url}", result)
+    return result

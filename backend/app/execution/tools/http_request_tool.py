@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
-from app.execution.tools.network_policy import validate_external_url
+from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient_backoff, validate_external_url
 
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -72,15 +72,23 @@ def http_request(url: str, method: str = "GET", headers: dict[str, str] | None =
     response = None
     try:
         for redirect_count in range(MAX_REDIRECTS + 1):
-            response = requests.request(
-                method=method,
-                url=current_url,
-                headers=headers,
-                json=payload if isinstance(payload, (dict, list)) else None,
-                data=payload if isinstance(payload, str) else None,
-                timeout=REQUEST_TIMEOUT,
-                allow_redirects=False,
-            )
+            attempts = MAX_TRANSIENT_ATTEMPTS if method in {"GET", "HEAD", "PUT", "DELETE"} else 1
+            for attempt in range(attempts):
+                try:
+                    response = requests.request(
+                        method=method,
+                        url=current_url,
+                        headers=headers,
+                        json=payload if isinstance(payload, (dict, list)) else None,
+                        data=payload if isinstance(payload, str) else None,
+                        timeout=REQUEST_TIMEOUT,
+                        allow_redirects=False,
+                    )
+                    break
+                except (requests.Timeout, requests.ConnectionError):
+                    if attempt == attempts - 1:
+                        raise
+                    transient_backoff(attempt)
             status_code = getattr(response, "status_code", None)
             if status_code not in {301, 302, 303, 307, 308}:
                 break
