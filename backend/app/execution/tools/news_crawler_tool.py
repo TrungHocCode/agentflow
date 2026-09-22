@@ -20,11 +20,13 @@ from app.execution.tools.contracts import (
     failure_result,
     success_result,
 )
+from app.execution.tools.network_policy import validate_external_url
 
 
 MIN_ARTICLE_TEXT_LENGTH = 80
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 REQUEST_TIMEOUT = (5, 15)
+MAX_REDIRECTS = 3
 SKIPPED_TAGS = {"script", "style", "nav", "footer", "header", "aside", "form", "noscript", "template", "svg"}
 TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote"}
 
@@ -236,14 +238,57 @@ def news_crawler(url: str) -> str:
             message=validation_error,
             tool_name="news_crawler",
         ).to_json()
+    normalized_url, network_error = validate_external_url(normalized_url)
+    if network_error:
+        return failure_result(
+            "blocked",
+            code="outbound_url_blocked",
+            message=network_error,
+            tool_name="news_crawler",
+        ).to_json()
 
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowNewsCrawler/2.0",
         "Accept": "text/html,application/xhtml+xml",
     }
 
+    current_url = normalized_url
+    response = None
     try:
-        response = requests.get(normalized_url, headers=headers, timeout=REQUEST_TIMEOUT)
+        for _ in range(MAX_REDIRECTS + 1):
+            response = requests.get(
+                current_url,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+                allow_redirects=False,
+            )
+            status_code = getattr(response, "status_code", None)
+            if status_code not in {301, 302, 303, 307, 308}:
+                break
+            response_headers = getattr(response, "headers", {})
+            location = response_headers.get("location") if isinstance(response_headers, Mapping) else None
+            if not location:
+                break
+            next_url, redirect_error = validate_external_url(urljoin(current_url, location))
+            if redirect_error:
+                return failure_result(
+                    "blocked",
+                    code="redirect_target_blocked",
+                    message=redirect_error,
+                    tool_name="news_crawler",
+                    source=SourceMetadata(requested_url=normalized_url, final_url=current_url),
+                    metadata={"duration_ms": round((perf_counter() - started) * 1000)},
+                ).to_json()
+            current_url = next_url
+        else:
+            return failure_result(
+                "http_error",
+                code="too_many_redirects",
+                message=f"Request exceeded the {MAX_REDIRECTS} redirect limit.",
+                tool_name="news_crawler",
+                source=SourceMetadata(requested_url=normalized_url, final_url=current_url),
+                metadata={"duration_ms": round((perf_counter() - started) * 1000)},
+            ).to_json()
     except requests.Timeout:
         return failure_result(
             "timeout",
@@ -251,7 +296,7 @@ def news_crawler(url: str) -> str:
             message=f"Timed out while fetching '{normalized_url}'.",
             retryable=True,
             tool_name="news_crawler",
-            source=SourceMetadata(requested_url=normalized_url),
+            source=SourceMetadata(requested_url=normalized_url, final_url=current_url),
             metadata={"duration_ms": round((perf_counter() - started) * 1000)},
         ).to_json()
     except requests.RequestException as exc:
@@ -261,14 +306,23 @@ def news_crawler(url: str) -> str:
             message=str(exc),
             retryable=True,
             tool_name="news_crawler",
-            source=SourceMetadata(requested_url=normalized_url),
+            source=SourceMetadata(requested_url=normalized_url, final_url=current_url),
             metadata={"duration_ms": round((perf_counter() - started) * 1000)},
         ).to_json()
 
+    if response is None:
+        return failure_result(
+            "internal_error",
+            code="missing_crawler_response",
+            message="Crawler returned no HTTP response.",
+            tool_name="news_crawler",
+        ).to_json()
+
     status_code = getattr(response, "status_code", None)
-    final_url = getattr(response, "url", None)
-    if not isinstance(final_url, str):
-        final_url = normalized_url
+    final_url = current_url
+    response_url = getattr(response, "url", None)
+    if isinstance(response_url, str):
+        final_url = response_url
     headers_map = getattr(response, "headers", {})
     if not isinstance(headers_map, Mapping):
         headers_map = {}
