@@ -50,6 +50,23 @@ def _extract_source_urls(content: str) -> list[str]:
     return valid
 
 
+def _extract_structured_source_urls(content: str) -> list[str]:
+    """Collect URLs from both visible text and a ToolResult source envelope."""
+
+    urls = _extract_source_urls(content)
+    try:
+        payload: Any = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return urls
+    source = payload.get("source") if isinstance(payload, dict) else None
+    if isinstance(source, dict):
+        for key in ("requested_url", "final_url"):
+            value = source.get(key)
+            if isinstance(value, str) and value not in urls:
+                urls.append(value)
+    return urls
+
+
 def _render_section_content(content: str) -> str:
     """Render structured tool data readably while retaining evidence."""
 
@@ -90,10 +107,10 @@ def markdown_report_generator(
         file_path = os.path.join(reports_dir, safe_filename)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        rendered_sections = [(section.header, _render_section_content(section.content)) for section in sections]
+        rendered_sections = [(section.header, _render_section_content(section.content), section.content) for section in sections]
         source_urls: list[str] = []
-        for _, content in rendered_sections:
-            for url in _extract_source_urls(content):
+        for _, content, original_content in rendered_sections:
+            for url in _extract_structured_source_urls(original_content) + _extract_source_urls(content):
                 if url not in source_urls:
                     source_urls.append(url)
 
@@ -105,11 +122,11 @@ def markdown_report_generator(
         if summary:
             md_content.append(f"## Executive Summary\n\n{summary}\n\n---\n")
         md_content.append("## Table of Contents\n")
-        for index, (header, _) in enumerate(rendered_sections, 1):
+        for index, (header, _, _) in enumerate(rendered_sections, 1):
             anchor = re.sub(r"[^a-z0-9-]+", "-", header.lower()).strip("-")
             md_content.append(f"{index}. [{header}](#{anchor})")
         md_content.append("\n---\n")
-        for header, content in rendered_sections:
+        for header, content, _ in rendered_sections:
             md_content.append(f"## {header}\n\n{content}\n\n")
         if source_urls:
             md_content.append("## Sources\n\n")
