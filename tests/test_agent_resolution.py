@@ -7,7 +7,10 @@ from langchain_core.language_models import BaseChatModel
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.execution.agents.resolver import AgentProfile, AgentResolver
+from app.execution.agents.resolver import (
+    AgentProfile,
+    AgentResolver,
+)
 from app.execution.state import Task
 from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider
@@ -60,6 +63,135 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([tool.name for tool in resolved.tools], ["web_search"])
+
+    async def test_plan_validation_rejects_tools_outside_the_agent_whitelist(self) -> None:
+        resolver = AgentResolver()
+        task = Task(
+            id=1,
+            node="source_researcher",
+            status="pending",
+            description="Collect sources",
+            tool_names=["file_writer"],
+        )
+
+        with self.assertRaisesRegex(ValueError, "authorized"):
+            await resolver.validate_plan([task])
+
+    async def test_legacy_news_scraper_name_resolves_to_authorized_crawler(self) -> None:
+        resolver = AgentResolver()
+        resolved = await resolver.resolve(
+            Task(
+                id=1,
+                node="source_researcher",
+                status="running",
+                description="Scrape the latest news",
+                tool_names=["news_scraper"],
+            )
+        )
+
+        self.assertEqual([tool.name for tool in resolved.tools], ["news_crawler"])
+        self.assertEqual(resolved.denied_tool_names, ())
+
+    async def test_news_scraper_alias_does_not_expand_profile_permissions(self) -> None:
+        resolver = AgentResolver(
+            fallback_profiles={
+                "source_researcher": AgentProfile(
+                    name="source_researcher",
+                    system_prompt="Search sources.",
+                    tool_names=["web_search"],
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "no authorized registered tools"):
+            await resolver.resolve(
+                Task(
+                    id=1,
+                    node="source_researcher",
+                    status="running",
+                    description="Scrape the latest news",
+                    tool_names=["news_scraper"],
+                )
+            )
+
+    async def test_planner_tool_catalog_uses_active_profiles_and_registered_names(self) -> None:
+        catalog = await AgentResolver().format_agent_tool_catalog()
+
+        self.assertIn(
+            "- source_researcher: web_search, news_crawler, http_request",
+            catalog,
+        )
+        self.assertIn("news_scraper -> news_crawler", catalog)
+        self.assertIn("Legacy names (do not use in plans)", catalog)
+
+        class RestrictedProfileProvider:
+            async def get_agent(self, identifier: str) -> AgentProfile | None:
+                if identifier == "source_researcher":
+                    return AgentProfile(
+                        name="source_researcher",
+                        system_prompt="Search sources.",
+                        tool_names=["web_search"],
+                    )
+                return None
+
+        active_catalog = await AgentResolver(
+            provider=RestrictedProfileProvider()
+        ).format_agent_tool_catalog()
+        self.assertIn("- source_researcher: web_search\n", active_catalog)
+        self.assertNotIn("- source_researcher: web_search, news_crawler", active_catalog)
+
+    async def test_worker_prompt_lists_only_tools_authorized_for_this_task(self) -> None:
+        resolver = AgentResolver()
+        task = Task(
+            id=1,
+            node="source_researcher",
+            status="running",
+            description="Scrape the requested article",
+            tool_names=["news_crawler"],
+        )
+        resolved = await resolver.resolve(task)
+        agent = resolver.create_agent(
+            resolved=resolved,
+            llm=MagicMock(spec=BaseChatModel),
+            task=task,
+        )
+
+        self.assertIn(
+            "Authorized tools for this task (use these exact names only): news_crawler.",
+            agent.system_prompt,
+        )
+        self.assertIn("up to three linked articles", agent.system_prompt)
+        self.assertIn("article_count is zero", agent.system_prompt)
+        self.assertNotIn("news_scraper", agent.system_prompt)
+
+    async def test_synthesis_and_report_agents_get_tool_capability_guidance(self) -> None:
+        resolver = AgentResolver()
+        cases = [
+            (
+                "synthesis_agent",
+                "text_summarizer is an extractive sentence sampler",
+            ),
+            (
+                "report_agent",
+                "markdown_report_generator only renders and saves",
+            ),
+        ]
+
+        for index, (role, expected_guidance) in enumerate(cases, start=1):
+            task = Task(
+                id=index,
+                node=role,
+                status="running",
+                description="Process the research evidence",
+            )
+            resolved = await resolver.resolve(task)
+            agent = resolver.create_agent(
+                resolved=resolved,
+                llm=MagicMock(spec=BaseChatModel),
+                task=task,
+            )
+
+            self.assertIn(expected_guidance, agent.system_prompt)
 
     async def test_legacy_tool_name_in_agent_id_maps_to_role_profile(self) -> None:
         resolver = AgentResolver()

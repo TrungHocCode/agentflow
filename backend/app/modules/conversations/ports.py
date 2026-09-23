@@ -15,6 +15,9 @@ class ConversationRepository(Protocol):
     async def list(self, user_id: str, limit: int = 50) -> List[ConversationRecord]:
         ...
 
+    async def delete(self, conversation_id: str, user_id: str) -> bool:
+        ...
+
     async def save(self, conversation: ConversationRecord) -> ConversationRecord:
         ...
 

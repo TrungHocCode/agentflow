@@ -34,7 +34,12 @@ class _ExecutionPort(ExecutionPort):
     async def create_plan(self, run_id: str, initial_state: State) -> State:
         raise NotImplementedError
 
-    async def continue_conversation(self, run_id: str, message: str) -> State:
+    async def continue_conversation(
+        self,
+        run_id: str,
+        message: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> State:
         raise NotImplementedError
 
     def execute_run(

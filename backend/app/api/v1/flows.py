@@ -11,7 +11,7 @@ from app.modules.workflows.service import WorkflowService
 
 router = APIRouter(prefix="/flows", tags=["Flows"])
 
-@router.post("/", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
 async def create_flow(
     flow_in: WorkflowCreateRequest,
     service: WorkflowService = Depends(get_workflow_service),
@@ -19,7 +19,7 @@ async def create_flow(
 ):
     return await service.create_workflow(flow_in, user_id=user_id)
 
-@router.get("/", response_model=List[WorkflowResponse])
+@router.get("", response_model=List[WorkflowResponse])
 async def list_flows(
     service: WorkflowService = Depends(get_workflow_service),
     user_id: str = Depends(get_current_user_id),

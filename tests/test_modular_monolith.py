@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
+from langchain_core.messages import AIMessage
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 from app.execution.state import State, Task
@@ -158,21 +160,34 @@ class FakeRunRepository:
 class FakeExecutionPort:
     def __init__(self) -> None:
         self.created_plan_for: str | None = None
+        self.initial_state: State | None = None
+        self.continuation_metadata: Dict[str, Any] | None = None
 
     async def create_plan(self, run_id: str, initial_state: State) -> State:
         self.created_plan_for = run_id
+        self.initial_state = initial_state
         return {
             "mode": "conversation",
             "plan": [make_task(1)],
+            "messages": [AIMessage(content="I drafted a workflow for review.")],
             "logs": ["plan created by fake execution adapter"],
             "result_storage": [],
+            "metadata": {"supervisor_decision": "propose_plan"},
         }
 
-    async def continue_conversation(self, run_id: str, message: str) -> State:
+    async def continue_conversation(
+        self,
+        run_id: str,
+        message: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> State:
+        self.continuation_metadata = dict(metadata or {})
         return {
             "mode": "conversation",
             "plan": [make_task(1)],
+            "messages": [AIMessage(content="I updated the workflow for review.")],
             "logs": [f"received: {message}"],
+            "metadata": {"supervisor_decision": "propose_plan"},
         }
 
     async def _stream(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
@@ -348,9 +363,11 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         document = await service.create_workflow_run(
             workflow_id="workflow-1",
             idempotency_key="request-1",
+            conversation_id="conversation-1",
         )
         self.assertIsNotNone(document)
         self.assertEqual(document.status, "queued")
+        self.assertEqual(document.conversation_id, "conversation-1")
 
         worker = RunWorker(service=service, command_queue=queue)
         self.assertTrue(await worker.process_next(timeout=1))
@@ -404,6 +421,14 @@ class FakeConversationRepository:
     async def list(self, user_id: str, limit: int = 50) -> List[ConversationRecord]:
         return [c for c in self.conversations.values() if c.user_id == user_id][:limit]
 
+    async def delete(self, conversation_id: str, user_id: str) -> bool:
+        conversation = await self.get(conversation_id, user_id)
+        if conversation is None:
+            return False
+        self.conversations.pop(conversation_id, None)
+        self.messages.pop(conversation_id, None)
+        return True
+
     async def save(self, conversation: ConversationRecord) -> ConversationRecord:
         self.conversations[conversation.id] = conversation
         return conversation
@@ -435,8 +460,32 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updated.status, "waiting_for_user")
         self.assertEqual(len(updated.draft_plan), 1)
+        self.assertTrue(updated.metadata["use_llm"])
+        self.assertEqual(updated.metadata["model_name"], "qwen3:8b")
+        self.assertTrue(service.execution_port.initial_state["metadata"]["use_llm"])
         messages = await service.list_messages(conversation.id)
         self.assertEqual(messages[0].role, "user")
+
+    async def test_conversation_uses_selected_model_for_plan_and_follow_up(self) -> None:
+        repository = FakeConversationRepository()
+        execution_port = FakeExecutionPort()
+        service = ConversationService(repository=repository, execution_port=execution_port)
+        conversation = await service.create_conversation(title="Model selection chat")
+
+        updated = await service.send_message(
+            conversation_id=conversation.id,
+            content="Research local LLMs",
+            model_name="gemma2:latest",
+        )
+        self.assertEqual(updated.metadata["model_name"], "gemma2:latest")
+
+        await service.send_message(
+            conversation_id=conversation.id,
+            content="Focus on context length",
+            model_name="qwen3:0.6b",
+        )
+        self.assertTrue(execution_port.continuation_metadata["use_llm"])
+        self.assertEqual(execution_port.continuation_metadata["model_name"], "qwen3:0.6b")
 
     async def test_async_message_publishes_replayable_progress_events(self) -> None:
         from app.infrastructure.redis.conversation_event_publisher import (
@@ -445,15 +494,17 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
 
         repository = FakeConversationRepository()
         publisher = InMemoryConversationEventPublisher()
+        execution_port = FakeExecutionPort()
         service = ConversationService(
             repository=repository,
-            execution_port=FakeExecutionPort(),
+            execution_port=execution_port,
             event_publisher=publisher,
         )
         conversation = await service.create_conversation(title="Async research chat")
         accepted = await service.start_message(
             conversation_id=conversation.id,
             content="Research local LLMs",
+            model_name="llama3:8b",
         )
 
         self.assertEqual(accepted["status"], "accepted")
@@ -467,6 +518,78 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertIn("planning_started", "".join(events))
         self.assertIn("workflow_draft_updated", "".join(events))
         self.assertIn("planning_completed", "".join(events))
+        self.assertIn('"outcome": "propose_plan"', "".join(events))
+        self.assertTrue(execution_port.initial_state["metadata"]["use_llm"])
+        self.assertEqual(execution_port.initial_state["metadata"]["model_name"], "llama3:8b")
+
+    async def test_clarification_is_saved_and_the_next_message_continues_the_same_turn(self) -> None:
+        class ClarifyingExecutionPort(FakeExecutionPort):
+            async def create_plan(self, run_id: str, initial_state: State) -> State:
+                self.created_plan_for = run_id
+                self.initial_state = initial_state
+                return {
+                    "mode": "conversation",
+                    "plan": [],
+                    "messages": [AIMessage(content="Bạn muốn nghiên cứu sản phẩm hay công ty nào?")],
+                    "metadata": {"supervisor_decision": "clarify"},
+                }
+
+        repository = FakeConversationRepository()
+        execution_port = ClarifyingExecutionPort()
+        service = ConversationService(repository=repository, execution_port=execution_port)
+        conversation = await service.create_conversation(title="Clarification chat")
+
+        waiting = await service.send_message(conversation.id, "Research the latest launch")
+
+        self.assertEqual(waiting.metadata["supervisor_decision"], "clarify")
+        self.assertEqual(waiting.draft_plan, [])
+        messages = await service.list_messages(conversation.id)
+        self.assertEqual(messages[-1].content, "Bạn muốn nghiên cứu sản phẩm hay công ty nào?")
+
+        clarified = await service.send_message(conversation.id, "A new laptop from ExampleCo")
+
+        self.assertEqual(execution_port.continuation_metadata["supervisor_decision"], "clarify")
+        self.assertEqual(clarified.metadata["supervisor_decision"], "propose_plan")
+        self.assertEqual(len(clarified.draft_plan), 1)
+
+    async def test_async_planning_error_publishes_failure_not_completion(self) -> None:
+        from app.infrastructure.redis.conversation_event_publisher import (
+            InMemoryConversationEventPublisher,
+        )
+
+        class FailingExecutionPort(FakeExecutionPort):
+            async def create_plan(self, run_id: str, initial_state: State) -> State:
+                del run_id, initial_state
+                return {
+                    "mode": "conversation",
+                    "messages": [AIMessage(content="Could not form a valid plan.")],
+                    "metadata": {
+                        "planning_failed": True,
+                        "planning_error_message": "Invalid Supervisor response.",
+                    },
+                }
+
+        repository = FakeConversationRepository()
+        publisher = InMemoryConversationEventPublisher()
+        service = ConversationService(
+            repository=repository,
+            execution_port=FailingExecutionPort(),
+            event_publisher=publisher,
+        )
+        conversation = await service.create_conversation(title="Failed planning chat")
+        accepted = await service.start_message(
+            conversation_id=conversation.id,
+            content="Research something",
+        )
+
+        events = [
+            frame
+            async for frame in service.stream_events(conversation.id, accepted["turn_id"])
+        ]
+        event_text = "".join(events)
+
+        self.assertIn("planning_failed", event_text)
+        self.assertNotIn("planning_completed", event_text)
 
 
 if __name__ == "__main__":

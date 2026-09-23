@@ -81,6 +81,26 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
 }
 
 
+AGENT_RUNTIME_GUIDANCE: Mapping[str, str] = {
+    "source_researcher": (
+        "When news_crawler returns a listing, use its bounded article fetch behavior (up to three linked articles "
+        "by default). Base research claims on the returned article bodies, not listing titles or navigation. "
+        "If article_count is zero or the crawler reports failure, state that usable article content was unavailable. "
+        "Preserve each article's final URL as its source."
+    ),
+    "synthesis_agent": (
+        "text_summarizer is an extractive sentence sampler; it does not semantically summarize or paraphrase. "
+        "Use your own reasoning to synthesize the available article bodies into distinct, evidence-supported "
+        "findings. Keep source URLs with the findings and do not treat listing titles as article evidence."
+    ),
+    "report_agent": (
+        "markdown_report_generator only renders and saves the title, summary, and sections you provide; it does not "
+        "research, synthesize, or verify claims. Write a report that adds a concise synthesis rather than repeating "
+        "the raw crawl output, cite the supplied source URLs, and label evidence gaps instead of filling them in."
+    ),
+}
+
+
 LEGACY_PROFILE_ALIASES: Mapping[str, str] = {
     "news_crawler": "source_researcher",
     "web_search": "source_researcher",
@@ -90,6 +110,11 @@ LEGACY_PROFILE_ALIASES: Mapping[str, str] = {
     "markdown_report_generator": "report_agent",
     "report_generator": "report_agent",
     "chart_generator": "chart_agent",
+}
+
+TOOL_NAME_ALIASES: Mapping[str, str] = {
+    # Older/planner-generated name; the registered catalog tool is news_crawler.
+    "news_scraper": "news_crawler",
 }
 
 
@@ -109,15 +134,25 @@ class AgentResolver:
         """Load the selected profile and resolve its authorized tool instances."""
 
         profile = await self._resolve_profile(task)
-        profile_tools = set(profile.tool_names)
-        denied = tuple(
-            tool_name for tool_name in task.tool_names if tool_name not in profile_tools
-        )
-        requested_tools = (
-            [tool_name for tool_name in task.tool_names if tool_name in profile_tools]
-            if task.tool_names
-            else profile.tool_names
-        )
+        profile_tools = {
+            self._canonical_tool_name(tool_name) for tool_name in profile.tool_names
+        }
+        requested_tools: list[str] = []
+        denied_tool_names: list[str] = []
+        if task.tool_names:
+            for tool_name in task.tool_names:
+                canonical_name = self._canonical_tool_name(tool_name)
+                if canonical_name in profile_tools:
+                    if canonical_name not in requested_tools:
+                        requested_tools.append(canonical_name)
+                else:
+                    denied_tool_names.append(tool_name)
+        else:
+            requested_tools = list(dict.fromkeys(
+                self._canonical_tool_name(tool_name) for tool_name in profile.tool_names
+            ))
+
+        denied = tuple(denied_tool_names)
         tools: list[BaseTool] = []
         missing: list[str] = []
         for tool_name in requested_tools:
@@ -137,6 +172,60 @@ class AgentResolver:
             missing_tool_names=tuple(missing),
             denied_tool_names=denied,
         )
+
+    async def format_agent_tool_catalog(self) -> str:
+        """Build planner guidance from active profiles and currently registered tools."""
+
+        registered_tools = set(ToolRegistry.list_tools())
+        lines = []
+        for profile_name, fallback_profile in self.fallback_profiles.items():
+            if profile_name == "worker":
+                continue
+            profile = fallback_profile
+            if self.provider is not None:
+                profile = await self.provider.get_agent(profile_name) or fallback_profile
+            self._cache[profile_name] = profile
+            self._cache[profile.name] = profile
+
+            available_tools = list(
+                dict.fromkeys(
+                    canonical_name
+                    for name in profile.tool_names
+                    if (canonical_name := self._canonical_tool_name(name))
+                    in registered_tools
+                )
+            )
+            tool_list = ", ".join(available_tools) or "no registered tools"
+            lines.append(f"- {profile_name}: {tool_list}")
+
+        if TOOL_NAME_ALIASES:
+            aliases = ", ".join(
+                f"{alias} -> {canonical}"
+                for alias, canonical in TOOL_NAME_ALIASES.items()
+            )
+            lines.append(f"Legacy names (do not use in plans): {aliases}")
+        return "\n".join(lines)
+
+    async def validate_plan(self, tasks: list[Task]) -> None:
+        """Reject planner tasks that request missing or unauthorized tools."""
+
+        for task in tasks:
+            resolved = await self.resolve(task)
+            if resolved.denied_tool_names:
+                raise ValueError(
+                    f"Task {task.id} requests tools not authorized for "
+                    f"'{resolved.profile.name}': {list(resolved.denied_tool_names)}."
+                )
+            if resolved.missing_tool_names:
+                raise ValueError(
+                    f"Task {task.id} requests tools that are not registered: "
+                    f"{list(resolved.missing_tool_names)}."
+                )
+
+    @staticmethod
+    def _canonical_tool_name(tool_name: str) -> str:
+        normalized_name = tool_name.strip().lower()
+        return TOOL_NAME_ALIASES.get(normalized_name, normalized_name)
 
     async def _resolve_profile(self, task: Task) -> AgentProfile:
         explicit_identifier = task.agent_id
@@ -216,10 +305,22 @@ class AgentResolver:
     ) -> BaseAgent:
         """Instantiate the registered runtime class with the resolved profile."""
 
-        system_prompt = (
-            f"{resolved.profile.system_prompt}\n"
-            f"Your assigned task is: {task.description}."
+        authorized_tool_names = [tool.name for tool in resolved.tools]
+        tool_instruction = (
+            "Authorized tools for this task (use these exact names only): "
+            f"{', '.join(authorized_tool_names)}."
+            if authorized_tool_names
+            else "No tools are available for this task; do not attempt tool calls."
         )
+        prompt_sections = [resolved.profile.system_prompt]
+        runtime_guidance = AGENT_RUNTIME_GUIDANCE.get(resolved.profile.name)
+        if runtime_guidance:
+            prompt_sections.append(runtime_guidance)
+        prompt_sections.extend([
+            tool_instruction,
+            f"Your assigned task is: {task.description}.",
+        ])
+        system_prompt = "\n".join(prompt_sections)
         agent_class = AgentRegistry.get_agent_class(resolved.profile.runtime_name)
         return agent_class(
             name=resolved.profile.name,

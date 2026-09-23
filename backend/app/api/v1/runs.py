@@ -38,7 +38,7 @@ async def start_run(
     return run_doc
 
 
-@router.get("/", response_model=List[RunResponse])
+@router.get("", response_model=List[RunResponse])
 async def list_runs(
     flow_id: Optional[str] = Query(None, description="Filter runs by flow ID"),
     limit: int = Query(50, ge=1, le=200),
@@ -260,6 +260,7 @@ async def create_workflow_run(
         metadata=req.metadata,
         idempotency_key=idempotency_key,
         user_id=user_id,
+        conversation_id=req.conversation_id,
     )
     if not run_doc:
         raise HTTPException(

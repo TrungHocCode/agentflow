@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        INSTALL_CRAWLER_BROWSER: "false"
     container_name: agentflow_backend
     restart: always
     ports:
@@ -15,6 +17,7 @@ services:
       - CORS_ORIGINS=http://localhost:5173
       - ARTIFACT_ROOT=/app/workspace_data
       - AUTH_SIGNING_SECRET=${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in .env before starting Compose}
+      - AGENTFLOW_CRAWLER_BROWSER_ENABLED=false
     volumes:
       - artifacts_data:/app/workspace_data
     healthcheck:
@@ -34,6 +37,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        INSTALL_CRAWLER_BROWSER: "true"
     container_name: agentflow_worker
     restart: always
     command: ["python", "-m", "app.workers.run_worker"]
@@ -43,6 +48,7 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - ARTIFACT_ROOT=/app/workspace_data
+      - AGENTFLOW_CRAWLER_BROWSER_ENABLED=true
     volumes:
       - artifacts_data:/app/workspace_data
     depends_on:

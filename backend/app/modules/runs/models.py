@@ -64,6 +64,7 @@ class RunStartRequest(BaseModel):
 class RunCreateRequest(BaseModel):
     """Create an asynchronous run from the current workflow definition."""
 
+    conversation_id: Optional[str] = None
     input_data: Dict[str, Any] = Field(default_factory=dict)
     execution_mode: Literal["manual", "scheduled", "experiment"] = "manual"
     metadata: Dict[str, Any] = Field(default_factory=dict)

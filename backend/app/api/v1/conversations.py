@@ -4,7 +4,7 @@ import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.dependencies import get_conversation_service, get_current_user_id
 from app.modules.conversations.models import (
@@ -61,6 +61,23 @@ async def get_conversation(
     return conversation
 
 
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: str,
+    service: ConversationService = Depends(get_conversation_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Delete the owned conversation and its messages; linked runs are retained."""
+
+    deleted = await service.delete_conversation(conversation_id, user_id=user_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversation with ID '{conversation_id}' not found.",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/{conversation_id}/messages", response_model=List[ConversationMessage])
 async def list_conversation_messages(
     conversation_id: str,
@@ -88,6 +105,7 @@ async def send_conversation_message(
         conversation = await service.send_message(
             conversation_id=conversation_id,
             content=request.content,
+            model_name=request.model_name,
             user_id=user_id,
         )
         if conversation is None:
@@ -100,6 +118,7 @@ async def send_conversation_message(
     accepted = await service.start_message(
         conversation_id=conversation_id,
         content=request.content,
+        model_name=request.model_name,
         user_id=user_id,
     )
     if accepted is None:

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layers, Wrench, Search, Code, Globe, FileText, Database, Mail, Terminal, BookOpen } from 'lucide-react';
+import { Layers, Wrench, Search, Code, Globe, FileText, Database, Mail } from 'lucide-react';
 
 export default function CatalogBrowser({ tools, agents }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -24,8 +24,8 @@ export default function CatalogBrowser({ tools, agents }) {
       {/* Search Header Banner */}
       <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
         <div>
-          <h2 style={{ fontSize: '1.125rem', color: '#fff' }}>Agent & Tool Catalog Registry</h2>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>Danh mục các công cụ và Agent worker sẵn có trong hệ thống</p>
+          <h2 style={{ fontSize: '1.125rem', color: '#fff' }}>Công cụ & trợ lý</h2>
+          <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>Các khả năng có thể được sử dụng trong quá trình nghiên cứu.</p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -34,7 +34,7 @@ export default function CatalogBrowser({ tools, agents }) {
             <Search style={{ width: '16px', height: '16px', color: 'var(--text-muted)' }} />
             <input 
               type="text" 
-              placeholder="Tìm kiếm tool hoặc agent..."
+              placeholder="Tìm công cụ hoặc trợ lý..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.8125rem', outline: 'none' }}
@@ -47,13 +47,13 @@ export default function CatalogBrowser({ tools, agents }) {
               onClick={() => setActiveTab('tools')}
               style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', border: 'none', background: activeTab === 'tools' ? 'var(--gradient-brand)' : 'transparent', color: '#fff', fontSize: '0.8125rem', fontWeight: '600', cursor: 'pointer' }}
             >
-              Tools ({tools.length})
+              Công cụ ({tools.length})
             </button>
             <button 
               onClick={() => setActiveTab('agents')}
               style={{ padding: '0.375rem 0.75rem', borderRadius: '6px', border: 'none', background: activeTab === 'agents' ? 'var(--gradient-brand)' : 'transparent', color: '#fff', fontSize: '0.8125rem', fontWeight: '600', cursor: 'pointer' }}
             >
-              Worker Agents ({agents.length})
+              Trợ lý ({agents.length})
             </button>
           </div>
         </div>
@@ -73,17 +73,13 @@ export default function CatalogBrowser({ tools, agents }) {
                     </div>
                     <span style={{ fontSize: '0.9375rem', fontWeight: '700', color: '#fff' }}>{tool.name}</span>
                   </div>
-                  <span className="badge badge-done">Registered</span>
+                  <span className="badge badge-done">Sẵn sàng</span>
                 </div>
 
                 <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 1.4, flex: 1 }}>
                   {tool.description}
                 </p>
 
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Schema: LangChain BaseTool</span>
-                  <span style={{ color: 'var(--accent-indigo)' }}>Double-Decorator Registered</span>
-                </div>
               </div>
             );
           })}
@@ -99,11 +95,11 @@ export default function CatalogBrowser({ tools, agents }) {
                   </div>
                   <span style={{ fontSize: '0.9375rem', fontWeight: '700', color: '#fff' }}>{agent.name}</span>
                 </div>
-                <span className="badge badge-running">ReAct Agent</span>
+                <span className="badge badge-running">Sẵn sàng</span>
               </div>
 
               <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                Tools Whitelist Attached ({agent.tool_names ? agent.tool_names.length : 0}):
+                Có thể sử dụng ({agent.tool_names ? agent.tool_names.length : 0} công cụ):
               </p>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>

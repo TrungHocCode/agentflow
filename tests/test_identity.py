@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import httpx
 
@@ -46,6 +47,17 @@ class TestIdentitySecurity(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verify_password("wrong", encoded))
         token = create_access_token("user-1", "secret", 60)
         self.assertEqual(decode_access_token(token, "secret")["sub"], "user-1")
+
+    async def test_access_tokens_are_unique_even_when_issued_in_the_same_second(self):
+        with patch("app.modules.identity.security.time.time", return_value=1_700_000_000):
+            first = create_access_token("user-1", "secret", 3600)
+            second = create_access_token("user-1", "secret", 3600)
+            first_claims = decode_access_token(first, "secret")
+            second_claims = decode_access_token(second, "secret")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual(first_claims["sub"], "user-1")
+        self.assertEqual(second_claims["sub"], "user-1")
 
     async def test_register_login_and_current_user(self):
         repository = FakeUserRepository()

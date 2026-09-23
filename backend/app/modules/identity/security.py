@@ -48,7 +48,11 @@ def create_access_token(user_id: str, secret: str, ttl_seconds: int) -> str:
     header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
     payload = _b64(
         json.dumps(
-            {"sub": user_id, "exp": int(time.time()) + ttl_seconds},
+            {
+                "sub": user_id,
+                "exp": int(time.time()) + ttl_seconds,
+                "jti": secrets.token_urlsafe(16),
+            },
             separators=(",", ":"),
         ).encode()
     )

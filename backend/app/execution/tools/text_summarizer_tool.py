@@ -15,8 +15,13 @@ from app.execution.tools.contracts import ToolResult, failure_result, success_re
 
 
 class TextSummarizerInput(BaseModel):
-    text: str = Field(description="Article text or a structured tool result to summarize.")
-    max_bullet_points: int = Field(default=5, ge=1, le=20, description="Maximum key bullet points.")
+    text: str = Field(description="Article text or a structured tool result containing research evidence.")
+    max_bullet_points: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum representative evidence sentences to extract; this tool does not paraphrase.",
+    )
 
 
 def _structured_input(value: str) -> tuple[str, ToolResult | None]:
@@ -35,6 +40,17 @@ def _structured_input(value: str) -> tuple[str, ToolResult | None]:
         return "", result
 
     data = result.data if isinstance(result.data, dict) else {"value": result.data}
+    articles = data.get("articles")
+    if isinstance(articles, list):
+        article_evidence = [
+            str(article.get("text") or "").strip()
+            for article in articles
+            if isinstance(article, dict)
+            and article.get("status") in {"success", "partial"}
+            and str(article.get("text") or "").strip()
+        ]
+        return "\n\n".join(article_evidence), result
+
     text = str(data.get("text") or "").strip()
     if not text and isinstance(data.get("results"), list):
         text = "\n".join(
@@ -51,10 +67,42 @@ def _structured_input(value: str) -> tuple[str, ToolResult | None]:
     return text, result
 
 
+def _source_urls(source_result: ToolResult | None) -> list[str]:
+    """Preserve URLs from structured source outputs in the extracted digest."""
+
+    if source_result is None:
+        return []
+    urls: list[str] = []
+    data = source_result.data if isinstance(source_result.data, dict) else {}
+    has_article_records = isinstance(data.get("articles"), list)
+    articles = data.get("articles")
+    if isinstance(articles, list):
+        for article in articles:
+            if not isinstance(article, dict) or article.get("status") not in {"success", "partial"}:
+                continue
+            url = article.get("final_url") or article.get("requested_url")
+            if isinstance(url, str) and url not in urls:
+                urls.append(url)
+    results = data.get("results")
+    if isinstance(results, list):
+        for item in results:
+            url = item.get("url") if isinstance(item, dict) else None
+            if isinstance(url, str) and url not in urls:
+                urls.append(url)
+    if (
+        not urls
+        and not has_article_records
+        and source_result.source
+        and source_result.source.final_url
+    ):
+        urls.append(source_result.source.final_url)
+    return urls
+
+
 @ToolRegistry.register_tool(name="text_summarizer")
 @tool("text_summarizer", args_schema=TextSummarizerInput)
 def text_summarizer(text: str, max_bullet_points: int = 5) -> str:
-    """Create deterministic bullets only from supplied evidence."""
+    """Extract representative evidence sentences without semantic paraphrasing."""
 
     source_text, source_result = _structured_input(text)
     if source_result is not None and not source_result.ok:
@@ -101,7 +149,10 @@ def text_summarizer(text: str, max_bullet_points: int = 5) -> str:
         "input_characters": len(source_text),
         "bullet_count": len(selected_bullets),
         "input_sha256": sha256(source_text.encode("utf-8")).hexdigest(),
+        "method": "extractive_sentence_sampling",
     }
+    source_urls = _source_urls(source_result)
+    metadata["source_count"] = len(source_urls)
     if source_result is not None:
         metadata["source_status"] = source_result.status
 
@@ -110,6 +161,7 @@ def text_summarizer(text: str, max_bullet_points: int = 5) -> str:
             "summary": "\n".join(selected_bullets),
             "bullets": selected_bullets,
             "formatted": formatted,
+            "sources": source_urls,
         },
         tool_name="text_summarizer",
         source=source_result.source if source_result else None,

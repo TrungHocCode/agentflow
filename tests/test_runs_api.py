@@ -93,7 +93,7 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_workflow_run_is_queued_and_replayable(self):
         flow_response = await self.client.post(
-            "/api/v1/flows/",
+            "/api/v1/flows",
             json={
                 "name": "Queued research",
                 "definition": {
@@ -117,11 +117,15 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         run_response = await self.client.post(
             f"/api/v1/workflows/{workflow_id}/runs",
             headers={"Idempotency-Key": "queued-run-test"},
-            json={"input_data": {"query": "local LLM"}},
+            json={
+                "conversation_id": "conversation-run-link-test",
+                "input_data": {"query": "local LLM"},
+            },
         )
         self.assertEqual(run_response.status_code, 201)
         run = run_response.json()
         self.assertEqual(run["status"], "queued")
+        self.assertEqual(run["conversation_id"], "conversation-run-link-test")
 
         events_response = await self.client.get(
             f"/api/v1/runs/{run['run_id']}/events"

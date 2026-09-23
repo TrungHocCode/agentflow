@@ -30,7 +30,7 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-        self.assertIn("unavailable", result["messages"][0].lower())
+        self.assertIn("chưa thể tạo phản hồi hợp lệ", result["messages"][0].lower())
         self.assertIn("llm_error", result["metadata"])
         self.assertEqual(result["plan"] if "plan" in result else None, None)
 

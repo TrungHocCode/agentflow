@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
@@ -106,6 +106,31 @@ class PostgresConversationRepository(ConversationRepository):
             if conversation.user_id == user_id
         ]
         return records[:limit]
+
+    async def delete(self, conversation_id: str, user_id: str) -> bool:
+        if self.use_memory:
+            conversation = _IN_MEMORY_CONVERSATIONS.get(conversation_id)
+            if conversation is None or conversation.user_id != user_id:
+                return False
+            _IN_MEMORY_CONVERSATIONS.pop(conversation_id, None)
+            _IN_MEMORY_MESSAGES.pop(conversation_id, None)
+            return True
+
+        try:
+            async def operation(session: AsyncSession) -> bool:
+                result = await session.execute(
+                    delete(ConversationModel).where(
+                        ConversationModel.id == conversation_id,
+                        ConversationModel.user_id == user_id,
+                    )
+                )
+                await session.commit()
+                return bool(result.rowcount)
+
+            return await self._with_session(operation)
+        except Exception as exc:
+            await self._rollback()
+            raise PersistenceError("Could not delete conversation.") from exc
 
     async def save(self, conversation: ConversationRecord) -> ConversationRecord:
         if self.use_memory:

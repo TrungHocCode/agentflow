@@ -1,12 +1,17 @@
 import os
 import sys
 import unittest
-import shutil
 
 # Adjust path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 import urllib.request
+
+RUN_LIVE_OLLAMA_TESTS = os.getenv("AGENTFLOW_RUN_LIVE_OLLAMA_TESTS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 try:
     from langchain_ollama import ChatOllama
@@ -31,15 +36,13 @@ def is_ollama_server_online() -> bool:
         return False
 
 
+@unittest.skipUnless(
+    RUN_LIVE_OLLAMA_TESTS,
+    "Set AGENTFLOW_RUN_LIVE_OLLAMA_TESTS=1 to run live Ollama integration tests",
+)
 @unittest.skipIf(not HAS_OLLAMA_PKG, "langchain-ollama package is not installed")
 @unittest.skipIf(not is_ollama_server_online(), "Local Ollama server (http://localhost:11434) is offline or unreachable")
 class TestLiveOllamaExecution(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self):
-        data_dir = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(data_dir):
-            shutil.rmtree(data_dir)
-
-
     async def test_ollama_llm_direct_invocation(self):
         """Test direct connection to local Ollama server."""
         try:

@@ -10,7 +10,8 @@ from app.core.config import settings
 app = FastAPI(
     title="AgentFlow Platform API",
     description="AI Agent Platform Backend API built with Supervisor-Worker architecture.",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False,
 )
 
 # CORS Middleware
