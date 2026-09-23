@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
@@ -64,6 +65,15 @@ class ConversationService:
     ) -> List[ConversationRecord]:
         return await self.repository.list(user_id=user_id, limit=limit)
 
+    async def delete_conversation(
+        self,
+        conversation_id: str,
+        user_id: str = "default_user",
+    ) -> bool:
+        """Delete a conversation and its persisted messages for the owning user."""
+
+        return await self.repository.delete(conversation_id, user_id)
+
     async def list_messages(
         self,
         conversation_id: str,
@@ -76,10 +86,12 @@ class ConversationService:
         conversation_id: str,
         content: str,
         user_id: str = "default_user",
+        model_name: str | None = None,
     ) -> ConversationRecord | None:
         conversation = await self.get_conversation(conversation_id, user_id)
         if conversation is None or conversation.status == "archived":
             return None
+        self._select_model(conversation, model_name)
 
         user_message = ConversationMessage(
             id=str(uuid.uuid4()),
@@ -90,10 +102,11 @@ class ConversationService:
         )
         await self.repository.add_message(user_message)
 
-        if conversation.draft_plan:
+        if self._should_continue(conversation):
             result_state = await self.execution_port.continue_conversation(
                 conversation.id,
                 content,
+                metadata=conversation.metadata,
             )
         else:
             initial_state: State = {
@@ -110,12 +123,18 @@ class ConversationService:
                 initial_state,
             )
 
-        conversation.draft_plan = self._normalize_tasks(result_state.get("plan") or [])
+        decision, effective_plan, assistant_messages = self._interpret_planner_result(
+            result_state,
+            conversation.draft_plan,
+        )
+        conversation.draft_plan = effective_plan
+        conversation.metadata.update(result_state.get("metadata") or {})
+        conversation.metadata["supervisor_decision"] = decision
         conversation.status = "waiting_for_user"
         conversation.updated_at = datetime.utcnow()
         await self.repository.save(conversation)
 
-        for message in self._assistant_messages(result_state.get("messages") or []):
+        for message in assistant_messages:
             await self.repository.add_message(
                 ConversationMessage(
                     id=str(uuid.uuid4()),
@@ -132,12 +151,16 @@ class ConversationService:
         conversation_id: str,
         content: str,
         user_id: str = "default_user",
+        model_name: str | None = None,
     ) -> Dict[str, Any] | None:
         """Persist a message and run planning asynchronously for the API contract."""
 
         conversation = await self.get_conversation(conversation_id, user_id)
         if conversation is None or conversation.status == "archived":
             return None
+        self._select_model(conversation, model_name)
+        conversation.updated_at = datetime.utcnow()
+        await self.repository.save(conversation)
         user_message = ConversationMessage(
             id=str(uuid.uuid4()),
             conversation_id=conversation.id,
@@ -171,8 +194,12 @@ class ConversationService:
         turn_id: str,
     ) -> None:
         try:
-            if conversation.draft_plan:
-                result_state = await self.execution_port.continue_conversation(conversation.id, content)
+            if self._should_continue(conversation):
+                result_state = await self.execution_port.continue_conversation(
+                    conversation.id,
+                    content,
+                    metadata=conversation.metadata,
+                )
             else:
                 initial_state: State = {
                     "messages": [HumanMessage(content=content)],
@@ -185,7 +212,13 @@ class ConversationService:
                 }
                 result_state = await self.execution_port.create_plan(conversation.id, initial_state)
 
-            conversation.draft_plan = self._normalize_tasks(result_state.get("plan") or [])
+            decision, effective_plan, assistant_messages = self._interpret_planner_result(
+                result_state,
+                conversation.draft_plan,
+            )
+            conversation.draft_plan = effective_plan
+            conversation.metadata.update(result_state.get("metadata") or {})
+            conversation.metadata["supervisor_decision"] = decision
             conversation.status = "waiting_for_user"
             conversation.updated_at = datetime.utcnow()
             await self.repository.save(conversation)
@@ -194,10 +227,12 @@ class ConversationService:
                     conversation_id=conversation.id,
                     turn_id=turn_id,
                     type="workflow_draft_updated",
-                    payload={"plan": [task.model_dump(mode="json") for task in conversation.draft_plan]},
+                    payload={
+                        "plan": [task.model_dump(mode="json") for task in conversation.draft_plan],
+                        "outcome": decision,
+                    },
                 )
             )
-            assistant_messages = self._assistant_messages(result_state.get("messages") or [])
             for message in assistant_messages:
                 await self.repository.add_message(
                     ConversationMessage(
@@ -221,7 +256,7 @@ class ConversationService:
                     conversation_id=conversation.id,
                     turn_id=turn_id,
                     type="planning_completed",
-                    payload={"status": conversation.status},
+                    payload={"status": conversation.status, "outcome": decision},
                 )
             )
         except Exception as exc:
@@ -230,7 +265,7 @@ class ConversationService:
                     conversation_id=conversation.id,
                     turn_id=turn_id,
                     type="planning_failed",
-                    payload={"message": str(exc)},
+                    payload={"message": str(exc) or "Supervisor could not complete this turn."},
                 )
             )
 
@@ -252,6 +287,18 @@ class ConversationService:
             await self.event_publisher.publish(event)
 
     @staticmethod
+    def _select_model(conversation: ConversationRecord, model_name: str | None) -> None:
+        """Enable the selected local model for every build-phase conversation turn."""
+        metadata = dict(conversation.metadata or {})
+        selected_model = (
+            (model_name or "").strip()
+            or metadata.get("model_name")
+            or os.getenv("OLLAMA_MODEL", "qwen3:8b")
+        )
+        metadata.update({"use_llm": True, "model_name": selected_model})
+        conversation.metadata = metadata
+
+    @staticmethod
     def _assistant_messages(messages: List[Any]) -> List[str]:
         result: List[str] = []
         for message in messages:
@@ -259,7 +306,50 @@ class ConversationService:
                 result.append(str(message.content))
             elif isinstance(message, dict) and message.get("role") == "assistant":
                 result.append(str(message.get("content", "")))
-        return [message for message in result if message]
+        return [message for message in result if message][-1:]
+
+    @staticmethod
+    def _should_continue(conversation: ConversationRecord) -> bool:
+        """Resume the same planner thread after a proposal or a conversational turn."""
+
+        return bool(conversation.draft_plan) or conversation.metadata.get(
+            "supervisor_decision"
+        ) in {"clarify", "answer"}
+
+    @classmethod
+    def _interpret_planner_result(
+        cls,
+        result_state: State,
+        existing_plan: List[Task],
+    ) -> tuple[str, List[Task], List[str]]:
+        metadata = result_state.get("metadata") or {}
+        if metadata.get("planning_failed"):
+            raise RuntimeError(
+                metadata.get("planning_error_message")
+                or "Supervisor could not create a valid response."
+            )
+
+        decision = metadata.get("supervisor_decision")
+        plan = cls._normalize_tasks(result_state.get("plan") or [])
+        assistant_messages = cls._assistant_messages(result_state.get("messages") or [])
+
+        # Keep deterministic test adapters and the legacy non-LLM planner usable.
+        if decision is None and plan:
+            decision = "propose_plan"
+        if decision not in {"clarify", "propose_plan", "answer"}:
+            raise RuntimeError("Supervisor returned an unknown or missing decision.")
+        if not assistant_messages:
+            raise RuntimeError("Supervisor returned a blank assistant message.")
+
+        if decision == "propose_plan":
+            if not plan:
+                raise RuntimeError("Supervisor proposed a workflow without any tasks.")
+            return decision, plan, assistant_messages
+        if decision == "clarify":
+            if plan:
+                raise RuntimeError("A clarification response must not contain a workflow plan.")
+            return decision, [], assistant_messages
+        return decision, existing_plan, assistant_messages
 
     @staticmethod
     def _normalize_tasks(values: List[Task | Dict[str, Any]]) -> List[Task]:

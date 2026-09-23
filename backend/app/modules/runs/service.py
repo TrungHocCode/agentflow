@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.execution.ports import ExecutionPort
@@ -170,6 +171,7 @@ class RunService:
         metadata: Optional[Dict[str, Any]] = None,
         idempotency_key: Optional[str] = None,
         user_id: str = "default_user",
+        conversation_id: str | None = None,
     ) -> RunDocument | None:
         """Create and enqueue an asynchronous run from a workflow snapshot."""
 
@@ -201,6 +203,7 @@ class RunService:
             run_id=run_id,
             flow_id=workflow_id,
             user_id=user_id,
+            conversation_id=conversation_id,
             workflow_version_id=version_id,
             status="queued",
             approval_status="not_required",
@@ -728,6 +731,7 @@ class RunService:
         if not values:
             return
         items = values if isinstance(values, list) else [values]
+        ingested_paths: set[str] = set()
         for item in items:
             if not isinstance(item, dict):
                 item = {"result": item}
@@ -771,7 +775,27 @@ class RunService:
                 )
 
             if self.artifact_storage is not None:
-                for source_path in self._find_artifact_paths(serialized):
+                artifact_paths = set(self._find_artifact_paths(serialized))
+                raw_logs = node_output.get("logs") or []
+                logs = raw_logs if isinstance(raw_logs, list) else [raw_logs]
+                for log in logs:
+                    log_text = str(log)
+                    if any(
+                        marker in log_text
+                        for marker in (
+                            "Tool 'markdown_report_generator' result:",
+                            "Tool 'chart_generator' result:",
+                        )
+                    ):
+                        tool_result = log_text.split(" result:", 1)[-1].strip()
+                        artifact_paths.update(self._find_artifact_paths(tool_result))
+
+                for source_path in artifact_paths:
+                    if source_path in ingested_paths:
+                        continue
+                    if not self._is_managed_artifact_path(source_path):
+                        continue
+                    ingested_paths.add(source_path)
                     artifact = self.artifact_storage.ingest_file(
                         source_path=source_path,
                         user_id=run_doc.user_id,
@@ -808,12 +832,40 @@ class RunService:
 
     @staticmethod
     def _find_artifact_paths(serialized: str) -> List[str]:
-        paths = []
-        for match in re.findall(r"(?:File Path|Chart Spec Path):\s*([^.,\n]+)", serialized):
-            path = match.strip().strip("`")
-            if os.path.isfile(path):
+        paths: list[str] = []
+        try:
+            payload = json.loads(serialized)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+
+        if isinstance(payload, dict) and payload.get("ok") is True:
+            data = payload.get("data")
+            if isinstance(data, dict):
+                for key in ("file_path", "svg_path", "spec_path"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        paths.append(value.strip())
+
+        for match in re.findall(r"(?:File Path|Chart Spec Path):\s*([^,\n]+)", serialized):
+            path = match.strip().strip("`\"'")
+            if path:
                 paths.append(path)
         return list(dict.fromkeys(paths))
+
+    @staticmethod
+    def _is_managed_artifact_path(source_path: str) -> bool:
+        """Only ingest generated files from AgentFlow's report/chart workspace."""
+
+        try:
+            candidate = Path(source_path).resolve()
+            workspace = Path(__file__).resolve().parents[4] / "workspace_data"
+            allowed_roots = (workspace / "reports", workspace / "charts")
+            return candidate.is_file() and any(
+                candidate == root or root in candidate.parents
+                for root in allowed_roots
+            )
+        except (OSError, RuntimeError):
+            return False
 
     async def _enqueue_document(self, document: RunDocument) -> RunDocument:
         command = RunCommand(

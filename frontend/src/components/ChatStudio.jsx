@@ -1,8 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Bot, User, CheckCircle2, Play, Sparkles, AlertCircle, ArrowRight, Clock, Zap } from 'lucide-react';
+import { Send, Bot, User, CheckCircle2, Circle, Play, Trash2, XCircle, AlertCircle, ArrowRight, Clock, LoaderCircle, SkipForward, FileText, ExternalLink } from 'lucide-react';
 import StructuredText from './StructuredText';
 
-export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isProcessing, activePlan, selectedModel }) {
+const TASK_STATUS = {
+  pending: { label: 'Chờ đến lượt', color: 'var(--accent-amber)', icon: Circle },
+  queued: { label: 'Đang chờ', color: 'var(--accent-amber)', icon: Circle },
+  running: { label: 'Đang chạy', color: 'var(--accent-cyan)', icon: LoaderCircle },
+  done: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
+  completed: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
+  failed: { label: 'Thất bại', color: 'var(--accent-rose)', icon: AlertCircle },
+  skipped: { label: 'Bỏ qua', color: 'var(--text-muted)', icon: SkipForward }
+};
+
+const RUN_STATUS = {
+  queued: { label: 'Đang chờ', color: 'var(--accent-amber)' },
+  running: { label: 'Đang thực thi', color: 'var(--accent-cyan)' },
+  completed: { label: 'Đã hoàn tất', color: 'var(--accent-emerald)' },
+  failed: { label: 'Thực thi thất bại', color: 'var(--accent-rose)' },
+  interrupted: { label: 'Bị gián đoạn', color: 'var(--accent-rose)' },
+  cancelled: { label: 'Đã hủy', color: 'var(--text-muted)' }
+};
+
+export default function ChatStudio({
+  messages,
+  onSendMessage,
+  onApprovePlan,
+  onOpenResults,
+  onViewRunDetails,
+  onCancelRun,
+  onDeleteConversation,
+  conversationId,
+  isCancelling,
+  isDeletingConversation,
+  isRestoring,
+  isProcessing,
+  isStreaming,
+  activePlan,
+  runStatus,
+  runId
+}) {
   const [inputPrompt, setInputPrompt] = useState('');
   const [liveThinkingSeconds, setLiveThinkingSeconds] = useState(0);
 
@@ -29,7 +65,7 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!inputPrompt.trim() || isProcessing) return;
+    if (!inputPrompt.trim() || isProcessing || isRestoring) return;
     onSendMessage(inputPrompt);
     setInputPrompt('');
   };
@@ -43,25 +79,39 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
             <Bot style={{ width: '22px', height: '22px', color: 'var(--accent-cyan)' }} />
           </div>
           <div>
-            <h2 style={{ fontSize: '1rem', color: 'var(--text-primary)' }}>Supervisor Agent — Conversational Designer</h2>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Trò chuyện để làm rõ yêu cầu & nhận kế hoạch DAG trước khi thực thi với model {selectedModel}</p>
+            <h2 style={{ fontSize: '1rem', color: 'var(--text-primary)' }}>Trợ lý nghiên cứu</h2>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Tìm hiểu thông tin, tổng hợp và tạo báo cáo theo yêu cầu của bạn.</p>
           </div>
         </div>
-        <span className="badge badge-running">
-          <Sparkles style={{ width: '12px', height: '12px' }} /> Two-Phase Active
-        </span>
+        {conversationId && (
+          <button
+            className="btn-secondary"
+            onClick={onDeleteConversation}
+            disabled={isDeletingConversation || isRestoring || (isProcessing && !isStreaming)}
+            title={isRestoring ? 'Đang khôi phục hội thoại.' : isProcessing && !isStreaming ? 'Hãy đợi kế hoạch hoàn tất trước khi xóa.' : 'Xóa hội thoại'}
+            style={{ color: 'var(--accent-rose)', gap: '0.4rem', whiteSpace: 'nowrap' }}
+          >
+            <Trash2 size={15} />
+            {isDeletingConversation ? 'Đang xóa…' : 'Xóa hội thoại'}
+          </button>
+        )}
       </div>
 
       {/* Chat Messages Thread */}
       <div className="glass-panel" style={{ flex: 1, padding: '1.25rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        {messages.length === 0 ? (
+        {isRestoring && messages.length === 0 ? (
+          <div role="status" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: 'var(--text-secondary)' }}>
+            <LoaderCircle className="spin-slow" size={24} color="var(--accent-cyan)" />
+            <p>Đang khôi phục hội thoại và kiểm tra tiến độ quy trình…</p>
+          </div>
+        ) : messages.length === 0 ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2rem' }}>
             <div style={{ width: '64px', height: '64px', borderRadius: '20px', background: 'var(--gradient-brand)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 0 30px rgba(99,102,241,0.4)' }}>
               <Bot style={{ width: '32px', height: '32px', color: '#fff' }} />
             </div>
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }} className="text-gradient">Chào bạn! Tôi là Supervisor Agent</h3>
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }} className="text-gradient">Chào bạn! Tôi là trợ lý nghiên cứu</h3>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', maxWidth: '500px', marginBottom: '1.5rem' }}>
-              Hãy nhập yêu cầu workflow bạn muốn tạo. Tôi sẽ trò chuyện làm rõ yêu cầu, tư vấn công cụ và đề xuất Kế hoạch DAG phù hợp trước khi chạy!
+              Hãy mô tả điều bạn muốn tìm hiểu. Bạn có thể xem lại kế hoạch trước khi bắt đầu và theo dõi tiến độ ngay tại đây.
             </p>
 
             {/* Quick Suggestion Chips */}
@@ -70,6 +120,7 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
               {promptSuggestions.map((sug, idx) => (
                 <button
                   key={idx}
+                  disabled={isRestoring}
                   onClick={() => setInputPrompt(sug)}
                   className="glass-card"
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left', cursor: 'pointer', padding: '0.75rem 1rem', fontSize: '0.8125rem', color: 'var(--text-primary)' }}
@@ -109,7 +160,7 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.25rem' }}>
                   <span style={{ fontSize: '0.75rem', color: msg.sender === 'user' ? '#e0e7ff' : 'var(--accent-cyan)', fontWeight: '600' }}>
-                    {msg.sender === 'user' ? 'Bạn' : 'Supervisor Agent'}
+                    {msg.sender === 'user' ? 'Bạn' : 'Trợ lý nghiên cứu'}
                   </span>
                   {msg.duration && (
                     <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.25)', padding: '2px 6px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '3px' }}>
@@ -140,7 +191,7 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
             </div>
             <div className="glass-card" style={{ padding: '0.75rem 1.125rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '16px 16px 16px 4px', border: '1px solid rgba(6,182,212,0.3)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)', fontWeight: '600' }}>Supervisor đang suy nghĩ</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)', fontWeight: '600' }}>{isStreaming ? 'Đang chạy quy trình' : 'Đang xử lý yêu cầu'}</span>
                 <span style={{ fontSize: '0.75rem', color: 'var(--accent-cyan)', background: 'rgba(6,182,212,0.15)', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
                   ⏱️ {liveThinkingSeconds}s
                 </span>
@@ -155,38 +206,83 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
         )}
 
 
-        {/* Proposed DAG Plan Proposal Card */}
+        {/* Review and run the proposed workflow */}
         {activePlan && activePlan.length > 0 && (
           <div className="glass-panel" style={{ background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(6,182,212,0.08))', border: '1px solid rgba(99,102,241,0.4)', padding: '1.25rem', marginTop: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <CheckCircle2 style={{ width: '20px', height: '20px', color: 'var(--accent-emerald)' }} />
-                <h4 style={{ fontSize: '0.9375rem', color: '#fff' }}>Đề Xuất Kế Hoạch DAG Execution Plan</h4>
+                {runStatus === 'running' || runStatus === 'queued'
+                  ? <LoaderCircle className="spin-slow" style={{ width: '20px', height: '20px', color: 'var(--accent-cyan)' }} />
+                  : runStatus === 'failed' || runStatus === 'interrupted'
+                    ? <AlertCircle style={{ width: '20px', height: '20px', color: 'var(--accent-rose)' }} />
+                    : <CheckCircle2 style={{ width: '20px', height: '20px', color: 'var(--accent-emerald)' }} />}
+                <h4 style={{ fontSize: '0.9375rem', color: '#fff' }}>{runStatus ? 'Quy trình của hội thoại này' : 'Kế hoạch đề xuất'}</h4>
               </div>
-              <span className="badge badge-pending">Awaiting Approval</span>
+              <span
+                className={`badge ${runStatus === 'completed' ? 'badge-done' : runStatus === 'failed' || runStatus === 'interrupted' ? 'badge-failed' : runStatus ? 'badge-running' : 'badge-pending'}`}
+                style={runStatus && RUN_STATUS[runStatus] ? { color: RUN_STATUS[runStatus].color } : undefined}
+              >
+                {runStatus ? (RUN_STATUS[runStatus]?.label || 'Đang cập nhật') : 'Chờ bạn duyệt'}
+              </span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
               {activePlan.map((task) => (
-                <div key={task.id} className="glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.625rem 0.875rem' }}>
+                <div
+                  key={task.id}
+                  className="glass-card"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.625rem 0.875rem', borderColor: task.status === 'running' ? 'rgba(120,163,154,0.6)' : undefined, boxShadow: task.status === 'running' ? '0 0 14px rgba(120,163,154,0.12)' : undefined }}
+                >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'rgba(99,102,241,0.3)', color: '#c7d2fe', fontSize: '0.75rem', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(99,102,241,0.2)', color: '#c7d2fe', fontSize: '0.75rem', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       {task.id}
                     </span>
                     <div>
                       <p style={{ fontSize: '0.8125rem', color: '#fff', fontWeight: '600' }}>{task.description}</p>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Node Agent: <code style={{ color: 'var(--accent-cyan)' }}>{task.node}</code></p>
                     </div>
                   </div>
-                  <span className="badge badge-pending">{task.status}</span>
+                  {(() => {
+                    const status = TASK_STATUS[String(task.status || 'pending').toLowerCase()] || TASK_STATUS.pending;
+                    const Icon = status.icon;
+                    return (
+                      <span className="badge" style={{ background: 'rgba(20,14,12,0.45)', color: status.color, border: `1px solid ${status.color}`, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        <Icon size={13} className={task.status === 'running' ? 'spin-slow' : undefined} />
+                        {status.label}
+                      </span>
+                    );
+                  })()}
                 </div>
               ))}
             </div>
 
-            <button className="btn-primary" onClick={onApprovePlan} disabled={isProcessing} style={{ width: '100%', justifyContent: 'center', padding: '0.75rem' }}>
-              <Play style={{ width: '16px', height: '16px' }} />
-              Duyệt & Bắt Đầu Thực Thi Workflow
-            </button>
+            {!runStatus ? (
+              <button className="btn-primary" onClick={onApprovePlan} disabled={isProcessing} style={{ width: '100%', justifyContent: 'center', padding: '0.75rem' }}>
+                <Play style={{ width: '16px', height: '16px' }} />
+                Duyệt và bắt đầu quy trình
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: '0.65rem' }}>
+                <button className="btn-primary" onClick={onOpenResults} style={{ flex: 1, justifyContent: 'center', padding: '0.75rem' }}>
+                  <FileText size={16} />
+                  {runStatus === 'completed' ? 'Mở kết quả và tải tệp' : 'Mở kết quả'}
+                </button>
+                {runId && (
+                  <button className="btn-secondary" onClick={onViewRunDetails} style={{ justifyContent: 'center', gap: '0.4rem', padding: '0.75rem' }}>
+                    <ExternalLink size={15} /> Tiến độ
+                  </button>
+                )}
+                {['queued', 'running'].includes(runStatus) && (
+                  <button
+                    className="btn-secondary"
+                    onClick={onCancelRun}
+                    disabled={isCancelling}
+                    style={{ justifyContent: 'center', gap: '0.4rem', padding: '0.75rem', color: 'var(--accent-rose)' }}
+                  >
+                    <XCircle size={15} /> {isCancelling ? 'Đang hủy…' : 'Hủy'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -197,8 +293,8 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
           type="text"
           value={inputPrompt}
           onChange={(e) => setInputPrompt(e.target.value)}
-          placeholder="Nhập yêu cầu workflow hoặc trả lời Supervisor Agent..."
-          disabled={isProcessing}
+          placeholder="Bạn muốn tìm hiểu hoặc tổng hợp điều gì?"
+          disabled={isProcessing || isRestoring}
           style={{ 
             flex: 1,
             background: 'rgba(30,41,59,0.7)',
@@ -211,7 +307,7 @@ export default function ChatStudio({ messages, onSendMessage, onApprovePlan, isP
             backdropFilter: 'blur(8px)'
           }}
         />
-        <button type="submit" className="btn-primary" disabled={isProcessing || !inputPrompt.trim()}>
+        <button type="submit" className="btn-primary" disabled={isProcessing || isRestoring || !inputPrompt.trim()}>
           <Send style={{ width: '16px', height: '16px' }} />
           Gửi
         </button>

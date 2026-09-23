@@ -1,7 +1,7 @@
 import React from 'react';
-import { Cpu, Activity, Sparkles, Server, LogOut } from 'lucide-react';
+import { Sparkles, LogOut } from 'lucide-react';
 
-export default function Header({ selectedModel, setSelectedModel, backendStatus, user, onLogout }) {
+export default function Header({ selectedModel, setSelectedModel, user, onLogout }) {
   const models = [
     { id: 'qwen3:8b', name: 'Qwen3 8B (Recommended)' },
     { id: 'llama3:8b', name: 'Llama3 8B' },
@@ -21,20 +21,15 @@ export default function Header({ selectedModel, setSelectedModel, backendStatus,
             <span style={{ fontSize: '1.25rem', fontWeight: '800', fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }} className="text-gradient">
               AgentFlow
             </span>
-            <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.3)' }}>
-              v1.0 Core
-            </span>
           </div>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>LLM Supervisor-Worker Agent Platform</p>
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Không gian nghiên cứu thông minh</p>
         </div>
       </div>
 
-      {/* Right Controls: Model Selector + Backend Status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-        {/* Model Dropdown */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(30,41,59,0.6)', padding: '0.375rem 0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--glass-border)' }}>
-          <Cpu style={{ width: '16px', height: '16px', color: 'var(--accent-cyan)' }} />
-          <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '500' }}>Ollama LLM:</span>
+          <Sparkles style={{ width: '16px', height: '16px', color: 'var(--accent-cyan)' }} />
+          <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: '500' }}>Mô hình:</span>
           <select 
             value={selectedModel} 
             onChange={(e) => setSelectedModel(e.target.value)}
@@ -46,14 +41,6 @@ export default function Header({ selectedModel, setSelectedModel, backendStatus,
           </select>
         </div>
 
-        {/* Connection Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8125rem' }}>
-          <Server style={{ width: '16px', height: '16px', color: backendStatus ? 'var(--accent-emerald)' : 'var(--accent-amber)' }} />
-          <span className="badge badge-done" style={{ background: backendStatus ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)', color: backendStatus ? '#34d399' : '#fbbf24', border: backendStatus ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(245,158,11,0.3)' }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: backendStatus ? '#34d399' : '#fbbf24', display: 'inline-block' }}></span>
-            {backendStatus ? 'Backend Connected' : 'Connecting API...'}
-          </span>
-        </div>
         {user && (
           <button className="btn-secondary" onClick={onLogout} title="Đăng xuất" style={{ padding: '0.45rem 0.65rem' }}>
             <LogOut size={14} />
