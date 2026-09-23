@@ -6,14 +6,19 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Literal
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 import requests  # noqa: F401 - preserves the established crawler mock target used by Tool Lab tests.
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
-from app.execution.tools.contracts import failure_result
+from app.execution.tools.contracts import (
+    ToolResult,
+    failure_result,
+    parse_tool_result,
+    success_result,
+)
 from app.execution.tools.crawler.orchestrator import crawl_url
 from app.execution.tools.network_policy import validate_external_url
 
@@ -60,6 +65,22 @@ class NewsCrawlerInput(BaseModel):
     mode: Literal["auto", "static", "browser"] = Field(
         default="auto",
         description="Automatically fall back to browser rendering, use static HTTP only, or render directly.",
+    )
+    max_articles: int = Field(
+        default=3,
+        ge=0,
+        le=5,
+        description=(
+            "For a listing page, fetch up to this many linked article pages. Set to 0 to return only the listing. "
+            "Article fetching is bounded to one level and at most five pages."
+        ),
+    )
+    article_mode: Literal["auto", "static", "browser"] = Field(
+        default="static",
+        description=(
+            "Fetch linked articles with static HTTP by default to limit latency. "
+            "Choose auto or browser only when linked articles require JavaScript rendering."
+        ),
     )
 
 
@@ -198,21 +219,176 @@ def normalize_news_url(raw_url: str) -> tuple[str | None, str | None]:
 
 def _is_hacker_news_listing(url: str) -> bool:
     parsed = urlparse(url)
-    return parsed.netloc.lower().endswith("news.ycombinator.com") and parsed.path in {"", "/"}
+    return (parsed.hostname or "").lower() == "news.ycombinator.com" and parsed.path in {"", "/"}
 
 
-def _build_listing_items(parser: HTMLContentExtractor, base_url: str) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
+def _build_listing_items(parser: HTMLContentExtractor, base_url: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    base_host = (urlparse(base_url).hostname or "").lower()
+    utility_labels = {
+        "ask",
+        "classic",
+        "comments",
+        "discuss",
+        "jobs",
+        "login",
+        "new",
+        "newest",
+        "past",
+        "show",
+        "submit",
+    }
     for link in parser.links:
-        text = link["text"]
+        text = link["text"].strip()
         href = urljoin(base_url, link["href"])
+        href, _ = urldefrag(href)
         parsed = urlparse(href)
-        if len(text) < 5 or parsed.scheme not in {"http", "https"} or href in seen:
+        if (
+            len(text) < 5
+            or text.casefold() in utility_labels
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or href in seen
+        ):
+            continue
+        # Hacker News discussion/navigation links are not article sources.
+        if base_host == "news.ycombinator.com" and (
+            (parsed.hostname or "").lower() == "news.ycombinator.com"
+            or parsed.path.lower() in {"/login", "/submit"}
+        ):
             continue
         seen.add(href)
-        items.append({"title": text, "url": href})
+        items.append({"rank": len(items) + 1, "title": text, "url": href})
     return items[:50]
+
+
+def _crawl_listing_articles(
+    listing_result: ToolResult,
+    *,
+    max_articles: int,
+    article_mode: Literal["auto", "static", "browser"],
+) -> str:
+    """Fetch a bounded number of article links from a successfully parsed listing."""
+
+    if max_articles == 0 or not isinstance(listing_result.data, dict):
+        return listing_result.to_json()
+
+    listing_data = dict(listing_result.data)
+    if listing_data.get("content_type") != "listing":
+        return listing_result.to_json()
+
+    items = listing_data.get("items") or []
+    selected_items = [item for item in items if isinstance(item, dict)][:max_articles]
+    if not selected_items:
+        return listing_result.to_json()
+
+    articles: list[dict[str, Any]] = []
+    warnings = list(listing_result.metadata.warnings)
+    success_count = 0
+
+    for item in selected_items:
+        article_url = str(item.get("url") or "")
+        article_title = str(item.get("title") or "Untitled article")
+        safe_url, url_error = validate_external_url(article_url)
+        if url_error or not safe_url:
+            articles.append(
+                {
+                    "rank": item.get("rank"),
+                    "title": article_title,
+                    "requested_url": article_url,
+                    "status": "blocked",
+                    "text": "",
+                    "warning": url_error or "Article URL is not allowed.",
+                }
+            )
+            continue
+
+        try:
+            raw_result = crawl_url(safe_url, article_mode, extract_page=_extract_page)
+            article_result = parse_tool_result(raw_result, tool_name="news_crawler")
+        except Exception:  # Keep one bad linked page from hiding other evidence.
+            articles.append(
+                {
+                    "rank": item.get("rank"),
+                    "title": article_title,
+                    "requested_url": safe_url,
+                    "status": "internal_error",
+                    "text": "",
+                    "warning": "Article fetch failed due to an unexpected crawler error.",
+                }
+            )
+            continue
+
+        article_data = article_result.data if isinstance(article_result.data, dict) else {}
+        article_text = str(article_data.get("text") or "").strip()
+        is_article = (
+            article_data.get("content_type") == "article"
+            and len(article_text) >= MIN_ARTICLE_TEXT_LENGTH
+        )
+        source = article_result.source.model_dump(exclude_none=True) if article_result.source else {}
+        record: dict[str, Any] = {
+            "rank": item.get("rank"),
+            "title": str(article_data.get("title") or article_title),
+            "requested_url": safe_url,
+            "final_url": source.get("final_url") or safe_url,
+            "status": (
+                article_result.status
+                if is_article or not article_result.ok
+                else "not_article"
+            ),
+            "text": article_text[:8000] if is_article else "",
+            "metadata": article_data.get("metadata") or {},
+            "source": source,
+        }
+        if len(article_text) > 8000 and is_article:
+            record["text_truncated"] = True
+        if article_result.error:
+            record["warning"] = article_result.error.message
+            record["error"] = article_result.error.model_dump()
+        elif not is_article:
+            record["warning"] = "Linked page did not yield enough article text."
+        elif article_result.metadata.warnings:
+            record["warning"] = "; ".join(article_result.metadata.warnings)
+        articles.append(record)
+        if is_article:
+            success_count += 1
+
+    listing_data["articles"] = articles
+    listing_data["article_count"] = success_count
+    has_failed_articles = success_count < len(selected_items)
+    if has_failed_articles:
+        warnings.append(
+            f"Could not extract article content from {len(selected_items) - success_count} selected link(s)."
+        )
+    metadata = listing_result.metadata.model_dump(exclude_none=True)
+    metadata.update({
+        "followed_link_count": len(selected_items),
+        "article_count": success_count,
+        "article_mode": article_mode,
+        "warnings": list(dict.fromkeys(warnings)),
+    })
+
+    if success_count == 0:
+        result = failure_result(
+            "empty",
+            code="no_articles_extracted",
+            message="The listing was found, but none of the selected links produced usable article text.",
+            tool_name="news_crawler",
+            source=listing_result.source,
+            metadata=metadata,
+        ).model_copy(update={"data": listing_data})
+        return result.to_json()
+
+    has_partial_article = any(article.get("status") == "partial" for article in articles)
+    status = "partial" if has_failed_articles or has_partial_article else "success"
+    return success_result(
+        listing_data,
+        tool_name="news_crawler",
+        source=listing_result.source,
+        metadata=metadata,
+        status=status,
+    ).to_json()
 
 
 def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
@@ -311,8 +487,13 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
 
 @ToolRegistry.register_tool(name="news_crawler")
 @tool("news_crawler", args_schema=NewsCrawlerInput)
-def news_crawler(url: str, mode: Literal["auto", "static", "browser"] = "auto") -> str:
-    """Extract an article or listing with static-first fetching and bounded browser fallback."""
+def news_crawler(
+    url: str,
+    mode: Literal["auto", "static", "browser"] = "auto",
+    max_articles: int = 3,
+    article_mode: Literal["auto", "static", "browser"] = "static",
+) -> str:
+    """Extract a page and, for listings, fetch a bounded number of linked articles."""
 
     normalized_url, validation_error = normalize_news_url(url)
     if validation_error or not normalized_url:
@@ -332,4 +513,12 @@ def news_crawler(url: str, mode: Literal["auto", "static", "browser"] = "auto") 
             tool_name="news_crawler",
         ).to_json()
 
-    return crawl_url(normalized_url, mode, extract_page=_extract_page)
+    raw_result = crawl_url(normalized_url, mode, extract_page=_extract_page)
+    page_result = parse_tool_result(raw_result, tool_name="news_crawler")
+    if not page_result.ok:
+        return raw_result
+    return _crawl_listing_articles(
+        page_result,
+        max_articles=max_articles,
+        article_mode=article_mode,
+    )

@@ -81,6 +81,26 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
 }
 
 
+AGENT_RUNTIME_GUIDANCE: Mapping[str, str] = {
+    "source_researcher": (
+        "When news_crawler returns a listing, use its bounded article fetch behavior (up to three linked articles "
+        "by default). Base research claims on the returned article bodies, not listing titles or navigation. "
+        "If article_count is zero or the crawler reports failure, state that usable article content was unavailable. "
+        "Preserve each article's final URL as its source."
+    ),
+    "synthesis_agent": (
+        "text_summarizer is an extractive sentence sampler; it does not semantically summarize or paraphrase. "
+        "Use your own reasoning to synthesize the available article bodies into distinct, evidence-supported "
+        "findings. Keep source URLs with the findings and do not treat listing titles as article evidence."
+    ),
+    "report_agent": (
+        "markdown_report_generator only renders and saves the title, summary, and sections you provide; it does not "
+        "research, synthesize, or verify claims. Write a report that adds a concise synthesis rather than repeating "
+        "the raw crawl output, cite the supplied source URLs, and label evidence gaps instead of filling them in."
+    ),
+}
+
+
 LEGACY_PROFILE_ALIASES: Mapping[str, str] = {
     "news_crawler": "source_researcher",
     "web_search": "source_researcher",
@@ -292,11 +312,15 @@ class AgentResolver:
             if authorized_tool_names
             else "No tools are available for this task; do not attempt tool calls."
         )
-        system_prompt = (
-            f"{resolved.profile.system_prompt}\n"
-            f"{tool_instruction}\n"
-            f"Your assigned task is: {task.description}."
-        )
+        prompt_sections = [resolved.profile.system_prompt]
+        runtime_guidance = AGENT_RUNTIME_GUIDANCE.get(resolved.profile.name)
+        if runtime_guidance:
+            prompt_sections.append(runtime_guidance)
+        prompt_sections.extend([
+            tool_instruction,
+            f"Your assigned task is: {task.description}.",
+        ])
+        system_prompt = "\n".join(prompt_sections)
         agent_class = AgentRegistry.get_agent_class(resolved.profile.runtime_name)
         return agent_class(
             name=resolved.profile.name,

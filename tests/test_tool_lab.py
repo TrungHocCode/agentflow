@@ -118,19 +118,173 @@ class TestToolLab(unittest.TestCase):
             f'<a href="https://example.com/item-{index}">Story {index} about engineering</a>'
             for index in range(12)
         )
+        navigation = (
+            '<a href="https://news.ycombinator.com/item?id=42">42 comments</a>'
+            '<a href="https://news.ycombinator.com/login">Login</a>'
+        )
         response = MagicMock()
         response.status_code = 200
         response.url = "https://news.ycombinator.com/"
         response.headers = {"content-type": "text/html"}
-        response.content = links.encode("utf-8")
-        response.text = f"<html><head><title>Hacker News</title></head><body>{links}</body></html>"
+        response.content = f"{links}{navigation}".encode("utf-8")
+        response.text = (
+            f"<html><head><title>Hacker News</title></head>"
+            f"<body>{links}{navigation}</body></html>"
+        )
         mock_get.return_value = response
 
-        result = run_tool("news_crawler", {"url": "https://news.ycombinator.com/"})
+        result = run_tool(
+            "news_crawler",
+            {"url": "https://news.ycombinator.com/", "max_articles": 0},
+        )
 
         self.assertTrue(result.ok)
         self.assertEqual(result.data["content_type"], "listing")
         self.assertEqual(len(result.data["items"]), 12)
+        self.assertEqual([item["rank"] for item in result.data["items"]], list(range(1, 13)))
+
+    @patch(
+        "app.execution.tools.news_crawler_tool.validate_external_url",
+        side_effect=lambda url: (url, None),
+    )
+    @patch("app.execution.tools.news_crawler_tool.crawl_url")
+    def test_listing_crawls_only_bounded_number_of_linked_articles(
+        self,
+        mock_crawl,
+        _mock_validate,
+    ):
+        listing_url = "https://news.ycombinator.com/"
+        article_urls = [
+            "https://example.com/story-1",
+            "https://example.com/story-2",
+            "https://example.com/story-3",
+        ]
+        article_text = (
+            "The research team published a new benchmark for local language models. "
+            "The benchmark measures latency, accuracy, and memory use across several model sizes."
+        )
+
+        def fake_crawl(url, mode, *, extract_page):
+            if url == listing_url:
+                return json.dumps({
+                    "ok": True,
+                    "status": "success",
+                    "data": {
+                        "content_type": "listing",
+                        "title": "Hacker News",
+                        "text": "Homepage navigation and story titles.",
+                        "items": [
+                            {"rank": index, "title": f"Story {index}", "url": article_url}
+                            for index, article_url in enumerate(article_urls, 1)
+                        ],
+                        "metadata": {},
+                    },
+                    "source": {
+                        "requested_url": listing_url,
+                        "final_url": listing_url,
+                        "status_code": 200,
+                        "content_type": "text/html",
+                    },
+                    "metadata": {"tool_name": "news_crawler", "duration_ms": 4},
+                })
+            return json.dumps({
+                "ok": True,
+                "status": "success",
+                "data": {
+                    "content_type": "article",
+                    "title": f"Fetched {url}",
+                    "text": article_text,
+                    "metadata": {"author": "Research team"},
+                },
+                "source": {
+                    "requested_url": url,
+                    "final_url": url,
+                    "status_code": 200,
+                    "content_type": "text/html",
+                },
+                "metadata": {"tool_name": "news_crawler", "duration_ms": 9, "warnings": []},
+            })
+
+        mock_crawl.side_effect = fake_crawl
+        result = run_tool(
+            "news_crawler",
+            {"url": listing_url, "max_articles": 2},
+        )
+
+        self.assertTrue(result.ok, result.model_dump_json())
+        self.assertEqual(result.data["article_count"], 2)
+        self.assertEqual(len(result.data["articles"]), 2)
+        self.assertEqual(
+            [article["requested_url"] for article in result.data["articles"]],
+            article_urls[:2],
+        )
+        self.assertEqual(mock_crawl.call_count, 3)  # Listing plus two articles, never recursive.
+
+    @patch(
+        "app.execution.tools.news_crawler_tool.validate_external_url",
+        side_effect=lambda url: (url, None),
+    )
+    @patch("app.execution.tools.news_crawler_tool.crawl_url")
+    def test_listing_fails_if_no_linked_article_has_usable_body(self, mock_crawl, _mock_validate):
+        listing_url = "https://example.com/news"
+        listing_result = json.dumps({
+            "ok": True,
+            "status": "success",
+            "data": {
+                "content_type": "listing",
+                "title": "News",
+                "text": "Only list-page snippets.",
+                "items": [{"rank": 1, "title": "A news story", "url": "https://example.com/story"}],
+            },
+            "source": {"requested_url": listing_url, "final_url": listing_url},
+            "metadata": {"tool_name": "news_crawler"},
+        })
+        not_article_result = json.dumps({
+            "ok": True,
+            "status": "success",
+            "data": {"content_type": "listing", "text": "A second list, not the article.", "items": []},
+            "metadata": {"tool_name": "news_crawler"},
+        })
+        mock_crawl.side_effect = [listing_result, not_article_result]
+
+        result = run_tool("news_crawler", {"url": listing_url, "max_articles": 1})
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error.code, "no_articles_extracted")
+        self.assertEqual(result.data["articles"][0]["status"], "not_article")
+
+    def test_summarizer_prefers_crawled_article_text_over_listing_text(self):
+        crawler_result = {
+            "ok": True,
+            "status": "success",
+            "data": {
+                "content_type": "listing",
+                "text": "Homepage navigation should not be summarized.",
+                "articles": [{
+                    "title": "Local model benchmark",
+                    "requested_url": "https://example.com/benchmark",
+                    "final_url": "https://example.com/benchmark",
+                    "status": "success",
+                    "text": (
+                        "The research team published a new benchmark for local language models. "
+                        "The benchmark measures latency, accuracy, and memory use across several model sizes."
+                    ),
+                }],
+            },
+            "source": {"final_url": "https://news.ycombinator.com/"},
+        }
+
+        result = parse_tool_result(
+            ToolRegistry.get_tool("text_summarizer").invoke({
+                "text": json.dumps(crawler_result),
+                "max_bullet_points": 20,
+            })
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIn("published a new benchmark", result.data["summary"])
+        self.assertNotIn("Homepage navigation", result.data["summary"])
+        self.assertIn("https://example.com/benchmark", result.data["sources"])
 
     def test_unknown_tool_is_a_normalized_failure(self):
         result = run_tool("does_not_exist", {})

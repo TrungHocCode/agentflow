@@ -160,7 +160,38 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
             "Authorized tools for this task (use these exact names only): news_crawler.",
             agent.system_prompt,
         )
+        self.assertIn("up to three linked articles", agent.system_prompt)
+        self.assertIn("article_count is zero", agent.system_prompt)
         self.assertNotIn("news_scraper", agent.system_prompt)
+
+    async def test_synthesis_and_report_agents_get_tool_capability_guidance(self) -> None:
+        resolver = AgentResolver()
+        cases = [
+            (
+                "synthesis_agent",
+                "text_summarizer is an extractive sentence sampler",
+            ),
+            (
+                "report_agent",
+                "markdown_report_generator only renders and saves",
+            ),
+        ]
+
+        for index, (role, expected_guidance) in enumerate(cases, start=1):
+            task = Task(
+                id=index,
+                node=role,
+                status="running",
+                description="Process the research evidence",
+            )
+            resolved = await resolver.resolve(task)
+            agent = resolver.create_agent(
+                resolved=resolved,
+                llm=MagicMock(spec=BaseChatModel),
+                task=task,
+            )
+
+            self.assertIn(expected_guidance, agent.system_prompt)
 
     async def test_legacy_tool_name_in_agent_id_maps_to_role_profile(self) -> None:
         resolver = AgentResolver()
