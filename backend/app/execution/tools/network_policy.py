@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 
 MAX_TRANSIENT_ATTEMPTS = 2
+MAX_REDIRECTS = 3
 
 
 def transient_backoff(attempt: int) -> None:

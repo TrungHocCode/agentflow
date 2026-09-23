@@ -49,6 +49,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
 
         # Mock structured LLM response
         mock_output = SupervisorOutput(
+            decision="propose_plan",
             mode="executing",
             assistant_message="Creating a plan.",
             plan=[
@@ -75,12 +76,67 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.mock_llm.with_structured_output.assert_called_once_with(SupervisorOutput)
         mock_structured_llm.ainvoke.assert_called_once()
         
-        self.assertEqual(updates["mode"], "executing")
-        self.assertEqual(updates["metadata"], {"direction": "academic"})
+        self.assertEqual(updates["mode"], "conversation")
+        self.assertIn("explicit user approval", updates["logs"][0])
+        self.assertEqual(
+            updates["metadata"],
+            {
+                "direction": "academic",
+                "supervisor_decision": "propose_plan",
+            },
+        )
         self.assertEqual(len(updates["messages"]), 1)
         self.assertEqual(updates["messages"][0].content, "Creating a plan.")
         self.assertEqual(len(updates["plan"]), 1)
         self.assertEqual(updates["plan"][0].description, "Run first task")
+
+    async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        structured_llm.ainvoke.side_effect = RuntimeError("invalid structured response")
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        self.mock_llm.ainvoke = AsyncMock()
+
+        with self.assertRaisesRegex(RuntimeError, "invalid structured response"):
+            await supervisor.execute(
+                {
+                    "messages": [HumanMessage(content="Research a topic")],
+                    "plan": [],
+                    "mode": "conversation",
+                    "metadata": {},
+                }
+            )
+
+        self.mock_llm.ainvoke.assert_not_awaited()
+
+    async def test_supervisor_only_enters_execution_after_user_approval(self) -> None:
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        existing_plan = [
+            Task(id=1, node="source_researcher", status="pending", description="Find sources")
+        ]
+
+        updates = await supervisor.execute(
+            {
+                "messages": [HumanMessage(content="đồng ý, chạy đi")],
+                "plan": existing_plan,
+                "current_task": None,
+                "logs": [],
+                "result_storage": [],
+                "mode": "conversation",
+                "metadata": {"use_llm": True},
+            }
+        )
+
+        self.assertEqual(updates["mode"], "executing")
+        self.mock_llm.with_structured_output.assert_not_called()
 
     async def test_worker_agent_execution_no_tools(self):
         """Test WorkerAgent executing without tools."""

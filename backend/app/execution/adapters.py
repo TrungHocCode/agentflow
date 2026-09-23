@@ -18,10 +18,18 @@ class LangGraphExecutionAdapter(ExecutionPort):
         graph = build_execution_graph(agent_resolver=self.agent_resolver)
         return await graph.ainvoke(initial_state, config=get_graph_config(run_id))
 
-    async def continue_conversation(self, run_id: str, message: str) -> State:
+    async def continue_conversation(
+        self,
+        run_id: str,
+        message: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> State:
         graph = build_execution_graph(agent_resolver=self.agent_resolver)
+        state_update: State = {"messages": [message]}
+        if metadata is not None:
+            state_update["metadata"] = metadata
         return await graph.ainvoke(
-            {"messages": [message]},
+            state_update,
             config=get_graph_config(run_id),
         )
 

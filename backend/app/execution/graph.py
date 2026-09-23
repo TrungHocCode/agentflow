@@ -18,17 +18,32 @@ autodiscover_tools()
 
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are SupervisorAgent, an AI Agent Planner for AgentFlow platform.\n"
-    "Your job is to converse with the user, clarify their requirements, and construct a DAG plan.\n"
-    "Available agent roles: 'source_researcher', 'synthesis_agent', 'report_agent', and 'chart_agent'.\n"
+    "For each turn, choose exactly one decision: clarify, propose_plan, or answer.\n"
+    "Choose clarify only when missing information changes the research question or deliverable materially, "
+    "constraints conflict, or a required input is absent and has no safe default. Ask one concise, "
+    "combined question; do not repeat information the user already supplied.\n"
+    "Otherwise use sensible defaults (concise Markdown report, primary sources first, general technical "
+    "audience) and state important assumptions in assistant_message.\n"
+    "For an actionable workflow request, choose propose_plan and ALWAYS return at least one pending task. "
+    "Return the smallest executable DAG that satisfies the request.\n"
+    "Choose answer only for a direct conversational question that does not ask for a workflow.\n"
+    "assistant_message is required and must not be blank: for clarify it is the question; for propose_plan "
+    "it briefly explains the plan and asks for approval; for answer it is the direct response.\n"
+    "Available agent roles and their currently registered, authorized tools are listed below.\n"
     "Use the concrete role name in each Task.node instead of the generic 'worker' whenever the role is known.\n"
-    "Available tools are selected by the assigned agent profile; do not treat tool names as agent roles.\n"
-    "If the user's request is vague, ask clarifying questions (keep mode='conversation').\n"
-    "If the request is clear, propose a list of Tasks and ask if they agree to execute it (keep mode='conversation').\n"
-    "If the user approves (e.g. 'ok', 'chạy đi', 'đồng ý', 'yes', 'run', 'approve'), set mode='executing'."
+    "When setting Task.tool_names, use only exact tool names listed for that role; never invent names or use aliases.\n"
+    "If no narrower tool selection is needed, leave Task.tool_names empty to use the role's authorized tools.\n"
+    "Tool names are capabilities, not agent roles.\n"
+    "Every dependency must reference an existing task. Add a dependency whenever a task needs another task's "
+    "output; leave independent tasks unblocked. Do not invent sources, data, or completed work.\n"
+    "Use mode='conversation' for every response. The application, not the model, handles approval and execution."
 )
 
 
-async def supervisor_node(state: State) -> Dict[str, Any]:
+async def supervisor_node(
+    state: State,
+    agent_resolver: AgentResolver | None = None,
+) -> Dict[str, Any]:
     """
     Supervisor Node handles intent analysis, multi-turn clarification, and plan formulation.
     """
@@ -50,22 +65,43 @@ async def supervisor_node(state: State) -> Dict[str, Any]:
             from app.execution.llm import get_llm
             model_name = metadata.get("model_name", "qwen3:8b")
             llm = get_llm(model_name=model_name, temperature=0.2)
+            resolver = agent_resolver or AgentResolver()
+            tool_catalog = await resolver.format_agent_tool_catalog()
             supervisor = SupervisorAgent(
                 name="supervisor",
-                system_prompt=SUPERVISOR_SYSTEM_PROMPT,
+                system_prompt=f"{SUPERVISOR_SYSTEM_PROMPT}\n{tool_catalog}",
                 llm=llm
             )
-            return await supervisor.execute(state)
+            updates = await supervisor.execute(state)
+            decision = (updates.get("metadata") or {}).get("supervisor_decision")
+            if decision == "propose_plan":
+                tasks = updates.get("plan") or []
+                await resolver.validate_plan(tasks)
+                updates["plan"] = {"__replace__": True, "tasks": tasks}
+            elif decision == "clarify":
+                updates["plan"] = {"__replace__": True, "tasks": []}
+            clean_metadata = dict(updates.get("metadata") or {})
+            for stale_key in ("planning_failed", "planning_error_message", "llm_error"):
+                clean_metadata.pop(stale_key, None)
+            updates["metadata"] = clean_metadata
+            return updates
         except Exception as exc:
-            # A configured live model must fail explicitly. A heuristic plan would
-            # look successful to the user while not representing the requested LLM.
+            # Never mark malformed structured output as a successful empty plan.
             return {
                 "mode": "conversation",
                 "messages": [
-                    "Local model is unavailable. Please start Ollama or check the configured model before continuing."
+                    "Tôi chưa thể tạo phản hồi hợp lệ. Vui lòng thử lại hoặc làm rõ yêu cầu."
                 ],
-                "logs": [f"[SupervisorNode Error] LLM planning unavailable: {exc}"],
-                "metadata": {**metadata, "llm_error": str(exc)},
+                "logs": [f"[SupervisorNode Error] Structured planning failed: {exc}"],
+                "metadata": {
+                    **metadata,
+                    "llm_error": str(exc),
+                    "planning_failed": True,
+                    "planning_error_message": (
+                        "Supervisor không thể tạo plan hoặc câu trả lời hợp lệ. "
+                        "Vui lòng thử lại hoặc làm rõ yêu cầu."
+                    ),
+                },
             }
 
     user_msgs = state.get("messages") or []
@@ -87,6 +123,7 @@ async def supervisor_node(state: State) -> Dict[str, Any]:
         return {
             "mode": "executing",
             "plan": plan,
+            "metadata": {**metadata, "supervisor_decision": "propose_plan"},
             "logs": ["[SupervisorNode] User approved plan. Transitioning to 'executing'."]
         }
 
@@ -98,6 +135,7 @@ async def supervisor_node(state: State) -> Dict[str, Any]:
             "mode": "conversation",
             "plan": [t1, t2, t3],
             "messages": ["Supervisor: Tôi đã lập xong kế hoạch 3 bước. Bạn có đồng ý thực thi không?"],
+            "metadata": {**metadata, "supervisor_decision": "propose_plan"},
             "logs": ["[SupervisorNode] Created initial plan proposal. Awaiting user confirmation."]
         }
 
@@ -396,12 +434,15 @@ def build_execution_graph(
         checkpointer: Checkpointer tùy chọn (dùng trong tests để inject MemorySaver riêng)
     """
     workflow = StateGraph(State)
+    resolver = agent_resolver or AgentResolver()
 
-    # Add Nodes
-    workflow.add_node("supervisor_node", supervisor_node)
+    # Add Nodes with the same active catalog resolver used by worker execution.
+    async def resolved_supervisor_node(state: State) -> Dict[str, Any]:
+        return await supervisor_node(state, agent_resolver=resolver)
+
+    workflow.add_node("supervisor_node", resolved_supervisor_node)
     workflow.add_node("hitl_gate", hitl_gate_node)  # HITL checkpoint: PAUSE khi mode=conversation
     workflow.add_node("dispatcher_node", dispatcher_node)
-    resolver = agent_resolver or AgentResolver()
 
     async def resolved_worker_node(state: State) -> Dict[str, Any]:
         return await worker_node(state, agent_resolver=resolver)

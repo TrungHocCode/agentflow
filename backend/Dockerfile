@@ -24,18 +24,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
+RUN addgroup --system agentflow \
+    && adduser --system --ingroup agentflow agentflow \
+    && mkdir -p /app/workspace_data
+
+ARG INSTALL_CRAWLER_BROWSER=false
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN if [ "$INSTALL_CRAWLER_BROWSER" = "true" ]; then \
+    python -m playwright install --with-deps chromium \
+    && chown -R agentflow:agentflow /ms-playwright \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY backend/app /app/app
 COPY backend/alembic /app/alembic
 COPY alembic.ini /app/alembic.ini
 
-RUN addgroup --system agentflow && adduser --system --ingroup agentflow agentflow \
-    && mkdir -p /app/workspace_data \
-    && chown -R agentflow:agentflow /app
+RUN chown -R agentflow:agentflow /app
 
 USER agentflow
 
 EXPOSE 8000
 
 ENV PYTHONPATH=/app
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

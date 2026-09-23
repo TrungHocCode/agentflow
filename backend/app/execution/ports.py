@@ -8,7 +8,12 @@ from app.execution.state import State
 class ExecutionPort(Protocol):
     async def create_plan(self, run_id: str, initial_state: State) -> State:
         ...
-    async def continue_conversation(self, run_id: str, message: str) -> State:
+    async def continue_conversation(
+        self,
+        run_id: str,
+        message: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> State:
         ...
 
     def execute_run(self, run_id: str, initial_state: State) -> AsyncGenerator[Dict[str, Any], None]:

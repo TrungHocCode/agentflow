@@ -143,34 +143,33 @@ class SupervisorAgent(BaseAgent):
         system_message = SystemMessage(content=self.system_prompt + context)
         messages = [system_message] + user_messages
 
-        try:
-            structured_llm = self.llm.with_structured_output(SupervisorOutput)
-            response: SupervisorOutput = await structured_llm.ainvoke(messages)
+        structured_llm = self.llm.with_structured_output(SupervisorOutput)
+        response: SupervisorOutput = await structured_llm.ainvoke(messages)
 
-            updates = {}
-            if response.mode:
-                updates["mode"] = response.mode
-            if response.assistant_message:
-                updates["messages"] = [AIMessage(content=response.assistant_message)]
-            if response.plan is not None:
-                updates["plan"] = response.plan
+        updates: Dict[str, Any] = {
+            "mode": "conversation",
+            "messages": [AIMessage(content=response.assistant_message)],
+        }
+        if response.mode == "executing":
+            updates["logs"] = [
+                "[SupervisorAgent] Ignored model execution transition; "
+                "explicit user approval is required."
+            ]
+        if response.decision in {"clarify", "propose_plan"}:
+            updates["plan"] = response.plan
 
-            # Merge existing metadata (e.g. use_llm, model_name) with LLM metadata
-            existing_metadata = state.get("metadata") or {}
-            new_metadata = response.metadata or {}
-            updates["metadata"] = {**existing_metadata, **new_metadata}
-
-            return updates
-        except Exception:
-            # Fallback to plain text invocation if structured output is unsupported by local LLM
-            response_msg = await self.llm.ainvoke(messages)
-            content = response_msg.content if hasattr(response_msg, "content") else str(response_msg)
-            return {
-                "mode": "conversation",
-                "messages": [AIMessage(content=content)],
-                "metadata": state.get("metadata") or {},
-                "logs": ["[SupervisorAgent] Direct LLM conversational response generated."]
-            }
+        # Merge existing metadata (e.g. use_llm, model_name) with model metadata.
+        existing_metadata = state.get("metadata") or {}
+        new_metadata = response.metadata or {}
+        updates["metadata"] = {
+            **existing_metadata,
+            **new_metadata,
+            "supervisor_decision": response.decision,
+        }
+        updates["logs"] = updates.get("logs", []) + [
+            f"[SupervisorAgent] Produced '{response.decision}' response."
+        ]
+        return updates
 
 
 
