@@ -16,8 +16,9 @@ RUN_LIVE_OLLAMA_TESTS = os.getenv("AGENTFLOW_RUN_LIVE_OLLAMA_TESTS", "").lower()
 try:
     from langchain_ollama import ChatOllama
     from app.execution.llm import get_llm
+    from app.execution.model_router import InferencePurpose
     from app.execution.state import State, Task
-    from app.execution.graph import build_execution_graph, get_graph_config
+    from app.execution.graph import build_execution_graph, get_graph_config, supervisor_node
     import uuid
     HAS_OLLAMA_PKG = True
 except ImportError:
@@ -46,12 +47,31 @@ class TestLiveOllamaExecution(unittest.IsolatedAsyncioTestCase):
     async def test_ollama_llm_direct_invocation(self):
         """Test direct connection to local Ollama server."""
         try:
-            llm = get_llm(model_name="qwen3:0.6b", temperature=0.1)
+            llm = get_llm(purpose=InferencePurpose.CHAT, temperature=0.1)
             response = await llm.ainvoke("Say 'Ollama is online' in 5 words or less.")
             self.assertTrue(len(response.content) > 0)
             print(f"\n[Ollama Test Output]: {response.content}")
         except Exception as e:
             self.fail(f"Ollama connection failed: {str(e)}")
+
+    async def test_chat_profile_returns_a_structured_direct_answer(self):
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {
+                "use_llm": True,
+                "inference_purpose": InferencePurpose.CHAT.value,
+            },
+        }
+
+        result = await supervisor_node(state)
+
+        self.assertEqual(result["metadata"]["supervisor_decision"], "answer")
+        self.assertFalse(result.get("plan"))
 
     async def test_live_ollama_graph_execution(self):
         """
@@ -80,7 +100,6 @@ class TestLiveOllamaExecution(unittest.IsolatedAsyncioTestCase):
             "mode": "executing",
             "metadata": {
                 "use_llm": True,
-                "model_name": "qwen3:0.6b"
             }
         }
 

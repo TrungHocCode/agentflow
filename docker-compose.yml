@@ -15,6 +15,10 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://localhost:5173
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
+      - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
+      - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
       - ARTIFACT_ROOT=/app/workspace_data
       - AUTH_SIGNING_SECRET=${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in .env before starting Compose}
       - AGENTFLOW_CRAWLER_BROWSER_ENABLED=false
@@ -47,6 +51,10 @@ services:
       - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
+      - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
+      - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
       - ARTIFACT_ROOT=/app/workspace_data
       - AGENTFLOW_CRAWLER_BROWSER_ENABLED=true
     volumes:

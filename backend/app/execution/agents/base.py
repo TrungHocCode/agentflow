@@ -154,14 +154,17 @@ class SupervisorAgent(BaseAgent):
         if response.decision in {"clarify", "propose_plan"}:
             updates["plan"] = response.plan
 
-        # Merge existing metadata (e.g. use_llm, model_name) with model metadata.
+        # Merge existing metadata (e.g. use_llm and inference purpose) with model metadata.
         existing_metadata = state.get("metadata") or {}
         new_metadata = response.metadata or {}
-        updates["metadata"] = {
+        merged_metadata = {
             **existing_metadata,
             **new_metadata,
-            "supervisor_decision": response.decision,
         }
+        if "inference_purpose" in existing_metadata:
+            merged_metadata["inference_purpose"] = existing_metadata["inference_purpose"]
+        merged_metadata["supervisor_decision"] = response.decision
+        updates["metadata"] = merged_metadata
         updates["logs"] = updates.get("logs", []) + [
             f"[SupervisorAgent] Produced '{response.decision}' response."
         ]

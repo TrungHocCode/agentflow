@@ -194,11 +194,11 @@ export async function deleteConversation(conversationId) {
   });
 }
 
-export async function sendConversationMessage(conversationId, content, modelName = 'qwen3:8b') {
+export async function sendConversationMessage(conversationId, content) {
   return requestJson(`${API_BASE}/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, model_name: modelName })
+    body: JSON.stringify({ content })
   });
 }
 
@@ -212,7 +212,7 @@ export async function getRunEvents(runId, afterEventId = null, limit = 1000) {
   return requestJson(`${API_BASE}/runs/${encodeURIComponent(runId)}/events?${params}`);
 }
 
-export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default_flow') {
+export async function startRun(prompt, flowId = 'default_flow') {
   return requestJson(`${API_BASE}/runs/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -220,7 +220,6 @@ export async function startRun(prompt, modelName = 'qwen3:8b', flowId = 'default
       flow_id: flowId,
       input_message: prompt,
       metadata: {
-        model_name: modelName,
         use_llm: true
       }
     })

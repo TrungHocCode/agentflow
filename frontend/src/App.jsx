@@ -64,7 +64,6 @@ const toChatMessages = (persistedMessages = []) => persistedMessages
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio');
-  const [selectedModel, setSelectedModel] = useState('qwen3:8b');
   const [backendStatus, setBackendStatus] = useState(false);
   const [authUser, setAuthUser] = useState(() => {
     if (!localStorage.getItem('agentflow_access_token')) return null;
@@ -589,7 +588,7 @@ export default function App() {
           activeConversationId = conversation.id;
           setConversationId(activeConversationId);
         }
-        const accepted = await sendConversationMessage(activeConversationId, textPrompt, selectedModel);
+        const accepted = await sendConversationMessage(activeConversationId, textPrompt);
         if (accepted.status === 'accepted' && accepted.turn_id) {
           awaitingConversationStream = true;
           if (conversationStreamRef.current) conversationStreamRef.current();
@@ -599,7 +598,7 @@ export default function App() {
             (eventData) => {
               const payload = eventData.payload || {};
               if (eventData.type === 'planning_started') {
-              setMessages(prev => [...prev, { sender: 'supervisor', text: 'Đã nhận yêu cầu. Đang chuẩn bị kế hoạch nghiên cứu...' }]);
+              setMessages(prev => [...prev, { sender: 'supervisor', text: 'Đã nhận yêu cầu. Đang xử lý...' }]);
               } else if (eventData.type === 'workflow_draft_updated') {
                 const plan = payload.plan || [];
                 setActivePlan(plan);
@@ -718,7 +717,7 @@ export default function App() {
           const run = await createWorkflowRun(
             workflow.id,
             { user_prompt: userPrompt },
-            { model_name: selectedModel, use_llm: true },
+            { use_llm: true },
             linkedConversationId
           );
           runId = run.run_id;
@@ -876,8 +875,6 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
       {/* Top Header */}
       <Header 
-        selectedModel={selectedModel}
-        setSelectedModel={setSelectedModel}
         user={authUser}
         onLogout={handleLogout}
       />

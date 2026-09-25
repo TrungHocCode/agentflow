@@ -91,6 +91,33 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(updates["plan"]), 1)
         self.assertEqual(updates["plan"][0].description, "Run first task")
 
+    async def test_supervisor_cannot_override_internal_inference_purpose(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        structured_llm.ainvoke.return_value = SupervisorOutput(
+            decision="answer",
+            assistant_message="SSE keeps a response stream open.",
+            metadata={"inference_purpose": "worker"},
+        )
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {"inference_purpose": "chat"},
+        }
+
+        updates = await supervisor.execute(state)
+
+        self.assertEqual(updates["metadata"]["inference_purpose"], "chat")
+
     async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
         supervisor = SupervisorAgent(
             name="Supervisor",
