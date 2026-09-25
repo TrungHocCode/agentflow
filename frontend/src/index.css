@@ -237,6 +237,98 @@ h1, h2, h3, h4 {
 .step-results-details summary { color: var(--accent-cyan); cursor: pointer; font-weight: 600; font-size: 0.82rem; }
 .result-notice { padding: 0.7rem 0.85rem; border: 1px solid rgba(197, 150, 91, 0.35); border-radius: var(--radius-md); background: rgba(197, 150, 91, 0.09); color: var(--text-secondary); font-size: 0.8rem; line-height: 1.55; }
 
+/* Workflow nodes and compact, consistent task states. */
+.task-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  max-width: 100%;
+  padding: 0.32rem 0.58rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.task-status--pending { color: var(--accent-amber); background: rgba(197, 150, 91, 0.1); border-color: rgba(197, 150, 91, 0.3); }
+.task-status--running { color: var(--accent-cyan); background: rgba(120, 163, 154, 0.12); border-color: rgba(120, 163, 154, 0.42); }
+.task-status--done { color: var(--accent-emerald); background: rgba(155, 166, 109, 0.12); border-color: rgba(155, 166, 109, 0.35); }
+.task-status--partial { color: var(--accent-amber); background: rgba(197, 150, 91, 0.1); border-color: rgba(197, 150, 91, 0.35); }
+.task-status--failed { color: var(--accent-rose); background: rgba(189, 110, 98, 0.12); border-color: rgba(189, 110, 98, 0.35); }
+.task-status--skipped { color: var(--text-muted); background: rgba(162, 140, 117, 0.1); border-color: rgba(162, 140, 117, 0.25); }
+.task-status__spinner { animation: statusSpin 1.2s linear infinite; }
+
+.workflow-progress { display: flex; flex-direction: column; gap: 0.65rem; min-width: 0; margin-bottom: 1rem; }
+.workflow-progress__summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 0.8rem; }
+.workflow-progress__step-count { color: var(--text-secondary); font-size: 0.75rem; font-weight: 650; }
+.workflow-progress__parallel-hint { color: var(--text-muted); font-size: 0.7rem; }
+.workflow-progress__track { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(20, 14, 12, 0.5); }
+.workflow-progress__track > span { display: block; height: 100%; border-radius: inherit; background: var(--gradient-brand); transition: width 350ms ease; }
+.workflow-progress__stages { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.workflow-progress__stage { min-width: 0; }
+.workflow-progress__stage-label { display: block; margin: 0.15rem 0 0.45rem; color: var(--text-muted); font-size: 0.67rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.workflow-progress__nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 0.55rem; min-width: 0; }
+.workflow-progress__connector { display: flex; flex-direction: column; align-items: center; height: 25px; color: var(--accent-cyan); opacity: 0.8; }
+.workflow-progress__connector > span { width: 1px; height: 9px; background: currentColor; opacity: 0.65; }
+.workflow-progress__connector > svg { margin-top: -2px; }
+
+.workflow-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.7rem 0.75rem 0.8rem;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: rgba(30, 20, 16, 0.34);
+  transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+.workflow-node--done, .workflow-node--completed { border-color: rgba(155, 166, 109, 0.3); background: rgba(155, 166, 109, 0.045); }
+.workflow-node--partial { border-color: rgba(197, 150, 91, 0.36); }
+.workflow-node--failed { border-color: rgba(189, 110, 98, 0.42); background: rgba(189, 110, 98, 0.055); }
+.workflow-node--skipped { opacity: 0.72; }
+.workflow-node--running { border-color: rgba(120, 163, 154, 0.7); background: rgba(120, 163, 154, 0.09); box-shadow: 0 0 18px rgba(120, 163, 154, 0.1); }
+.workflow-node__heading { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; min-width: 0; }
+.workflow-node__number { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 auto; border-radius: 8px; background: rgba(120, 163, 154, 0.15); color: var(--text-primary); font-size: 0.74rem; font-weight: 750; }
+.workflow-node--running .workflow-node__number { background: var(--accent-cyan); color: #1f1a18; }
+.workflow-node__description { min-width: 0; color: var(--text-primary); font-size: 0.8rem; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.workflow-node__meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.3rem 0.65rem; color: var(--text-muted); font-size: 0.68rem; }
+.workflow-node__meta > span:first-child { display: inline-flex; align-items: center; gap: 0.3rem; min-width: 0; overflow-wrap: anywhere; }
+.workflow-node__dependencies { color: var(--text-secondary); }
+.workflow-node__activity { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; overflow: hidden; background: rgba(120, 163, 154, 0.14); }
+.workflow-node__activity > span { display: block; width: 38%; height: 100%; border-radius: inherit; background: var(--accent-cyan); animation: nodeProgressSweep 1.5s ease-in-out infinite; }
+
+.execution-tracker-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.25rem; min-height: 0; }
+.execution-task-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) max-content; align-items: center; gap: 0.7rem; padding: 0.7rem 0.8rem; }
+.execution-task-number { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: rgba(120, 163, 154, 0.18); color: var(--text-primary); font-size: 0.78rem; font-weight: 700; }
+.execution-task-number--running { background: var(--accent-cyan); color: #1f1a18; }
+.execution-task-description { min-width: 0; color: var(--text-primary); font-size: 0.8rem; line-height: 1.45; overflow-wrap: anywhere; }
+
+@keyframes statusSpin { to { transform: rotate(360deg); } }
+@keyframes nodeProgressSweep { 0% { transform: translateX(-110%); } 55%, 100% { transform: translateX(290%); } }
+
+@media (max-width: 900px) {
+  .execution-tracker-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 540px) {
+  .workflow-progress__nodes { grid-template-columns: minmax(0, 1fr); }
+  .execution-task-row { grid-template-columns: 28px minmax(0, 1fr); }
+  .execution-task-row > .task-status { grid-column: 2; justify-self: start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-status__spinner, .workflow-node__activity > span { animation: none; }
+  .workflow-node__activity > span { width: 100%; opacity: 0.6; }
+  .workflow-progress__track > span { transition: none; }
+}
+
 
 /* Badge & Status Badges */
 .badge {
