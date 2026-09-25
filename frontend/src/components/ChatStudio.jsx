@@ -1,17 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Send, Bot, User, CheckCircle2, Circle, Play, Trash2, XCircle, AlertCircle, ArrowRight, Clock, LoaderCircle, SkipForward, FileText, ExternalLink } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Send, Bot, User, CheckCircle2, Play, Trash2, XCircle, AlertCircle, ArrowRight, Clock, LoaderCircle, FileText, ExternalLink } from 'lucide-react';
 import StructuredText from './StructuredText';
-
-const TASK_STATUS = {
-  pending: { label: 'Chờ đến lượt', color: 'var(--accent-amber)', icon: Circle },
-  queued: { label: 'Đang chờ', color: 'var(--accent-amber)', icon: Circle },
-  running: { label: 'Đang chạy', color: 'var(--accent-cyan)', icon: LoaderCircle },
-  done: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
-  partial: { label: 'Hoàn tất một phần', color: 'var(--accent-amber)', icon: AlertCircle },
-  completed: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
-  failed: { label: 'Thất bại', color: 'var(--accent-rose)', icon: AlertCircle },
-  skipped: { label: 'Bỏ qua', color: 'var(--text-muted)', icon: SkipForward }
-};
+import WorkflowProgressGraph from './WorkflowProgressGraph';
 
 const RUN_STATUS = {
   queued: { label: 'Đang chờ', color: 'var(--accent-amber)' },
@@ -19,8 +9,18 @@ const RUN_STATUS = {
   completed: { label: 'Đã hoàn tất', color: 'var(--accent-emerald)' },
   failed: { label: 'Thực thi thất bại', color: 'var(--accent-rose)' },
   interrupted: { label: 'Bị gián đoạn', color: 'var(--accent-rose)' },
-  cancelled: { label: 'Đã hủy', color: 'var(--text-muted)' }
+  cancelled: { label: 'Đã hủy', color: 'var(--text-muted)' },
+  abandoned: { label: 'Đã dừng', color: 'var(--text-muted)' }
 };
+
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'interrupted', 'cancelled', 'abandoned']);
+
+function getRunStatusTone(status) {
+  if (status === 'completed') return 'done';
+  if (['failed', 'interrupted'].includes(status)) return 'failed';
+  if (!status || TERMINAL_RUN_STATUSES.has(status)) return 'pending';
+  return 'running';
+}
 
 export default function ChatStudio({
   messages,
@@ -185,7 +185,7 @@ export default function ChatStudio({
         )}
 
         {/* Typing 3-Dots & Live Thinking Timer Indicator */}
-        {isProcessing && (
+        {isProcessing && !isStreaming && (
           <div style={{ display: 'flex', gap: '0.875rem', alignSelf: 'flex-start', margin: '0.5rem 0' }}>
             <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Bot style={{ width: '18px', height: '18px', color: '#fff' }} />
@@ -216,45 +216,22 @@ export default function ChatStudio({
                   ? <LoaderCircle className="spin-slow" style={{ width: '20px', height: '20px', color: 'var(--accent-cyan)' }} />
                   : runStatus === 'failed' || runStatus === 'interrupted'
                     ? <AlertCircle style={{ width: '20px', height: '20px', color: 'var(--accent-rose)' }} />
-                    : <CheckCircle2 style={{ width: '20px', height: '20px', color: 'var(--accent-emerald)' }} />}
+                    : runStatus === 'completed'
+                      ? <CheckCircle2 style={{ width: '20px', height: '20px', color: 'var(--accent-emerald)' }} />
+                      : runStatus
+                        ? <XCircle style={{ width: '20px', height: '20px', color: 'var(--text-muted)' }} />
+                        : <CheckCircle2 style={{ width: '20px', height: '20px', color: 'var(--accent-emerald)' }} />}
                 <h4 style={{ fontSize: '0.9375rem', color: '#fff' }}>{runStatus ? 'Quy trình của hội thoại này' : 'Kế hoạch đề xuất'}</h4>
               </div>
               <span
-                className={`badge ${runStatus === 'completed' ? 'badge-done' : runStatus === 'failed' || runStatus === 'interrupted' ? 'badge-failed' : runStatus ? 'badge-running' : 'badge-pending'}`}
+                className={`badge badge-${getRunStatusTone(runStatus)}`}
                 style={runStatus && RUN_STATUS[runStatus] ? { color: RUN_STATUS[runStatus].color } : undefined}
               >
                 {runStatus ? (RUN_STATUS[runStatus]?.label || 'Đang cập nhật') : 'Chờ bạn duyệt'}
               </span>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
-              {activePlan.map((task) => (
-                <div
-                  key={task.id}
-                  className="glass-card"
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.625rem 0.875rem', borderColor: task.status === 'running' ? 'rgba(120,163,154,0.6)' : undefined, boxShadow: task.status === 'running' ? '0 0 14px rgba(120,163,154,0.12)' : undefined }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span style={{ width: '26px', height: '26px', borderRadius: '50%', background: 'rgba(99,102,241,0.2)', color: '#c7d2fe', fontSize: '0.75rem', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      {task.id}
-                    </span>
-                    <div>
-                      <p style={{ fontSize: '0.8125rem', color: '#fff', fontWeight: '600' }}>{task.description}</p>
-                    </div>
-                  </div>
-                  {(() => {
-                    const status = TASK_STATUS[String(task.status || 'pending').toLowerCase()] || TASK_STATUS.pending;
-                    const Icon = status.icon;
-                    return (
-                      <span className="badge" style={{ background: 'rgba(20,14,12,0.45)', color: status.color, border: `1px solid ${status.color}`, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        <Icon size={13} className={task.status === 'running' ? 'spin-slow' : undefined} />
-                        {status.label}
-                      </span>
-                    );
-                  })()}
-                </div>
-              ))}
-            </div>
+            <WorkflowProgressGraph tasks={activePlan} runStatus={runStatus} />
 
             {!runStatus ? (
               <button className="btn-primary" onClick={onApprovePlan} disabled={isProcessing} style={{ width: '100%', justifyContent: 'center', padding: '0.75rem' }}>
