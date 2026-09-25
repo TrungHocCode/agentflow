@@ -62,7 +62,6 @@ class ConversationResponse(BaseModel):
 
 class ConversationMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=20000)
-    model_name: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ConversationTurnResponse(BaseModel):

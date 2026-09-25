@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.execution.ports import ExecutionPort
+from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
 from app.modules.runs.events import (
     DiscardingRunEventPublisher,
@@ -113,6 +114,9 @@ class RunService:
     ) -> RunDocument:
         """Legacy build-phase entry point retained for compatibility."""
 
+        run_metadata = dict(metadata or {})
+        run_metadata.pop("model_name", None)
+        run_metadata["inference_purpose"] = InferencePurpose.PLANNER.value
         run_id = str(uuid.uuid4())
         plan = await self._load_workflow_plan(flow_id)
         logs = [f"[RunService] Initialized Run {run_id} for Flow {flow_id}."]
@@ -130,7 +134,7 @@ class RunService:
                     "logs": logs,
                     "result_storage": [],
                     "mode": "conversation",
-                    "metadata": metadata or {},
+                    "metadata": run_metadata,
                 }
                 result_state = await self.execution_port.create_plan(run_id, initial_state)
                 plan = self._normalize_tasks(result_state.get("plan") or [])
@@ -151,7 +155,7 @@ class RunService:
             plan=plan,
             logs=logs,
             result_storage=result_storage,
-            metadata=metadata or {},
+            metadata=run_metadata,
         )
         await self.save_run_doc(document)
         await self._record_event(
@@ -195,10 +199,10 @@ class RunService:
             user_id,
             definition,
         )
-        document_metadata = {
-            **(metadata or {}),
-            "workflow_snapshot": definition,
-        }
+        document_metadata = dict(metadata or {})
+        document_metadata.pop("model_name", None)
+        document_metadata.pop("inference_purpose", None)
+        document_metadata["workflow_snapshot"] = definition
         document = RunDocument(
             run_id=run_id,
             flow_id=workflow_id,

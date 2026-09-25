@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from app.main import app
 from app.api.dependencies import get_run_query_service, get_workflow_service
+from app.execution.model_router import InferencePurpose
 from app.execution.state import SupervisorOutput, Task
 from app.core.config import settings
 from app.modules.identity.security import create_access_token
@@ -135,9 +136,13 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(message_response.status_code, 200)
         self.assertEqual(message_response.json()["status"], "waiting_for_user")
-        self.assertEqual(message_response.json()["metadata"]["model_name"], "gemma2:latest")
+        self.assertEqual(message_response.json()["metadata"]["inference_purpose"], "planner")
+        self.assertNotIn("model_name", message_response.json()["metadata"])
         self.assertTrue(message_response.json()["metadata"]["use_llm"])
-        mock_get_llm.assert_called_once_with(model_name="gemma2:latest", temperature=0.2)
+        mock_get_llm.assert_called_once_with(
+            purpose=InferencePurpose.PLANNER,
+            temperature=0.2,
+        )
 
         messages_response = await self.client.get(
             f"/api/v1/conversations/{conversation_id}/messages"

@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.execution.state import State, Task
+from app.execution.model_router import InferencePurpose, model_name_for
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.agents.resolver import AgentResolver
@@ -73,8 +74,12 @@ async def supervisor_node(
     if use_llm:
         try:
             from app.execution.llm import get_llm
-            model_name = metadata.get("model_name", "qwen3:8b")
-            llm = get_llm(model_name=model_name, temperature=0.2)
+            purpose = metadata.get(
+                "inference_purpose",
+                InferencePurpose.PLANNER.value,
+            )
+            model_name = model_name_for(purpose)
+            llm = get_llm(purpose=purpose, temperature=0.2)
             resolver = agent_resolver or AgentResolver()
             tool_catalog = await resolver.format_agent_tool_catalog()
             supervisor = SupervisorAgent(
@@ -223,7 +228,8 @@ async def _execute_worker_node(
     if use_llm:
         try:
             from app.execution.llm import get_llm
-            model_name = metadata.get("model_name", "qwen3:8b")
+            purpose = InferencePurpose.WORKER
+            model_name = model_name_for(purpose)
             resolver = agent_resolver or AgentResolver()
             resolved_agent = await resolver.resolve(current_task)
             logs.append(
@@ -242,7 +248,7 @@ async def _execute_worker_node(
                     f"agent policy: {', '.join(resolved_agent.denied_tool_names)}."
                 )
             logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
-            llm = get_llm(model_name=model_name, temperature=0.2)
+            llm = get_llm(purpose=purpose, temperature=0.2)
             worker_agent = AgentResolver.create_agent(
                 resolved=resolved_agent,
                 llm=llm,
