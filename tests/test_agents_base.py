@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Adjust path to import from backend
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
@@ -244,7 +244,11 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        updates = await worker.execute(state)
+        with patch(
+            "app.execution.agents.base.perf_counter",
+            side_effect=[10.0, 10.25, 20.0, 20.2, 30.0, 30.5],
+        ):
+            updates = await worker.execute(state)
 
         # Assertions
         self.mock_llm.bind_tools.assert_called_once_with([add])
@@ -254,6 +258,11 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].status, "done")
         self.assertEqual(updates["result_storage"][0]["result"], "The result is 5.")
         self.assertTrue(any("Executing tool 'add' with args {'a': 2, 'b': 3}" in log for log in updates["logs"]))
+        timings = updates["execution_timings"]
+        self.assertEqual([timing["operation"] for timing in timings], ["llm", "tool", "llm"])
+        self.assertEqual([timing["duration_ms"] for timing in timings], [250.0, 200.0, 500.0])
+        self.assertEqual([timing["iteration"] for timing in timings], [1, 1, 2])
+        self.assertEqual(timings[1]["call_id"], "call_123")
 
     async def test_worker_agent_marks_final_tool_error_as_failed(self):
         @tool

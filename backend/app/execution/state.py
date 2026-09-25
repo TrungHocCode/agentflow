@@ -81,6 +81,7 @@ class State(TypedDict, total=False):
     current_task: Optional[Task]
     logs: Annotated[list[Any], add_logs]
     result_storage: Annotated[list, add_results]
+    execution_timings: Annotated[list[Dict[str, Any]], add_results]
     mode: Literal["conversation", "executing"]
     metadata: Optional[Dict[str, Any]]
 
