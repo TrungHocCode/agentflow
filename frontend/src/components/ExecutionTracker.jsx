@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Clock, Activity, FileText, Timer, Download, XCircle } from 'lucide-react';
 import StructuredText from './StructuredText';
+import TaskStatusBadge from './TaskStatusBadge';
 
 const STATUS_LABELS = {
   pending: 'Chờ duyệt',
@@ -13,17 +14,6 @@ const STATUS_LABELS = {
   cancelled: 'Đã hủy',
   interrupted: 'Bị gián đoạn',
   abandoned: 'Đã dừng'
-};
-
-const TASK_STATUS_LABELS = {
-  pending: 'Chờ đến lượt',
-  queued: 'Đang chờ',
-  running: 'Đang chạy',
-  done: 'Hoàn tất',
-  partial: 'Hoàn tất một phần',
-  completed: 'Hoàn tất',
-  failed: 'Thất bại',
-  skipped: 'Đã bỏ qua'
 };
 
 export default function ExecutionTracker({
@@ -96,7 +86,7 @@ export default function ExecutionTracker({
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', flex: 1 }}>
+      <div className="execution-tracker-grid" style={{ flex: 1 }}>
         {/* Workflow steps */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="glass-panel" style={{ padding: '1.25rem' }}>
@@ -106,14 +96,14 @@ export default function ExecutionTracker({
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {plan.map((t, idx) => (
-                  <div key={t?.id || idx} className="glass-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.75rem 0.875rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
-                      <span style={{ width: '28px', height: '28px', borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, color: '#fff', background: t?.status === 'running' ? 'var(--accent-cyan)' : 'rgba(99,102,241,0.35)', fontSize: '0.8rem', fontWeight: '700' }}>{idx + 1}</span>
-                      <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)' }}>{t?.description || `Bước ${idx + 1}`}</span>
-                    </div>
-                    <span className={`badge ${['done', 'completed'].includes(t?.status) ? 'badge-done' : (t?.status === 'partial' ? 'badge-partial' : (t?.status === 'failed' ? 'badge-failed' : (t?.status === 'running' ? 'badge-running' : 'badge-pending')))}`}>
-                      {TASK_STATUS_LABELS[t?.status] || 'Chờ đến lượt'}
+                  <div key={t?.id || idx} className="glass-card execution-task-row">
+                    <span className={`execution-task-number${t?.status === 'running' ? ' execution-task-number--running' : ''}`}>
+                      {idx + 1}
                     </span>
+                    <span className="execution-task-description">
+                      {t?.description || `Bước ${idx + 1}`}
+                    </span>
+                    <TaskStatusBadge status={t?.status} />
                   </div>
                 ))}
               </div>
@@ -151,9 +141,7 @@ export default function ExecutionTracker({
                     <span style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--accent-cyan)' }}>
                       Bước {res?.task_id || i + 1}
                     </span>
-                    <span className={`badge ${res?.status === 'failed' ? 'badge-failed' : (res?.status === 'partial' ? 'badge-partial' : 'badge-done')}`}>
-                      {TASK_STATUS_LABELS[res?.status] || 'Hoàn tất'}
-                    </span>
+                    <TaskStatusBadge status={res?.status || 'done'} />
                   </div>
                   <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{res?.description || ''}</p>
                   <div style={{ background: 'rgba(15,23,42,0.45)', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8125rem', color: '#e2e8f0', maxHeight: '300px', overflowY: 'auto' }}>

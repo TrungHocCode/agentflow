@@ -1,5 +1,6 @@
 import React from 'react';
-import { GitMerge, ArrowDown, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { GitMerge, ArrowDown } from 'lucide-react';
+import TaskStatusBadge from './TaskStatusBadge';
 
 export default function FlowCanvas({ plan }) {
   if (!plan || plan.length === 0) {
@@ -24,21 +25,10 @@ export default function FlowCanvas({ plan }) {
 
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.5rem', padding: '2rem 0' }}>
         {plan.map((task, idx) => {
-          const isDone = task.status === 'done';
+          const isDone = ['done', 'completed'].includes(task.status);
           const isRunning = task.status === 'running';
           const isPartial = task.status === 'partial';
           const isFailed = task.status === 'failed';
-          const statusDetails = {
-            done: { label: 'Hoàn tất', className: 'badge-done', Icon: CheckCircle },
-            completed: { label: 'Hoàn tất', className: 'badge-done', Icon: CheckCircle },
-            partial: { label: 'Hoàn tất một phần', className: 'badge-partial', Icon: AlertCircle },
-            running: { label: 'Đang chạy', className: 'badge-running', Icon: Clock },
-            failed: { label: 'Thất bại', className: 'badge-failed', Icon: AlertCircle },
-            skipped: { label: 'Đã bỏ qua', className: 'badge-pending', Icon: Clock },
-            pending: { label: 'Chờ đến lượt', className: 'badge-pending', Icon: Clock }
-          }[task.status] || { label: 'Chờ đến lượt', className: 'badge-pending', Icon: Clock };
-          const StatusIcon = statusDetails.Icon;
-
           return (
             <React.Fragment key={task.id}>
               {idx > 0 && (
@@ -78,10 +68,7 @@ export default function FlowCanvas({ plan }) {
                     <span style={{ fontSize: '0.9375rem', fontWeight: '700', color: '#fff' }}>Bước {idx + 1}</span>
                   </div>
 
-                  <span className={`badge ${statusDetails.className}`}>
-                    <StatusIcon style={{ width: '12px', height: '12px' }} />
-                    {statusDetails.label}
-                  </span>
+                  <TaskStatusBadge status={task.status} />
                 </div>
 
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', lineHeight: 1.4 }}>
