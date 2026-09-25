@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 import shutil
+from typing import Any
 from unittest.mock import patch, MagicMock
 
 # Adjust path to import from backend
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 import app.execution.tools.registry
 from app.execution.state import Task, add_messages, add_results, update_plan
 from app.execution.tools.base import ToolRegistry
+from app.execution.tools.contracts import failure_result, parse_tool_result, success_result
 from app.execution.tools.news_crawler_tool import normalize_news_url
 
 
@@ -54,6 +56,8 @@ class TestToolsAndReducers(unittest.TestCase):
         tools = ToolRegistry.list_tools()
         self.assertIn("python_executor", tools)
         self.assertIn("web_search", tools)
+        self.assertIn("web_search_batch", tools)
+        self.assertIn("news_crawler_batch", tools)
         self.assertIn("file_writer", tools)
         self.assertIn("file_reader", tools)
         self.assertIn("database_query", tools)
@@ -210,6 +214,141 @@ class TestToolsAndReducers(unittest.TestCase):
         self.assertTrue("Successfully generated Markdown report" in res)
         report_file = os.path.join(os.getcwd(), "workspace_data", "reports", "tech_report.md")
         self.assertTrue(os.path.exists(report_file))
+
+
+class FakeSearchTool:
+    def invoke(self, arguments: dict[str, Any]) -> str:
+        query = arguments["query"]
+        if query == "failed angle":
+            return failure_result(
+                "timeout",
+                code="search_timeout",
+                message="Provider timed out.",
+                tool_name="web_search",
+            ).to_json()
+        url = "https://example.com/shared#top" if "overview" in query else "https://example.com/shared"
+        return success_result(
+            {
+                "query": query,
+                "results": [{"rank": 1, "title": query, "url": url, "snippet": "Evidence snippet"}],
+            },
+            tool_name="web_search",
+        ).to_json()
+
+
+class FakeCrawlerTool:
+    def invoke(self, arguments: dict[str, Any]) -> str:
+        url = arguments["url"]
+        if "unavailable" in url:
+            return failure_result(
+                "http_error",
+                code="upstream_error",
+                message="Source unavailable.",
+                tool_name="news_crawler",
+            ).to_json()
+        return success_result(
+            {
+                "content_type": "article",
+                "title": "Research article",
+                "text": "A sufficiently detailed source body for downstream evidence synthesis.",
+                "metadata": {"author": "Example Author"},
+            },
+            tool_name="news_crawler",
+        ).to_json()
+
+
+class TestBatchResearchTools(unittest.TestCase):
+    def test_search_batch_deduplicates_citations_and_keeps_partial_query_errors(self):
+        batch_tool = ToolRegistry.get_tool("web_search_batch")
+        with patch.object(ToolRegistry, "get_tool", return_value=FakeSearchTool()):
+            raw_result = batch_tool.invoke(
+                {
+                    "queries": ["overview of technology", "implementation details", "failed angle"],
+                    "max_results_per_query": 4,
+                    "concurrency": 2,
+                }
+            )
+
+        result = parse_tool_result(raw_result, tool_name="web_search_batch")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.data["deduplicated_count"], 1)
+        self.assertEqual(len(result.data["results"]), 1)
+        self.assertEqual(
+            result.data["results"][0]["matched_queries"],
+            ["overview of technology", "implementation details"],
+        )
+        self.assertEqual(result.data["queries"][2]["status"], "timeout")
+        self.assertEqual(result.metadata.model_extra["max_concurrency"], 2)
+
+    def test_crawl_batch_preserves_source_results_and_isolates_failures(self):
+        batch_tool = ToolRegistry.get_tool("news_crawler_batch")
+        with (
+            patch.object(ToolRegistry, "get_tool", return_value=FakeCrawlerTool()),
+            patch(
+                "app.execution.tools.news_crawler_batch_tool.validate_external_url",
+                side_effect=lambda url: (url, None),
+            ),
+        ):
+            raw_result = batch_tool.invoke(
+                {
+                    "urls": [
+                        "https://example.com/article",
+                        "https://example.com/unavailable",
+                        "https://example.com/article#section",
+                    ],
+                    "concurrency": 2,
+                }
+            )
+
+        result = parse_tool_result(raw_result, tool_name="news_crawler_batch")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.metadata.model_extra["unique_url_count"], 2)
+        self.assertEqual(len(result.data["sources"]), 2)
+        self.assertTrue(result.data["sources"][0]["ok"])
+        self.assertEqual(
+            result.data["sources"][0]["data"]["text"],
+            "A sufficiently detailed source body for downstream evidence synthesis.",
+        )
+        self.assertFalse(result.data["sources"][1]["ok"])
+        self.assertEqual(result.data["sources"][1]["error"]["code"], "upstream_error")
+
+    def test_crawl_batch_rejects_private_targets_before_invoking_crawler(self):
+        batch_tool = ToolRegistry.get_tool("news_crawler_batch")
+        with patch(
+            "app.execution.tools.news_crawler_batch_tool.validate_external_url",
+            return_value=(None, "Private and local network targets are blocked."),
+        ), patch.object(ToolRegistry, "get_tool") as get_tool:
+            raw_result = batch_tool.invoke(
+                {"urls": ["http://127.0.0.1:8000/internal"]}
+            )
+
+        result = parse_tool_result(raw_result, tool_name="news_crawler_batch")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.data["sources"][0]["status"], "blocked")
+        self.assertEqual(result.data["sources"][0]["error"]["code"], "outbound_url_blocked")
+        get_tool.assert_not_called()
+
+    def test_crawl_batch_bounds_redundant_article_content_for_local_model_context(self):
+        from app.execution.tools.news_crawler_batch_tool import MAX_SOURCE_TEXT_CHARS, _source_record
+
+        result = success_result(
+            {
+                "content_type": "article",
+                "text": "x" * (MAX_SOURCE_TEXT_CHARS + 100),
+                "markdown": "duplicate representation",
+                "paragraphs": ["duplicate representation"],
+            },
+            tool_name="news_crawler",
+        )
+
+        source = _source_record("https://example.com/article", result)
+        self.assertEqual(len(source["data"]["text"]), MAX_SOURCE_TEXT_CHARS)
+        self.assertTrue(source["data"]["text_truncated"])
+        self.assertEqual(source["data"]["original_text_length"], MAX_SOURCE_TEXT_CHARS + 100)
+        self.assertNotIn("markdown", source["data"])
+        self.assertNotIn("paragraphs", source["data"])
 
 
 if __name__ == "__main__":

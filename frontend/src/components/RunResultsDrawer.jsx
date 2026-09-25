@@ -295,7 +295,7 @@ export default function RunResultsDrawer({
                           <h3 style={{ color: 'var(--accent-cyan)', fontSize: '0.9rem' }}>
                             Bước {item?.task_id || index + 1} · {item?.description || 'Nội dung bước'}
                           </h3>
-                          <span className={`badge ${item?.status === 'failed' ? 'badge-failed' : 'badge-done'}`}>{item?.status || 'done'}</span>
+                          <span className={`badge ${item?.status === 'failed' ? 'badge-failed' : (item?.status === 'partial' ? 'badge-partial' : 'badge-done')}`}>{item?.status === 'partial' ? 'Hoàn tất một phần' : (item?.status || 'done')}</span>
                         </div>
                         <StructuredText text={text} />
                       </article>
@@ -318,7 +318,7 @@ export default function RunResultsDrawer({
                         <h3 style={{ color: 'var(--accent-cyan)', fontSize: '0.9rem' }}>
                           Bước {item?.task_id || index + 1} · {item?.description || 'Nội dung bước'}
                         </h3>
-                        <span className={`badge ${item?.status === 'failed' ? 'badge-failed' : 'badge-done'}`}>{item?.status || 'done'}</span>
+                        <span className={`badge ${item?.status === 'failed' ? 'badge-failed' : (item?.status === 'partial' ? 'badge-partial' : 'badge-done')}`}>{item?.status === 'partial' ? 'Hoàn tất một phần' : (item?.status || 'done')}</span>
                       </div>
                       <StructuredText text={resultText(item)} />
                     </article>

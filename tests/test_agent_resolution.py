@@ -47,7 +47,13 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved.profile.name, "source_researcher")
         self.assertEqual(
             {tool.name for tool in resolved.tools},
-            {"web_search", "news_crawler", "http_request"},
+            {
+                "web_search",
+                "web_search_batch",
+                "news_crawler",
+                "news_crawler_batch",
+                "http_request",
+            },
         )
 
     async def test_task_tool_override_cannot_expand_profile_permissions(self) -> None:
@@ -118,7 +124,7 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         catalog = await AgentResolver().format_agent_tool_catalog()
 
         self.assertIn(
-            "- source_researcher: web_search, news_crawler, http_request",
+            "- source_researcher: web_search, web_search_batch, news_crawler, news_crawler_batch, http_request",
             catalog,
         )
         self.assertIn("news_scraper -> news_crawler", catalog)
@@ -160,9 +166,37 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
             "Authorized tools for this task (use these exact names only): news_crawler.",
             agent.system_prompt,
         )
-        self.assertIn("up to three linked articles", agent.system_prompt)
-        self.assertIn("article_count is zero", agent.system_prompt)
+        self.assertIn("up to eight selected URLs", agent.system_prompt)
+        self.assertIn("batch success does not mean every source succeeded", agent.system_prompt)
         self.assertNotIn("news_scraper", agent.system_prompt)
+
+    async def test_source_researcher_prompt_uses_batched_discovery_and_crawling(self) -> None:
+        resolver = AgentResolver()
+        task = Task(
+            id=1,
+            node="source_researcher",
+            status="running",
+            description="Research current open-source vector databases",
+        )
+        resolved = await resolver.resolve(task)
+        agent = resolver.create_agent(
+            resolved=resolved,
+            llm=MagicMock(spec=BaseChatModel),
+            task=task,
+        )
+
+        self.assertIn("Use web_search_batch with at most five queries", agent.system_prompt)
+        self.assertIn("news_crawler_batch", agent.system_prompt)
+        self.assertIn("up to eight selected URLs", agent.system_prompt)
+        self.assertIn("compact evidence dossier for downstream agents", agent.system_prompt)
+        for instruction in (
+            "one entry per named subject",
+            "A search snippet",
+            "coverage status (COMPLETE or PARTIAL)",
+            "one focused follow-up search batch",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, agent.system_prompt)
 
     async def test_synthesis_and_report_agents_get_tool_capability_guidance(self) -> None:
         resolver = AgentResolver()
@@ -192,6 +226,48 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
             )
 
             self.assertIn(expected_guidance, agent.system_prompt)
+
+        synthesis_task = Task(
+            id=1,
+            node="synthesis_agent",
+            status="running",
+            description="Compare three named models using the research dossier",
+        )
+        synthesis_profile = await resolver.resolve(synthesis_task)
+        synthesis_agent = resolver.create_agent(
+            resolved=synthesis_profile,
+            llm=MagicMock(spec=BaseChatModel),
+            task=synthesis_task,
+        )
+        self.assertIn("Preserve every requested subject", synthesis_agent.system_prompt)
+        self.assertIn("unsupported prose instead of source-backed observations", synthesis_agent.system_prompt)
+
+    async def test_report_agent_prompt_requires_analysis_and_evidence_discipline(self) -> None:
+        resolver = AgentResolver()
+        task = Task(
+            id=1,
+            node="report_agent",
+            status="running",
+            description="Analyze the research evidence and write the final report",
+        )
+        resolved = await resolver.resolve(task)
+        agent = resolver.create_agent(
+            resolved=resolved,
+            llm=MagicMock(spec=BaseChatModel),
+            task=task,
+        )
+
+        for instruction in (
+            "Do not merely reorder, list, or paraphrase crawler output.",
+            "Compare independent sources",
+            "Distinguish observed facts from reasoned inferences",
+            "Cite important factual claims inline with exact supplied source URLs",
+            "When upstream research marks coverage as partial",
+            "instead of manufacturing depth",
+            "return a one-line completion record",
+        ):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, agent.system_prompt)
 
     async def test_legacy_tool_name_in_agent_id_maps_to_role_profile(self) -> None:
         resolver = AgentResolver()

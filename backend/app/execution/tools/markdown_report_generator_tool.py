@@ -22,13 +22,28 @@ MAX_REPORT_BYTES = 5 * 1024 * 1024
 
 class SectionItem(BaseModel):
     header: str = Field(min_length=1, max_length=200, description="Section heading/title.")
-    content: str = Field(min_length=1, description="Section markdown text content or structured evidence.")
+    content: str = Field(
+        min_length=1,
+        description=(
+            "Developed Markdown analysis grounded in the supplied research. Explain findings and implications, "
+            "and cite factual claims inline with the exact source URLs when available."
+        ),
+    )
 
 
 class MarkdownReportInput(BaseModel):
     title: str = Field(min_length=1, max_length=300, description="Title of the Markdown report.")
-    summary: str | None = Field(default=None, description="Executive summary or key highlights.")
-    sections: list[SectionItem] = Field(min_length=1, description="Report sections containing evidence.")
+    summary: str | None = Field(
+        default=None,
+        description="Concise executive summary stating the central answer, strongest findings, and material caveat.",
+    )
+    sections: list[SectionItem] = Field(
+        min_length=1,
+        description=(
+            "Distinct analytical sections organized around the user's question; synthesize evidence instead of "
+            "repeating raw crawl output."
+        ),
+    )
     filename: str = Field(default="summary_report.md", max_length=200)
 
 
@@ -107,7 +122,10 @@ def markdown_report_generator(
         file_path = os.path.join(reports_dir, safe_filename)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        rendered_sections = [(section.header, _render_section_content(section.content), section.content) for section in sections]
+        rendered_sections = [
+            (section.header, _render_section_content(section.content), section.content)
+            for section in sections
+        ]
         source_urls: list[str] = []
         for _, content, original_content in rendered_sections:
             for url in _extract_structured_source_urls(original_content) + _extract_source_urls(content):

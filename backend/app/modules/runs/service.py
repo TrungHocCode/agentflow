@@ -438,16 +438,30 @@ class RunService:
                         await self._record_event_object(event)
 
             all_finished = bool(run_doc.plan) and all(
-                task.status in ("done", "failed", "skipped")
+                task.status in ("done", "partial", "failed", "skipped")
                 for task in run_doc.plan
             )
             has_failed_task = any(task.status == "failed" for task in run_doc.plan)
+            partial_task_ids = [task.id for task in run_doc.plan if task.status == "partial"]
             if has_failed_task:
                 run_doc.status = "failed"
                 run_doc.error_code = "task_execution_failed"
                 run_doc.error_message = "One or more workflow tasks failed."
             else:
                 run_doc.status = "completed" if all_finished else "interrupted"
+                if partial_task_ids:
+                    run_doc.metadata["partial_task_ids"] = partial_task_ids
+                    run_doc.metadata["has_partial_results"] = True
+                    existing_warnings = list(run_doc.metadata.get("execution_warnings") or [])
+                    for task in run_doc.plan:
+                        if task.status != "partial":
+                            continue
+                        warning = task.error or f"Task {task.id} completed with incomplete source coverage."
+                        if warning not in existing_warnings:
+                            existing_warnings.append(warning)
+                    run_doc.metadata["execution_warnings"] = existing_warnings
+                    if run_doc.status == "completed":
+                        run_doc.metadata["partial_completion"] = True
             if run_doc.status == "interrupted":
                 run_doc.error_code = "execution_incomplete"
                 run_doc.error_message = "Execution ended before all tasks completed."

@@ -30,6 +30,16 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "assistant_message is required and must not be blank: for clarify it is the question; for propose_plan "
     "it briefly explains the plan and asks for approval; for answer it is the direct response.\n"
     "Available agent roles and their currently registered, authorized tools are listed below.\n"
+    "For broad research, plan source_researcher to discover candidate URLs before collecting evidence; that agent "
+    "can search complementary query angles and crawl several selected URLs in bounded batches. Keep synthesis and "
+    "reporting downstream of source collection, and use separate tasks only for genuinely distinct deliverables. "
+    "For broad research, normally leave source_researcher Task.tool_names empty so it can use both batch tools; "
+    "narrow its tools only when the request has a specific, limited operation.\n"
+    "For a comparison that names multiple subjects, preserve every subject in the source_researcher task description, "
+    "along with the requested comparison dimensions and the requirement to find directly relevant primary sources "
+    "for each subject. Require the researcher to report any uncovered subject explicitly. A successful tool call or "
+    "HTTP 200 is not proof that research coverage is complete. Task.tool_names is an authorization allowlist, not "
+    "a prescribed sequence or count of tool calls; the agent chooses calls dynamically.\n"
     "Use the concrete role name in each Task.node instead of the generic 'worker' whenever the role is known.\n"
     "When setting Task.tool_names, use only exact tool names listed for that role; never invent names or use aliases.\n"
     "If no narrower tool selection is needed, leave Task.tool_names empty to use the role's authorized tools.\n"
@@ -172,9 +182,29 @@ async def _execute_worker_node(
     all_registered_tools = ToolRegistry.get_all_tools()
 
     if "crawler" in node_name or "news" in node_name or "cào" in node_name:
-        tool_instances = [t for t in all_registered_tools if t.name in ("news_crawler", "web_search", "http_request")]
+        tool_instances = [
+            tool
+            for tool in all_registered_tools
+            if tool.name in {
+                "news_crawler",
+                "news_crawler_batch",
+                "web_search",
+                "web_search_batch",
+                "http_request",
+            }
+        ]
     elif "search" in node_name or "web" in node_name or "tìm" in node_name:
-        tool_instances = [t for t in all_registered_tools if t.name in ("web_search", "news_crawler", "http_request")]
+        tool_instances = [
+            tool
+            for tool in all_registered_tools
+            if tool.name in {
+                "web_search",
+                "web_search_batch",
+                "news_crawler",
+                "news_crawler_batch",
+                "http_request",
+            }
+        ]
     elif "summarizer" in node_name or "summary" in node_name or "tóm" in node_name or "tổng" in node_name:
         tool_instances = [t for t in all_registered_tools if t.name in ("text_summarizer", "file_reader")]
     elif "report" in node_name or "writer" in node_name or "coder" in node_name or "markdown" in node_name or "báo cáo" in node_name:

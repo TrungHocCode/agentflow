@@ -239,6 +239,37 @@ class FailedExecutionPort(FakeExecutionPort):
         }
 
 
+class PartialExecutionPort(FakeExecutionPort):
+    async def _stream(self, run_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+        partial_task = make_task(1, status="partial").model_copy(
+            update={"error": "One research query returned no results."}
+        )
+        yield {
+            "worker_node": {
+                "logs": ["Source research completed with one missing query."],
+                "plan": [partial_task],
+                "result_storage": [{
+                    "task_id": 1,
+                    "result": "Evidence collected. Coverage warning: one query failed.",
+                    "status": "partial",
+                    "error": partial_task.error,
+                }],
+            }
+        }
+        report_task = make_task(2, dependencies=[1], status="done")
+        yield {
+            "worker_node": {
+                "logs": ["Report created from available evidence."],
+                "plan": [report_task],
+                "result_storage": [{
+                    "task_id": 2,
+                    "result": "Report created with a source coverage caveat.",
+                    "status": "done",
+                }],
+            }
+        }
+
+
 class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
     def test_modules_do_not_depend_on_infrastructure_or_sqlalchemy(self) -> None:
         modules_root = Path(__file__).resolve().parents[1] / "backend" / "app" / "modules"
@@ -403,6 +434,32 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed.status, "failed")
         self.assertEqual(completed.error_code, "task_execution_failed")
         self.assertEqual(repository.events[document.run_id][-1].type, "run_failed")
+
+    async def test_partial_source_task_can_finish_run_and_is_reported(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=PartialExecutionPort(),
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+        document = RunDocument(
+            run_id="partial-source-run",
+            flow_id="workflow-1",
+            status="queued",
+            mode="executing",
+            plan=[make_task(1), make_task(2, dependencies=[1])],
+        )
+        await repository.save(document)
+
+        completed = await service.execute_queued_run(document.run_id)
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual([task.status for task in completed.plan], ["partial", "done"])
+        self.assertTrue(completed.metadata["partial_completion"])
+        self.assertTrue(completed.metadata["has_partial_results"])
+        self.assertEqual(completed.metadata["partial_task_ids"], [1])
+        self.assertEqual(repository.events[document.run_id][-1].type, "run_completed")
 
 
 class FakeConversationRepository:

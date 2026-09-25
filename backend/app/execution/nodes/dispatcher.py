@@ -12,7 +12,7 @@ class TaskDispatcher:
         if not plan:
             return {"current_task": None, "logs": ["[TaskDispatcher] Plan is empty."]}
 
-        completed_task_ids = {t.id for t in plan if t.status == "done"}
+        completed_task_ids = {t.id for t in plan if t.status in {"done", "partial"}}
         failed_task_ids = {t.id for t in plan if t.status in {"failed", "skipped"}}
 
         # Propagate a failed prerequisite through the whole dependency chain in
@@ -67,7 +67,7 @@ class TaskDispatcher:
             }
 
         # Check if all tasks are finished
-        all_finished = all(t.status in ("done", "failed", "skipped") for t in plan)
+        all_finished = all(t.status in ("done", "partial", "failed", "skipped") for t in plan)
         if all_finished:
             return {
                 "current_task": None,

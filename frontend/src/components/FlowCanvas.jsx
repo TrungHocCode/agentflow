@@ -1,5 +1,5 @@
 import React from 'react';
-import { GitMerge, ArrowDown, CheckCircle, Clock } from 'lucide-react';
+import { GitMerge, ArrowDown, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 
 export default function FlowCanvas({ plan }) {
   if (!plan || plan.length === 0) {
@@ -26,6 +26,18 @@ export default function FlowCanvas({ plan }) {
         {plan.map((task, idx) => {
           const isDone = task.status === 'done';
           const isRunning = task.status === 'running';
+          const isPartial = task.status === 'partial';
+          const isFailed = task.status === 'failed';
+          const statusDetails = {
+            done: { label: 'Hoàn tất', className: 'badge-done', Icon: CheckCircle },
+            completed: { label: 'Hoàn tất', className: 'badge-done', Icon: CheckCircle },
+            partial: { label: 'Hoàn tất một phần', className: 'badge-partial', Icon: AlertCircle },
+            running: { label: 'Đang chạy', className: 'badge-running', Icon: Clock },
+            failed: { label: 'Thất bại', className: 'badge-failed', Icon: AlertCircle },
+            skipped: { label: 'Đã bỏ qua', className: 'badge-pending', Icon: Clock },
+            pending: { label: 'Chờ đến lượt', className: 'badge-pending', Icon: Clock }
+          }[task.status] || { label: 'Chờ đến lượt', className: 'badge-pending', Icon: Clock };
+          const StatusIcon = statusDetails.Icon;
 
           return (
             <React.Fragment key={task.id}>
@@ -46,7 +58,15 @@ export default function FlowCanvas({ plan }) {
                   width: '100%', 
                   maxWidth: '520px', 
                   padding: '1.25rem',
-                  border: isRunning ? '1px solid var(--accent-cyan)' : (isDone ? '1px solid rgba(16,185,129,0.4)' : '1px solid var(--glass-border)'),
+                  border: isRunning
+                    ? '1px solid var(--accent-cyan)'
+                    : isDone
+                      ? '1px solid rgba(16,185,129,0.4)'
+                      : isPartial
+                        ? '1px solid rgba(197,150,91,0.55)'
+                        : isFailed
+                          ? '1px solid rgba(189,110,98,0.45)'
+                          : '1px solid var(--glass-border)',
                   boxShadow: isRunning ? '0 0 25px rgba(6,182,212,0.3)' : 'none'
                 }}
               >
@@ -58,9 +78,9 @@ export default function FlowCanvas({ plan }) {
                     <span style={{ fontSize: '0.9375rem', fontWeight: '700', color: '#fff' }}>Bước {idx + 1}</span>
                   </div>
 
-                  <span className={`badge ${isDone ? 'badge-done' : (isRunning ? 'badge-running' : 'badge-pending')}`}>
-                    {isDone ? <CheckCircle style={{ width: '12px', height: '12px' }} /> : <Clock style={{ width: '12px', height: '12px' }} />}
-                    {{ done: 'Hoàn tất', completed: 'Hoàn tất', running: 'Đang chạy', failed: 'Thất bại', skipped: 'Đã bỏ qua', pending: 'Chờ đến lượt' }[task.status] || 'Chờ đến lượt'}
+                  <span className={`badge ${statusDetails.className}`}>
+                    <StatusIcon style={{ width: '12px', height: '12px' }} />
+                    {statusDetails.label}
                   </span>
                 </div>
 

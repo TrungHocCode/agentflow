@@ -7,6 +7,7 @@ const TASK_STATUS = {
   queued: { label: 'Đang chờ', color: 'var(--accent-amber)', icon: Circle },
   running: { label: 'Đang chạy', color: 'var(--accent-cyan)', icon: LoaderCircle },
   done: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
+  partial: { label: 'Hoàn tất một phần', color: 'var(--accent-amber)', icon: AlertCircle },
   completed: { label: 'Hoàn tất', color: 'var(--accent-emerald)', icon: CheckCircle2 },
   failed: { label: 'Thất bại', color: 'var(--accent-rose)', icon: AlertCircle },
   skipped: { label: 'Bỏ qua', color: 'var(--text-muted)', icon: SkipForward }

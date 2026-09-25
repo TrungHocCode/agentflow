@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 from app.execution.state import State, Task, SupervisorOutput
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.agents.registry import AgentRegistry
+from app.execution.tools.contracts import success_result
 
 
 class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
@@ -296,6 +297,204 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updates["current_task"].status, "failed")
         self.assertIn("upstream service unavailable", updates["current_task"].error)
+
+    async def test_worker_agent_keeps_successful_sources_when_another_source_fails(self):
+        @tool
+        def search_source(query: str) -> str:
+            """Returns one independently successful or failed search result."""
+            if query == "missing source":
+                return "Error: search provider returned no results"
+            return f"Verified evidence for {query}"
+
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="Search for evidence and report gaps.",
+            llm=self.mock_llm,
+            tools=[search_source],
+        )
+        mock_llm_with_tools = AsyncMock()
+        self.mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm_with_tools.ainvoke.side_effect = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "search_source", "args": {"query": "Claude"}, "id": "call-claude"},
+                    {"name": "search_source", "args": {"query": "missing source"}, "id": "call-missing"},
+                ],
+            ),
+            AIMessage(content="Claude was verified from an available source."),
+        ]
+        current_task = Task(
+            id=1,
+            node="source_researcher",
+            status="running",
+            description="Research several model sources",
+        )
+
+        updates = await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {},
+            }
+        )
+
+        self.assertEqual(updates["current_task"].status, "partial")
+        self.assertEqual(updates["result_storage"][0]["status"], "partial")
+        self.assertIn("missing source", updates["result_storage"][0]["result"])
+        self.assertIn("no results", updates["current_task"].error)
+
+    async def test_worker_agent_fails_when_usable_source_coverage_is_below_half(self):
+        @tool
+        def search_source(query: str) -> str:
+            """Returns one successful source among three requested sources."""
+            return "Verified evidence" if query == "available" else "Error: no results"
+
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="Search for evidence and report gaps.",
+            llm=self.mock_llm,
+            tools=[search_source],
+        )
+        mock_llm_with_tools = AsyncMock()
+        self.mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm_with_tools.ainvoke.side_effect = [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "search_source", "args": {"query": "available"}, "id": "call-available"},
+                    {"name": "search_source", "args": {"query": "missing one"}, "id": "call-missing-one"},
+                    {"name": "search_source", "args": {"query": "missing two"}, "id": "call-missing-two"},
+                ],
+            ),
+            AIMessage(content="A complete report based on this limited result."),
+        ]
+        current_task = Task(
+            id=1,
+            node="source_researcher",
+            status="running",
+            description="Research three distinct sources",
+        )
+
+        updates = await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {},
+            }
+        )
+
+        self.assertEqual(updates["current_task"].status, "failed")
+        self.assertIn("1 of 3", updates["current_task"].error)
+        self.assertIn("at least 2", updates["current_task"].error)
+
+    async def test_worker_agent_applies_coverage_threshold_inside_partial_batch(self):
+        @tool
+        def search_batch(queries: list[str]) -> str:
+            """Returns per-query search coverage for a batch."""
+            return success_result(
+                {
+                    "queries": [
+                        {"query": "one", "status": "success", "result_count": 2},
+                        {"query": "two", "status": "success", "result_count": 1},
+                        {
+                            "query": "three",
+                            "status": "empty",
+                            "result_count": 0,
+                            "error": {"code": "no_results", "message": "No results."},
+                        },
+                    ],
+                    "results": [],
+                },
+                tool_name="web_search_batch",
+                status="partial",
+            ).to_json()
+
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="Search multiple sources and report coverage.",
+            llm=self.mock_llm,
+            tools=[search_batch],
+        )
+        mock_llm_with_tools = AsyncMock()
+        self.mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm_with_tools.ainvoke.side_effect = [
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "search_batch",
+                    "args": {"queries": ["one", "two", "three"]},
+                    "id": "call-batch",
+                }],
+            ),
+            AIMessage(content="Two of three query angles returned evidence."),
+        ]
+        current_task = Task(
+            id=1,
+            node="source_researcher",
+            status="running",
+            description="Research multiple query angles",
+        )
+
+        updates = await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {},
+            }
+        )
+
+        self.assertEqual(updates["current_task"].status, "partial")
+        self.assertIn("2/3 usable", updates["current_task"].error)
+
+    async def test_worker_agent_does_not_mark_recovered_retry_as_partial(self):
+        calls = {"count": 0}
+
+        @tool
+        def search_source(query: str) -> str:
+            """Returns a temporary failure once, then a successful retry."""
+            calls["count"] += 1
+            return "Verified evidence" if calls["count"] == 2 else "Error: temporary provider failure"
+        worker = WorkerAgent(
+            name="Researcher",
+            system_prompt="Retry a transient search failure.",
+            llm=self.mock_llm,
+            tools=[search_source],
+        )
+        mock_llm_with_tools = AsyncMock()
+        self.mock_llm.bind_tools.return_value = mock_llm_with_tools
+        mock_llm_with_tools.ainvoke.side_effect = [
+            AIMessage(content="", tool_calls=[{"name": "search_source", "args": {"query": "same"}, "id": "call-1"}]),
+            AIMessage(content="", tool_calls=[{"name": "search_source", "args": {"query": "same"}, "id": "call-2"}]),
+            AIMessage(content="The search succeeded after retry."),
+        ]
+        current_task = Task(id=1, node="source_researcher", status="running", description="Search one source")
+
+        updates = await worker.execute(
+            {
+                "messages": [],
+                "plan": [current_task],
+                "current_task": current_task,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+                "metadata": {},
+            }
+        )
+
+        self.assertEqual(updates["current_task"].status, "done")
 
 
 

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.execution.graph import supervisor_node, worker_node
+from app.execution.graph import SUPERVISOR_SYSTEM_PROMPT, supervisor_node, worker_node
 from app.execution.state import Task
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
 from app.infrastructure.redis.event_publisher import InMemoryRunEventPublisher
@@ -18,6 +18,11 @@ from app.modules.runs.service import RunService
 class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         os.environ["TESTING"] = "true"
+
+    def test_supervisor_requires_explicit_coverage_for_comparisons(self) -> None:
+        self.assertIn("preserve every subject", SUPERVISOR_SYSTEM_PROMPT)
+        self.assertIn("HTTP 200 is not proof", SUPERVISOR_SYSTEM_PROMPT)
+        self.assertIn("authorization allowlist, not", SUPERVISOR_SYSTEM_PROMPT)
 
     async def test_unavailable_supervisor_model_is_explicit(self) -> None:
         with patch("app.execution.llm.get_llm", side_effect=ConnectionError("Ollama offline")):
