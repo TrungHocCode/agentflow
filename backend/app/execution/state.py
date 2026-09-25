@@ -57,7 +57,7 @@ class Task(BaseModel):
     agent_id: Optional[str] = None
     capability: Optional[str] = None
     tool_names: List[str] = Field(default_factory=list)
-    status: Literal["done", "pending", "running", "failed", "skipped"]
+    status: Literal["done", "partial", "pending", "running", "failed", "skipped"]
     error: Optional[str] = None
     description: str
     dependencies: List[int] = Field(default_factory=list)
@@ -145,6 +145,6 @@ class SupervisorOutput(BaseModel):
 
 class WorkerOutput(BaseModel):
     """Schema cho output của Worker Node"""
-    status: Literal["done", "failed"]
+    status: Literal["done", "partial", "failed"]
     result: str
     error: Optional[str] = None

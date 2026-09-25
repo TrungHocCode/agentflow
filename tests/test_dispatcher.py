@@ -69,6 +69,36 @@ class TestTaskDispatcher(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].id, 2)
         self.assertEqual(updates["plan"][0].status, "skipped")
 
+    async def test_partial_task_satisfies_dependency_and_allows_reporting(self):
+        task1 = Task(
+            id=1,
+            node="source_researcher",
+            status="partial",
+            description="Collect evidence from available sources",
+            error="One query returned no results.",
+        )
+        task2 = Task(
+            id=2,
+            node="report_agent",
+            status="pending",
+            description="Write a report with coverage caveats",
+            dependencies=[1],
+        )
+
+        updates = await self.dispatcher.dispatch(
+            {
+                "messages": [],
+                "plan": [task1, task2],
+                "current_task": None,
+                "logs": [],
+                "result_storage": [],
+                "mode": "executing",
+            }
+        )
+
+        self.assertEqual(updates["current_task"].id, 2)
+        self.assertEqual(updates["current_task"].status, "running")
+
 
 if __name__ == "__main__":
     unittest.main()

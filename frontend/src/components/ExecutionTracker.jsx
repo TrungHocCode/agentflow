@@ -20,6 +20,7 @@ const TASK_STATUS_LABELS = {
   queued: 'Đang chờ',
   running: 'Đang chạy',
   done: 'Hoàn tất',
+  partial: 'Hoàn tất một phần',
   completed: 'Hoàn tất',
   failed: 'Thất bại',
   skipped: 'Đã bỏ qua'
@@ -110,7 +111,7 @@ export default function ExecutionTracker({
                       <span style={{ width: '28px', height: '28px', borderRadius: '50%', display: 'grid', placeItems: 'center', flexShrink: 0, color: '#fff', background: t?.status === 'running' ? 'var(--accent-cyan)' : 'rgba(99,102,241,0.35)', fontSize: '0.8rem', fontWeight: '700' }}>{idx + 1}</span>
                       <span style={{ fontSize: '0.8125rem', color: 'var(--text-primary)' }}>{t?.description || `Bước ${idx + 1}`}</span>
                     </div>
-                    <span className={`badge ${['done', 'completed'].includes(t?.status) ? 'badge-done' : (t?.status === 'running' ? 'badge-running' : 'badge-pending')}`}>
+                    <span className={`badge ${['done', 'completed'].includes(t?.status) ? 'badge-done' : (t?.status === 'partial' ? 'badge-partial' : (t?.status === 'failed' ? 'badge-failed' : (t?.status === 'running' ? 'badge-running' : 'badge-pending')))}`}>
                       {TASK_STATUS_LABELS[t?.status] || 'Chờ đến lượt'}
                     </span>
                   </div>
@@ -149,7 +150,7 @@ export default function ExecutionTracker({
                     <span style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--accent-cyan)' }}>
                       Bước {res?.task_id || i + 1}
                     </span>
-                    <span className={`badge ${res?.status === 'failed' ? 'badge-failed' : 'badge-done'}`}>
+                    <span className={`badge ${res?.status === 'failed' ? 'badge-failed' : (res?.status === 'partial' ? 'badge-partial' : 'badge-done')}`}>
                       {TASK_STATUS_LABELS[res?.status] || 'Hoàn tất'}
                     </span>
                   </div>

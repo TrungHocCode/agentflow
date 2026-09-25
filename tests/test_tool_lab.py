@@ -426,6 +426,27 @@ class TestToolLab(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 2)
         mock_sleep.assert_called_once()
 
+    @patch("app.execution.tools.network_policy.time.sleep")
+    @patch("app.execution.tools.web_search_tool.requests.post")
+    def test_search_retries_deferred_provider_response(self, mock_post, mock_sleep):
+        deferred = MagicMock()
+        deferred.status_code = 202
+        successful = MagicMock()
+        successful.status_code = 200
+        successful.text = (
+            '<div class="result"><a class="result__a" href="https://example.com/official">'
+            'Official source</a><a class="result__url" href="https://example.com/official">'
+            'example.com/official</a></div>'
+        )
+        mock_post.side_effect = [deferred, successful]
+
+        result = run_tool("web_search", {"query": "deferred provider retry"})
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.data["results"][0]["url"], "https://example.com/official")
+        self.assertEqual(mock_post.call_count, 2)
+        mock_sleep.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,13 @@
+import json
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from math import ceil
+from typing import Any, Dict, Iterable, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
-from app.execution.tools.contracts import is_tool_failure, parse_tool_result
+from app.execution.tools.contracts import parse_tool_result
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
@@ -47,12 +49,6 @@ def _run_input_context(state: State) -> str:
     lines.append("Do not replace a provided URL with example.com or another invented URL.")
     lines.append("---------------------------------------\n")
     return "\n".join(lines)
-
-
-def _is_tool_error(value: Any) -> bool:
-    """Detect both structured failures and legacy text errors."""
-
-    return is_tool_failure(value)
 
 
 class BaseAgent(ABC):
@@ -179,6 +175,8 @@ class WorkerAgent(BaseAgent):
     It fetches inputs from result_storage and executes tools to complete the task.
     Tool execution outputs are sanitized and wrapped in <tool_output> tags for safety.
     """
+    MINIMUM_USABLE_SOURCE_RATIO = 0.5
+
     async def execute(self, state: State) -> Dict[str, Any]:
         current_task = state.get("current_task")
         if not current_task:
@@ -219,7 +217,7 @@ class WorkerAgent(BaseAgent):
         status = "done"
         error_msg = None
         final_result = ""
-        last_tool_error: Optional[str] = None
+        tool_outcomes: Dict[str, Dict[str, Any]] = {}
 
         try:
             if self.tools:
@@ -261,15 +259,33 @@ class WorkerAgent(BaseAgent):
                             tool_result = f"Tool '{tool_name}' not found in registry."
                             logs.append(f"[{self.name}] {tool_result}")
 
-                        if _is_tool_error(tool_result):
-                            normalized_tool_result = parse_tool_result(tool_result)
-                            last_tool_error = (
-                                normalized_tool_result.error.message
-                                if normalized_tool_result.error
-                                else str(tool_result)
-                            )
-                        else:
-                            last_tool_error = None
+                        normalized_tool_result = parse_tool_result(
+                            tool_result,
+                            tool_name=tool_name,
+                        )
+                        call_key = json.dumps(
+                            [tool_name, tool_args],
+                            sort_keys=True,
+                            ensure_ascii=False,
+                            default=str,
+                        )
+                        previous_outcome = tool_outcomes.get(call_key)
+                        outcome = {
+                            "tool_name": tool_name,
+                            "arguments": tool_args,
+                            "result": normalized_tool_result,
+                        }
+                        # A successful retry for the same arguments recovers an earlier failure;
+                        # a later failed retry must not discard a result already obtained.
+                        if normalized_tool_result.ok:
+                            if not (
+                                previous_outcome
+                                and previous_outcome["result"].ok
+                                and previous_outcome["result"].status == "success"
+                            ):
+                                tool_outcomes[call_key] = outcome
+                        elif not (previous_outcome and previous_outcome["result"].ok):
+                            tool_outcomes[call_key] = outcome
 
                         # Prompt injection defense: wrap tool output in XML tags
                         wrapped_output = f"<tool_output>\n{str(tool_result)}\n</tool_output>"
@@ -287,10 +303,54 @@ class WorkerAgent(BaseAgent):
                 error_msg = f"Agent exceeded maximum tool execution iterations ({max_iterations})."
                 logs.append(f"[{self.name}] Error: {error_msg}")
 
-            if status == "done" and last_tool_error:
-                status = "failed"
-                error_msg = last_tool_error
-                logs.append(f"[{self.name}] Task failed because the final tool call failed: {error_msg}")
+            if status == "done" and tool_outcomes:
+                failed_outcomes = [
+                    outcome
+                    for outcome in tool_outcomes.values()
+                    if not outcome["result"].ok
+                ]
+                partial_outcomes = [
+                    outcome
+                    for outcome in tool_outcomes.values()
+                    if outcome["result"].ok and outcome["result"].status == "partial"
+                ]
+                successful_outcomes = [
+                    outcome
+                    for outcome in tool_outcomes.values()
+                    if outcome["result"].ok
+                ]
+
+                if failed_outcomes and not successful_outcomes:
+                    status = "failed"
+                    failures = [
+                        outcome["result"].error.message
+                        if outcome["result"].error
+                        else f"{outcome['tool_name']} returned no usable result."
+                        for outcome in failed_outcomes
+                    ]
+                    error_msg = "; ".join(dict.fromkeys(failures))
+                    logs.append(f"[{self.name}] Task failed because all tool calls failed: {error_msg}")
+                elif failed_outcomes or partial_outcomes:
+                    warnings = self._partial_tool_warnings(failed_outcomes, partial_outcomes)
+                    usable_count, source_count = self._tool_outcome_coverage(tool_outcomes.values())
+                    minimum_count = max(1, ceil(source_count * self.MINIMUM_USABLE_SOURCE_RATIO))
+                    if usable_count < minimum_count:
+                        status = "failed"
+                        error_msg = (
+                            "Insufficient source coverage: "
+                            f"{usable_count} of {source_count} sources produced usable evidence; "
+                            f"at least {minimum_count} are required. "
+                            + "; ".join(warnings)
+                        )
+                        logs.append(f"[{self.name}] Task failed due to insufficient source coverage.")
+                    else:
+                        status = "partial"
+                        error_msg = (
+                            f"Partial source coverage ({usable_count}/{source_count} usable): "
+                            + "; ".join(warnings)
+                        )
+                        logs.append(f"[{self.name}] Task completed with partial tool results: {error_msg}")
+                    final_result = f"{str(final_result).rstrip()}\n\n{error_msg}".strip()
 
         except Exception as e:
             status = "failed"
@@ -308,7 +368,7 @@ class WorkerAgent(BaseAgent):
         }
 
         updated_task = current_task.model_copy(update={
-            "status": "done" if status == "done" else "failed",
+            "status": status,
             "error": error_msg
         })
 
@@ -318,3 +378,111 @@ class WorkerAgent(BaseAgent):
             "result_storage": [new_result],
             "logs": logs
         }
+
+    @classmethod
+    def _tool_outcome_coverage(cls, outcomes: Iterable[Dict[str, Any]]) -> tuple[int, int]:
+        """Count usable inputs, requiring at least half of a partial batch to proceed."""
+
+        usable_count = 0
+        source_count = 0
+        for outcome in outcomes:
+            result = outcome["result"]
+            data = result.data if isinstance(result.data, dict) else {}
+            records = data.get("queries")
+            record_kind = "queries"
+            if not isinstance(records, list):
+                records = data.get("sources")
+                record_kind = "sources"
+
+            if isinstance(records, list) and records:
+                source_count += len(records)
+                if record_kind == "queries":
+                    usable_count += sum(
+                        1
+                        for record in records
+                        if isinstance(record, dict)
+                        and record.get("status") in {"success", "partial"}
+                        and int(record.get("result_count") or 0) > 0
+                    )
+                else:
+                    usable_count += sum(
+                        1
+                        for record in records
+                        if isinstance(record, dict) and record.get("ok") is True
+                    )
+                continue
+
+            if result.status != "partial":
+                source_count += 1
+                usable_count += int(result.ok)
+                continue
+
+            metadata = result.metadata.model_extra or {}
+            count_pairs = (
+                ("successful_query_count", "query_count"),
+                ("successful_source_count", "unique_url_count"),
+            )
+            counts = next(
+                (
+                    (metadata.get(success_key), metadata.get(total_key))
+                    for success_key, total_key in count_pairs
+                    if isinstance(metadata.get(success_key), int)
+                    and isinstance(metadata.get(total_key), int)
+                ),
+                None,
+            )
+            if counts:
+                usable_count += counts[0]
+                source_count += counts[1]
+            else:
+                source_count += 1
+                usable_count += int(result.ok)
+
+        return usable_count, source_count
+
+    @staticmethod
+    def _partial_tool_warnings(
+        failed_outcomes: List[Dict[str, Any]],
+        partial_outcomes: List[Dict[str, Any]],
+    ) -> List[str]:
+        """Describe missing source coverage without dumping large tool payloads."""
+
+        warnings: list[str] = []
+        for outcome in failed_outcomes:
+            result = outcome["result"]
+            arguments = outcome["arguments"]
+            subject = arguments.get("query") or arguments.get("url") or outcome["tool_name"]
+            message = result.error.message if result.error else "No usable result returned."
+            warnings.append(f"{subject}: {message}")
+
+        for outcome in partial_outcomes:
+            result = outcome["result"]
+            details = []
+            data = result.data if isinstance(result.data, dict) else {}
+            for collection_name in ("queries", "sources"):
+                records = data.get(collection_name)
+                if not isinstance(records, list):
+                    continue
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    error = record.get("error")
+                    if not error and record.get("ok") is not False:
+                        continue
+                    if isinstance(error, dict):
+                        message = error.get("message") or error.get("code") or "failed"
+                    else:
+                        message = str(error or record.get("status") or "failed")
+                    subject = (
+                        record.get("query")
+                        or record.get("requested_url")
+                        or record.get("url")
+                        or outcome["tool_name"]
+                    )
+                    details.append(f"{subject}: {message}")
+            if details:
+                warnings.extend(details)
+            else:
+                warnings.append(f"{outcome['tool_name']} returned partial results.")
+
+        return list(dict.fromkeys(warnings))

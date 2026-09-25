@@ -158,6 +158,14 @@ def web_search(query: str, max_results: int = 5) -> str:
                     data={"q": normalized_query},
                     timeout=SEARCH_TIMEOUT,
                 )
+                status_code = getattr(response, "status_code", None)
+                transient_status = (
+                    status_code in {202, 408, 425, 429}
+                    or (isinstance(status_code, int) and status_code >= 500)
+                )
+                if transient_status and attempt < MAX_TRANSIENT_ATTEMPTS - 1:
+                    transient_backoff(attempt)
+                    continue
                 break
             except (requests.Timeout, requests.ConnectionError):
                 if attempt == MAX_TRANSIENT_ATTEMPTS - 1:
@@ -191,12 +199,24 @@ def web_search(query: str, max_results: int = 5) -> str:
         status_code=status_code if isinstance(status_code, int) else None,
         content_type="text/html",
     )
-    if not isinstance(status_code, int) or status_code < 200 or status_code >= 300:
-        retryable = status_code in {408, 425, 429} or (isinstance(status_code, int) and status_code >= 500)
+    if (
+        not isinstance(status_code, int)
+        or status_code < 200
+        or status_code >= 300
+        or status_code == 202
+    ):
+        retryable = status_code in {202, 408, 425, 429} or (
+            isinstance(status_code, int) and status_code >= 500
+        )
+        message = (
+            "Search provider returned HTTP 202 without a completed result page."
+            if status_code == 202
+            else f"Search provider returned HTTP status {status_code}."
+        )
         return failure_result(
             "http_error",
             code="unexpected_search_status",
-            message=f"Search provider returned HTTP status {status_code}.",
+            message=message,
             retryable=retryable,
             tool_name="web_search",
             source=source,
