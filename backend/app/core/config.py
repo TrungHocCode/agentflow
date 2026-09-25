@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ARTIFACT_ROOT: str = "workspace_data"
     MAX_RUN_DURATION: int = 3600
     MAX_TASK_CONCURRENCY: int = 1
+    # Opt-in internal instrumentation for local benchmark/evaluation runs only.
+    ENABLE_EXECUTION_BENCHMARK_METRICS: bool = False
 
     class Config:
         env_file = ".env"

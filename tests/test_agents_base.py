@@ -10,6 +10,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
+from app.core.config import settings
 from app.execution.state import State, Task, SupervisorOutput
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.agents.registry import AgentRegistry
@@ -71,7 +72,8 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        updates = await supervisor.execute(state)
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", False):
+            updates = await supervisor.execute(state)
 
         # Assertions
         self.mock_llm.with_structured_output.assert_called_once_with(SupervisorOutput)
@@ -90,6 +92,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["messages"][0].content, "Creating a plan.")
         self.assertEqual(len(updates["plan"]), 1)
         self.assertEqual(updates["plan"][0].description, "Run first task")
+        self.assertNotIn("execution_timings", updates)
 
     async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
         supervisor = SupervisorAgent(
@@ -244,11 +247,12 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        with patch(
-            "app.execution.agents.base.perf_counter",
-            side_effect=[10.0, 10.25, 20.0, 20.2, 30.0, 30.5],
-        ):
-            updates = await worker.execute(state)
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            with patch(
+                "app.execution.agents.base.perf_counter",
+                side_effect=[10.0, 10.25, 20.0, 20.2, 30.0, 30.5],
+            ):
+                updates = await worker.execute(state)
 
         # Assertions
         self.mock_llm.bind_tools.assert_called_once_with([add])

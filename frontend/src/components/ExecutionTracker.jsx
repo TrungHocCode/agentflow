@@ -26,13 +26,6 @@ const TASK_STATUS_LABELS = {
   skipped: 'Đã bỏ qua'
 };
 
-const formatMilliseconds = value => {
-  const milliseconds = Number(value) || 0;
-  return milliseconds >= 1000
-    ? `${(milliseconds / 1000).toFixed(2)}s`
-    : `${milliseconds.toFixed(0)}ms`;
-};
-
 export default function ExecutionTracker({
   currentRun,
   results,
@@ -58,22 +51,6 @@ export default function ExecutionTracker({
   }, [isStreaming]);
 
   const canCancel = ['queued', 'running'].includes(currentRun?.status);
-  const executionMetrics = currentRun?.metadata?.execution_metrics;
-  const executionTimings = currentRun?.metadata?.execution_timings || [];
-  const timedComponents = [
-    ...Object.entries(executionMetrics?.llm?.by_agent || {}).map(([name, stats]) => ({
-      key: `llm-${name}`,
-      type: 'LLM',
-      name,
-      stats
-    })),
-    ...Object.entries(executionMetrics?.tools?.by_tool || {}).map(([name, stats]) => ({
-      key: `tool-${name}`,
-      type: 'Tool',
-      name,
-      stats
-    }))
-  ].sort((left, right) => right.stats.total_ms - left.stats.total_ms);
 
   return (
     <div style={{ flex: 1, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', overflowY: 'auto' }}>
@@ -143,76 +120,6 @@ export default function ExecutionTracker({
             )}
           </div>
 
-          {executionMetrics && (
-            <div className="glass-panel" style={{ padding: '1.25rem' }}>
-              <h3 style={{ fontSize: '0.9375rem', color: '#fff', marginBottom: '0.875rem' }}>
-                Phân tích thời gian
-              </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem', marginBottom: '1rem' }}>
-                {[
-                  { label: 'LLM', stats: executionMetrics.llm },
-                  { label: 'Tools', stats: executionMetrics.tools }
-                ].map(({ label, stats }) => (
-                  <div key={label} className="glass-card" style={{ padding: '0.75rem' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{label}</div>
-                    <div style={{ color: '#fff', fontSize: '1rem', fontWeight: 700, marginTop: '0.25rem' }}>
-                      {formatMilliseconds(stats?.total_ms)}
-                    </div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '0.25rem' }}>
-                      {stats?.call_count || 0} lần gọi · chậm nhất {formatMilliseconds(stats?.max_ms)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {timedComponents.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Theo agent / tool</div>
-                  {timedComponents.map(({ key, type, name, stats }) => (
-                    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', fontSize: '0.75rem' }}>
-                      <span style={{ color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {type} · {name} ({stats.call_count} lần)
-                      </span>
-                      <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                        {formatMilliseconds(stats.total_ms)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {executionMetrics.execute_wall_ms != null && (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '0.75rem' }}>
-                  Tổng thời gian chạy {formatMilliseconds(executionMetrics.execute_wall_ms)}; phần setup/điều phối/chưa quy được vào LLM hoặc tool: {formatMilliseconds(executionMetrics.unattributed_execute_ms)}.
-                </div>
-              )}
-
-              {executionTimings.length > 0 && (
-                <details style={{ marginTop: '0.875rem' }}>
-                  <summary style={{ color: 'var(--text-muted)', fontSize: '0.75rem', cursor: 'pointer' }}>
-                    Chi tiết {executionTimings.length} lần gọi
-                  </summary>
-                  <div style={{ maxHeight: '220px', overflowY: 'auto', marginTop: '0.5rem' }}>
-                    {[...executionTimings]
-                      .sort((left, right) => new Date(left.started_at) - new Date(right.started_at))
-                      .map(timing => (
-                        <div key={timing.span_id} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.7rem' }}>
-                          <span style={{ color: 'var(--text-primary)' }}>
-                            {timing.operation === 'llm' ? 'LLM' : 'Tool'} · {timing.name}
-                            {timing.model ? ` · ${timing.model}` : ''}
-                            {timing.task_id != null ? ` · bước ${timing.task_id}` : ''}
-                            {timing.iteration ? ` · vòng ${timing.iteration}` : ''}
-                          </span>
-                          <span style={{ color: timing.status === 'failed' || timing.result_status === 'failed' ? 'var(--accent-rose)' : 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            {formatMilliseconds(timing.duration_ms)}{timing.status === 'failed' || timing.result_status === 'failed' ? ' · lỗi' : timing.result_status === 'partial' ? ' · một phần' : ''}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
-                </details>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Right Column: Execution Output Artifacts Viewer */}

@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app.execution.state import Task, LogEntry
+from app.shared.execution_metrics import strip_internal_execution_metrics
 
 class RunDocument(BaseModel):
     """Durable schema for run lifecycle and execution history."""
@@ -104,3 +105,8 @@ class RunResponse(BaseModel):
     execution_time_ms: float = 0.0
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("metadata")
+    @classmethod
+    def hide_internal_benchmark_metrics(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return strip_internal_execution_metrics(value)

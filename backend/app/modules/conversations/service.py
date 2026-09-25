@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.config import settings
 from app.execution.ports import ExecutionPort
 from app.execution.state import State, Task
 from app.modules.conversations.models import (
@@ -294,6 +295,8 @@ class ConversationService:
         conversation: ConversationRecord,
         result_state: State,
     ) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
         incoming = result_state.get("execution_timings") or []
         if not incoming:
             return

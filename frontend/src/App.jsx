@@ -108,27 +108,6 @@ export default function App() {
       || eventType === 'completed';
     if (terminalRunIdsRef.current.has(runId) && !terminalEvent) return;
 
-    if (rawEventType === 'execution_timing' && eventData.payload) {
-      const timing = eventData.payload;
-      const mergeTiming = run => {
-        if (!run || run.run_id !== runId) return run;
-        const existing = run.metadata?.execution_timings || [];
-        const timings = existing.some(item => item.span_id === timing.span_id)
-          ? existing
-          : [...existing, timing];
-        return {
-          ...run,
-          metadata: {
-            ...run.metadata,
-            execution_timings: timings,
-            execution_metrics: timing.metrics || run.metadata?.execution_metrics
-          }
-        };
-      };
-      setCurrentRun(mergeTiming);
-      setConversationRun(mergeTiming);
-    }
-
     if (eventType === 'task_update' && eventData.task) {
       const mergeTask = previousPlan => {
         const existing = previousPlan.some(task => String(task.id) === String(eventData.task.id));

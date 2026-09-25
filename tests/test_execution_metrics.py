@@ -2,11 +2,14 @@ import os
 import sys
 import unittest
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.modules.runs.models import RunDocument
+from app.modules.runs.models import RunDocument, RunResponse
+from app.modules.conversations.models import ConversationResponse
 from app.modules.runs.service import RunService
+from app.core.config import settings
 from app.shared.execution_metrics import (
     ExecutionTiming,
     merge_execution_timings,
@@ -89,7 +92,7 @@ class TestExecutionMetrics(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertEqual(merged[0]["span_id"], "stable-span")
 
-    def test_run_service_persists_timing_spans_and_emits_events(self):
+    def test_run_service_persists_internal_timing_spans_without_emitting_events(self):
         span = self._timing(
             operation="tool",
             name="web_search",
@@ -99,18 +102,68 @@ class TestExecutionMetrics(unittest.TestCase):
         run = RunDocument(run_id="run-1", flow_id="flow-1", status="running")
         service = object.__new__(RunService)
 
-        events = service._apply_execution_output(
-            run,
-            "worker_node",
-            {"execution_timings": [span]},
-        )
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            events = service._apply_execution_output(
+                run,
+                "worker_node",
+                {"execution_timings": [span]},
+            )
 
         self.assertEqual(run.metadata["execution_metrics"]["tools"]["total_ms"], 321.5)
         self.assertEqual(run.metadata["execution_timings"][0]["name"], "web_search")
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].type, "execution_timing")
-        self.assertEqual(events[0].payload["duration_ms"], 321.5)
-        self.assertEqual(events[0].payload["metrics"]["tools"]["call_count"], 1)
+        self.assertEqual(events, [])
+
+    def test_run_service_does_not_collect_metrics_when_disabled(self):
+        span = self._timing(operation="tool", name="web_search", duration_ms=321.5)
+        run = RunDocument(run_id="run-1", flow_id="flow-1", status="running")
+        service = object.__new__(RunService)
+
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", False):
+            events = service._apply_execution_output(
+                run,
+                "worker_node",
+                {"execution_timings": [span]},
+            )
+
+        self.assertNotIn("execution_timings", run.metadata)
+        self.assertNotIn("execution_metrics", run.metadata)
+        self.assertEqual(events, [])
+
+    def test_public_conversation_response_hides_internal_benchmark_metrics(self):
+        now = datetime.now(timezone.utc)
+        response = ConversationResponse(
+            id="conversation-1",
+            user_id="user-1",
+            status="active",
+            created_at=now,
+            updated_at=now,
+            metadata={
+                "execution_timings": [{"duration_ms": 20}],
+                "execution_metrics": {"total_call_time_ms": 20},
+                "supervisor_decision": "answer",
+            },
+        )
+
+        self.assertEqual(response.metadata, {"supervisor_decision": "answer"})
+
+    def test_public_run_response_hides_internal_benchmark_metrics(self):
+        now = datetime.now(timezone.utc)
+        response = RunResponse(
+            run_id="run-1",
+            flow_id="flow-1",
+            user_id="user-1",
+            status="running",
+            mode="executing",
+            created_at=now,
+            updated_at=now,
+            metadata={
+                "execution_timings": [{"duration_ms": 20}],
+                "execution_metrics": {"total_call_time_ms": 20},
+                "partial_completion": True,
+            },
+        )
+
+        self.assertEqual(response.metadata, {"partial_completion": True})
 
     def test_finalize_adds_wall_clock_and_unattributed_time(self):
         run = RunDocument(
@@ -126,7 +179,8 @@ class TestExecutionMetrics(unittest.TestCase):
             },
         )
 
-        RunService._finalize_execution_metrics(run)
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            RunService._finalize_execution_metrics(run)
 
         self.assertEqual(run.metadata["execution_metrics"]["execute_wall_ms"], 1800.25)
         self.assertEqual(run.metadata["execution_metrics"]["unattributed_execute_ms"], 550.25)

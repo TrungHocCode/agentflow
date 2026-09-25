@@ -7,6 +7,15 @@ import uuid
 from pydantic import BaseModel, Field
 
 
+def strip_internal_execution_metrics(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep benchmark instrumentation out of public API response metadata."""
+
+    public_metadata = dict(metadata or {})
+    public_metadata.pop("execution_timings", None)
+    public_metadata.pop("execution_metrics", None)
+    return public_metadata
+
+
 class ExecutionTiming(BaseModel):
     """One measured LLM or tool call; intentionally excludes prompts and outputs."""
 

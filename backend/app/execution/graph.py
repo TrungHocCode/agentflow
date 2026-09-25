@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.core.config import settings
 from app.execution.state import State, Task
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
@@ -277,14 +278,33 @@ async def _execute_worker_node(
     status = "done"
     error_msg = None
     execution_timings: list[ExecutionTiming] = []
+    timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
     logs.append(f"[WorkerNode] Legacy execution path selected with {len(tool_instances)} tools.")
 
     def invoke_legacy_tool(tool: Any, args: Dict[str, Any]) -> Any:
-        started_at = datetime.now(timezone.utc)
-        started = time.perf_counter()
+        started_at = datetime.now(timezone.utc) if timing_enabled else None
+        started = time.perf_counter() if timing_enabled else None
         try:
             result = tool.invoke(args)
         except Exception as exc:
+            if timing_enabled and started_at is not None and started is not None:
+                execution_timings.append(
+                    ExecutionTiming(
+                        operation="tool",
+                        phase="execute",
+                        name=tool.name,
+                        agent_name=current_task.node,
+                        task_id=current_task.id,
+                        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                        status="failed",
+                        error_type=type(exc).__name__,
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                )
+            raise
+        normalized_result = parse_tool_result(result, tool_name=tool.name)
+        if timing_enabled and started_at is not None and started is not None:
             execution_timings.append(
                 ExecutionTiming(
                     operation="tool",
@@ -293,34 +313,18 @@ async def _execute_worker_node(
                     agent_name=current_task.node,
                     task_id=current_task.id,
                     duration_ms=round((time.perf_counter() - started) * 1000, 3),
-                    status="failed",
-                    error_type=type(exc).__name__,
+                    status="success",
+                    result_status=(
+                        "success"
+                        if normalized_result.status == "success"
+                        else "partial"
+                        if normalized_result.status == "partial"
+                        else "failed"
+                    ),
                     started_at=started_at,
                     completed_at=datetime.now(timezone.utc),
                 )
             )
-            raise
-        normalized_result = parse_tool_result(result, tool_name=tool.name)
-        execution_timings.append(
-            ExecutionTiming(
-                operation="tool",
-                phase="execute",
-                name=tool.name,
-                agent_name=current_task.node,
-                task_id=current_task.id,
-                duration_ms=round((time.perf_counter() - started) * 1000, 3),
-                status="success",
-                result_status=(
-                    "success"
-                    if normalized_result.status == "success"
-                    else "partial"
-                    if normalized_result.status == "partial"
-                    else "failed"
-                ),
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc),
-            )
-        )
         return result
 
     try:
@@ -418,13 +422,15 @@ async def _execute_worker_node(
         "error": error_msg
     }
 
-    return {
+    updates = {
         "plan": [updated_task],
         "current_task": updated_task,
         "result_storage": [new_result],
         "logs": logs,
-        "execution_timings": serialize_execution_timings(execution_timings),
     }
+    if timing_enabled:
+        updates["execution_timings"] = serialize_execution_timings(execution_timings)
+    return updates
 
 
 async def worker_node(

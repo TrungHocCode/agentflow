@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
+from app.core.config import settings
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
@@ -153,27 +154,29 @@ class SupervisorAgent(BaseAgent):
         messages = [system_message] + user_messages
 
         structured_llm = self.llm.with_structured_output(SupervisorOutput)
-        llm_started_at = datetime.now(timezone.utc)
-        llm_started = perf_counter()
+        timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
+        llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
+        llm_started = perf_counter() if timing_enabled else None
         response: SupervisorOutput = await structured_llm.ainvoke(messages)
-        timing = ExecutionTiming(
-            operation="llm",
-            phase="plan",
-            name=self.name,
-            agent_name=self.name,
-            iteration=1,
-            model=_state_model_name(state),
-            duration_ms=round((perf_counter() - llm_started) * 1000, 3),
-            status="success",
-            started_at=llm_started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
 
         updates: Dict[str, Any] = {
             "mode": "conversation",
             "messages": [AIMessage(content=response.assistant_message)],
-            "execution_timings": serialize_execution_timings([timing]),
         }
+        if timing_enabled and llm_started_at is not None and llm_started is not None:
+            timing = ExecutionTiming(
+                operation="llm",
+                phase="plan",
+                name=self.name,
+                agent_name=self.name,
+                iteration=1,
+                model=_state_model_name(state),
+                duration_ms=round((perf_counter() - llm_started) * 1000, 3),
+                status="success",
+                started_at=llm_started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+            updates["execution_timings"] = serialize_execution_timings([timing])
         if response.mode == "executing":
             updates["logs"] = [
                 "[SupervisorAgent] Ignored model execution transition; "
@@ -247,6 +250,7 @@ class WorkerAgent(BaseAgent):
         final_result = ""
         tool_outcomes: Dict[str, Dict[str, Any]] = {}
         execution_timings: List[ExecutionTiming] = []
+        timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
 
         try:
             if self.tools:
@@ -261,11 +265,30 @@ class WorkerAgent(BaseAgent):
             while iteration < max_iterations:
                 iteration += 1
                 logs.append(f"[{self.name}] Iteration {iteration}: Invoking LLM.")
-                llm_started_at = datetime.now(timezone.utc)
-                llm_started = perf_counter()
+                llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
+                llm_started = perf_counter() if timing_enabled else None
                 try:
                     response = await llm_with_tools.ainvoke(messages)
                 except Exception as exc:
+                    if timing_enabled and llm_started_at is not None and llm_started is not None:
+                        execution_timings.append(
+                            ExecutionTiming(
+                                operation="llm",
+                                phase="execute",
+                                name=self.name,
+                                agent_name=self.name,
+                                task_id=current_task.id,
+                                iteration=iteration,
+                                model=_state_model_name(state),
+                                duration_ms=round((perf_counter() - llm_started) * 1000, 3),
+                                status="failed",
+                                error_type=type(exc).__name__,
+                                started_at=llm_started_at,
+                                completed_at=datetime.now(timezone.utc),
+                            )
+                        )
+                    raise
+                if timing_enabled and llm_started_at is not None and llm_started is not None:
                     execution_timings.append(
                         ExecutionTiming(
                             operation="llm",
@@ -276,28 +299,11 @@ class WorkerAgent(BaseAgent):
                             iteration=iteration,
                             model=_state_model_name(state),
                             duration_ms=round((perf_counter() - llm_started) * 1000, 3),
-                            status="failed",
-                            error_type=type(exc).__name__,
+                            status="success",
                             started_at=llm_started_at,
                             completed_at=datetime.now(timezone.utc),
                         )
                     )
-                    raise
-                execution_timings.append(
-                    ExecutionTiming(
-                        operation="llm",
-                        phase="execute",
-                        name=self.name,
-                        agent_name=self.name,
-                        task_id=current_task.id,
-                        iteration=iteration,
-                        model=_state_model_name(state),
-                        duration_ms=round((perf_counter() - llm_started) * 1000, 3),
-                        status="success",
-                        started_at=llm_started_at,
-                        completed_at=datetime.now(timezone.utc),
-                    )
-                )
                 messages.append(response)
 
                 if hasattr(response, "tool_calls") and response.tool_calls:
@@ -310,8 +316,8 @@ class WorkerAgent(BaseAgent):
                         if tool_name in tool_map:
                             tool_obj = tool_map[tool_name]
                             logs.append(f"[{self.name}] Executing tool '{tool_name}' with args {tool_args}")
-                            tool_started_at = datetime.now(timezone.utc)
-                            tool_started = perf_counter()
+                            tool_started_at = datetime.now(timezone.utc) if timing_enabled else None
+                            tool_started = perf_counter() if timing_enabled else None
                             tool_error_type = None
                             try:
                                 # Run tool asynchronously or fallback to sync invoke
@@ -325,8 +331,8 @@ class WorkerAgent(BaseAgent):
                                 tool_result = f"Error executing tool '{tool_name}': {str(e)}"
                                 logs.append(f"[{self.name}] {tool_result}")
                         else:
-                            tool_started_at = datetime.now(timezone.utc)
-                            tool_started = perf_counter()
+                            tool_started_at = datetime.now(timezone.utc) if timing_enabled else None
+                            tool_started = perf_counter() if timing_enabled else None
                             tool_error_type = "ToolNotFound"
                             tool_result = f"Tool '{tool_name}' not found in registry."
                             logs.append(f"[{self.name}] {tool_result}")
@@ -335,29 +341,30 @@ class WorkerAgent(BaseAgent):
                             tool_result,
                             tool_name=tool_name,
                         )
-                        execution_timings.append(
-                            ExecutionTiming(
-                                operation="tool",
-                                phase="execute",
-                                name=tool_name,
-                                agent_name=self.name,
-                                task_id=current_task.id,
-                                iteration=iteration,
-                                call_id=tool_id,
-                                duration_ms=round((perf_counter() - tool_started) * 1000, 3),
-                                status="failed" if tool_error_type else "success",
-                                result_status=(
-                                    "success"
-                                    if normalized_tool_result.status == "success"
-                                    else "partial"
-                                    if normalized_tool_result.status == "partial"
-                                    else "failed"
-                                ),
-                                error_type=tool_error_type,
-                                started_at=tool_started_at,
-                                completed_at=datetime.now(timezone.utc),
+                        if timing_enabled and tool_started_at is not None and tool_started is not None:
+                            execution_timings.append(
+                                ExecutionTiming(
+                                    operation="tool",
+                                    phase="execute",
+                                    name=tool_name,
+                                    agent_name=self.name,
+                                    task_id=current_task.id,
+                                    iteration=iteration,
+                                    call_id=tool_id,
+                                    duration_ms=round((perf_counter() - tool_started) * 1000, 3),
+                                    status="failed" if tool_error_type else "success",
+                                    result_status=(
+                                        "success"
+                                        if normalized_tool_result.status == "success"
+                                        else "partial"
+                                        if normalized_tool_result.status == "partial"
+                                        else "failed"
+                                    ),
+                                    error_type=tool_error_type,
+                                    started_at=tool_started_at,
+                                    completed_at=datetime.now(timezone.utc),
+                                )
                             )
-                        )
                         call_key = json.dumps(
                             [tool_name, tool_args],
                             sort_keys=True,
@@ -467,13 +474,15 @@ class WorkerAgent(BaseAgent):
             "error": error_msg
         })
 
-        return {
+        updates = {
             "plan": [updated_task],
             "current_task": updated_task,
             "result_storage": [new_result],
             "logs": logs,
-            "execution_timings": serialize_execution_timings(execution_timings),
         }
+        if timing_enabled:
+            updates["execution_timings"] = serialize_execution_timings(execution_timings)
+        return updates
 
     @classmethod
     def _tool_outcome_coverage(cls, outcomes: Iterable[Dict[str, Any]]) -> tuple[int, int]:

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
+from app.core.config import settings
 from app.execution.ports import ExecutionPort
 from app.execution.state import State, Task
 from app.modules.runs.events import (
@@ -148,7 +149,7 @@ class RunService:
                 logs.append(f"[RunService Warning] Plan creation error: {exc}")
 
         metadata_values = dict(metadata or {})
-        if execution_timings:
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and execution_timings:
             merged_timings = merge_execution_timings(
                 metadata_values.get("execution_timings"),
                 execution_timings,
@@ -261,7 +262,7 @@ class RunService:
             run_doc.mode = result_state.get("mode", run_doc.mode)
             run_doc.logs.extend(result_state.get("logs") or [])
             incoming_timings = result_state.get("execution_timings") or []
-            if incoming_timings:
+            if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and incoming_timings:
                 merged_timings = merge_execution_timings(
                     run_doc.metadata.get("execution_timings"),
                     incoming_timings,
@@ -427,7 +428,6 @@ class RunService:
             "current_task": run_doc.current_task,
             "logs": [],
             "result_storage": run_doc.result_storage,
-            "execution_timings": [],
             "mode": "executing",
             "metadata": {
                 **run_doc.metadata,
@@ -435,6 +435,8 @@ class RunService:
                 "resolved_model_config": run_doc.resolved_model_config,
             },
         }
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            initial_state["execution_timings"] = []
         execution_started_at = time.perf_counter()
 
         try:
@@ -506,7 +508,6 @@ class RunService:
                     "plan": [self._task_data(task) for task in run_doc.plan],
                     "results": run_doc.result_storage,
                     "message": run_doc.error_message,
-                    "execution_metrics": run_doc.metadata.get("execution_metrics"),
                 },
             )
         except Exception as exc:
@@ -712,26 +713,13 @@ class RunService:
             )
 
         incoming_timings = node_output.get("execution_timings") or []
-        if incoming_timings:
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and incoming_timings:
             merged_timings = merge_execution_timings(
                 run_doc.metadata.get("execution_timings"),
                 incoming_timings,
             )
             run_doc.metadata["execution_timings"] = merged_timings
-            metrics = summarize_execution_timings(merged_timings)
-            run_doc.metadata["execution_metrics"] = metrics
-            for timing in serialize_execution_timings(incoming_timings):
-                events.append(
-                    ExecutionEvent(
-                        run_id=run_doc.run_id,
-                        type="execution_timing",
-                        task_id=str(timing["task_id"]) if timing.get("task_id") is not None else None,
-                        phase=timing["phase"],
-                        status=timing["status"],
-                        label=timing["operation"],
-                        payload={**timing, "metrics": metrics},
-                    )
-                )
+            run_doc.metadata["execution_metrics"] = summarize_execution_timings(merged_timings)
 
         current_task = node_output.get("current_task")
         if current_task:
@@ -783,6 +771,8 @@ class RunService:
 
     @staticmethod
     def _finalize_execution_metrics(run_doc: RunDocument) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
         metrics = run_doc.metadata.get("execution_metrics")
         if not metrics:
             return
