@@ -1,0 +1,24 @@
+{
+  "case_id": "report-and-chart-from-data",
+  "version": 1,
+  "title": "Generate a cited report and chart from supplied data",
+  "category": "report-and-artifact",
+  "mode": "replay",
+  "prompt": "Using only the supplied dataset below, create a concise Markdown report comparing three fictional configurations. Include a table and a bar chart of median latency. State that these are illustrative measurements, not general model benchmarks. Do not browse or add external factual claims. Dataset: config Cedar: median latency 1.8 s, successful tasks 17/20; config Maple: median latency 2.4 s, successful tasks 18/20; config Birch: median latency 1.2 s, successful tasks 14/20. Explain the trade-off between latency and task success, and link the generated report and chart artifacts.",
+  "requested_dimensions": [
+    "All three configurations represented accurately",
+    "Latency table and chart use the supplied values",
+    "Success counts and denominators are preserved",
+    "Analysis describes the latency/success trade-off",
+    "Report and chart artifacts are generated and discoverable"
+  ],
+  "acceptance_criteria": [
+    "No supplied value is changed or silently recomputed incorrectly",
+    "The chart title, labels, units, and values are accurate",
+    "The output labels the dataset as illustrative",
+    "No unsupported external claim is introduced",
+    "Both artifact paths resolve to generated files"
+  ],
+  "expected_artifacts": ["markdown-report", "chart"],
+  "tags": ["replay", "report", "chart", "artifact-validation"]
+}
