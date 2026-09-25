@@ -194,11 +194,11 @@ export async function deleteConversation(conversationId) {
   });
 }
 
-export async function sendConversationMessage(conversationId, content) {
+export async function sendConversationMessage(conversationId, content, turnId = null) {
   return requestJson(`${API_BASE}/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content, ...(turnId ? { turn_id: turnId } : {}) })
   });
 }
 

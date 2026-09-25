@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from math import ceil
 from time import perf_counter
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -118,7 +118,11 @@ class SupervisorAgent(BaseAgent):
     SupervisorAgent is responsible for coordinating conversation, clarifying user intent,
     and formulating/approving execution plans.
     """
-    async def execute(self, state: State) -> Dict[str, Any]:
+    async def execute(
+        self,
+        state: State,
+        on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> Dict[str, Any]:
         user_messages = self._get_messages(state)
         last_user_msg = ""
         if user_messages:
@@ -163,11 +167,33 @@ class SupervisorAgent(BaseAgent):
         system_message = SystemMessage(content=self.system_prompt + context)
         messages = [system_message] + user_messages
 
-        structured_llm = self.llm.with_structured_output(SupervisorOutput)
+        structured_llm = self.llm.with_structured_output(
+            SupervisorOutput.model_json_schema() if on_assistant_token else SupervisorOutput,
+            **({"method": "json_schema"} if on_assistant_token else {}),
+        )
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
         llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
         llm_started = perf_counter() if timing_enabled else None
-        response: SupervisorOutput = await structured_llm.ainvoke(messages)
+        if on_assistant_token:
+            streamed_output: Dict[str, Any] | None = None
+            streamed_assistant_message = ""
+            async for partial_output in structured_llm.astream(messages):
+                if not isinstance(partial_output, dict):
+                    continue
+                streamed_output = partial_output
+                assistant_message = partial_output.get("assistant_message")
+                if not isinstance(assistant_message, str):
+                    continue
+                if assistant_message.startswith(streamed_assistant_message):
+                    delta = assistant_message[len(streamed_assistant_message):]
+                    if delta:
+                        await on_assistant_token(delta)
+                        streamed_assistant_message = assistant_message
+            if streamed_output is None:
+                raise ValueError("Supervisor streaming returned no structured output.")
+            response: SupervisorOutput = SupervisorOutput.model_validate(streamed_output)
+        else:
+            response = await structured_llm.ainvoke(messages)
 
         updates: Dict[str, Any] = {
             "mode": "conversation",

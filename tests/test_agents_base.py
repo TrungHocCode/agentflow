@@ -94,6 +94,59 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].description, "Run first task")
         self.assertNotIn("execution_timings", updates)
 
+    async def test_supervisor_streams_assistant_message_from_partial_structured_output(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = MagicMock()
+        task = Task(
+            id=1,
+            node="source_researcher",
+            status="pending",
+            description="Find primary sources",
+        )
+
+        async def partial_outputs(messages):
+            del messages
+            yield {"assistant_message": "Drafting "}
+            yield {
+                "decision": "propose_plan",
+                "mode": "conversation",
+                "assistant_message": "Drafting a plan.",
+                "plan": [task.model_dump(mode="json")],
+                "metadata": None,
+            }
+
+        structured_llm.astream = partial_outputs
+        structured_llm.ainvoke = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        chunks = []
+
+        async def collect_chunk(chunk: str) -> None:
+            chunks.append(chunk)
+
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", False):
+            updates = await supervisor.execute(
+                {
+                    "messages": [HumanMessage(content="Research local models")],
+                    "plan": [],
+                    "mode": "conversation",
+                    "metadata": {},
+                },
+                on_assistant_token=collect_chunk,
+            )
+
+        self.mock_llm.with_structured_output.assert_called_once_with(
+            SupervisorOutput.model_json_schema(),
+            method="json_schema",
+        )
+        structured_llm.ainvoke.assert_not_awaited()
+        self.assertEqual(chunks, ["Drafting ", "a plan."])
+        self.assertEqual(updates["messages"][0].content, "Drafting a plan.")
+        self.assertEqual(updates["plan"][0].description, "Find primary sources")
+
     async def test_supervisor_cannot_override_internal_inference_purpose(self):
         supervisor = SupervisorAgent(
             name="Supervisor",

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Dict, List, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -68,6 +69,7 @@ class ConversationResponse(BaseModel):
 
 class ConversationMessageRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=20000)
+    turn_id: UUID | None = None
 
 
 class ConversationTurnResponse(BaseModel):

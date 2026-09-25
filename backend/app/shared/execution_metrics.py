@@ -13,6 +13,7 @@ def strip_internal_execution_metrics(metadata: dict[str, Any] | None) -> dict[st
     public_metadata = dict(metadata or {})
     public_metadata.pop("execution_timings", None)
     public_metadata.pop("execution_metrics", None)
+    public_metadata.pop("chat_ttft_samples", None)
     return public_metadata
 
 

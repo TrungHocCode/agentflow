@@ -4,7 +4,7 @@ from typing import Any, AsyncGenerator, Dict
 
 from app.execution.agents.resolver import AgentResolver
 from app.execution.graph import build_execution_graph, get_graph_config
-from app.execution.ports import ExecutionPort
+from app.execution.ports import AssistantTokenCallback, ExecutionPort
 from app.execution.state import State
 
 
@@ -14,15 +14,25 @@ class LangGraphExecutionAdapter(ExecutionPort):
     def __init__(self, agent_resolver: AgentResolver | None = None) -> None:
         self.agent_resolver = agent_resolver or AgentResolver()
 
-    async def create_plan(self, run_id: str, initial_state: State) -> State:
+    async def create_plan(
+        self,
+        run_id: str,
+        initial_state: State,
+        on_assistant_token: AssistantTokenCallback | None = None,
+    ) -> State:
         graph = build_execution_graph(agent_resolver=self.agent_resolver)
-        return await graph.ainvoke(initial_state, config=get_graph_config(run_id))
+        return await graph.ainvoke(
+            initial_state,
+            config=get_graph_config(run_id),
+            context={"on_assistant_token": on_assistant_token} if on_assistant_token else None,
+        )
 
     async def continue_conversation(
         self,
         run_id: str,
         message: str,
         metadata: Dict[str, Any] | None = None,
+        on_assistant_token: AssistantTokenCallback | None = None,
     ) -> State:
         graph = build_execution_graph(agent_resolver=self.agent_resolver)
         state_update: State = {"messages": [message]}
@@ -31,6 +41,7 @@ class LangGraphExecutionAdapter(ExecutionPort):
         return await graph.ainvoke(
             state_update,
             config=get_graph_config(run_id),
+            context={"on_assistant_token": on_assistant_token} if on_assistant_token else None,
         )
 
     async def _execute(

@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 import unittest
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
@@ -31,7 +31,12 @@ class _RunRepository:
 
 
 class _ExecutionPort(ExecutionPort):
-    async def create_plan(self, run_id: str, initial_state: State) -> State:
+    async def create_plan(
+        self,
+        run_id: str,
+        initial_state: State,
+        on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> State:
         raise NotImplementedError
 
     async def continue_conversation(
@@ -39,6 +44,7 @@ class _ExecutionPort(ExecutionPort):
         run_id: str,
         message: str,
         metadata: Dict[str, Any] | None = None,
+        on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> State:
         raise NotImplementedError
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatStudio from './components/ChatStudio';
@@ -53,6 +53,11 @@ const ACTIVE_RUN_KEY = 'agentflow_active_run_id';
 const conversationRunStorageKey = (conversationId) => `${ACTIVE_RUN_KEY}:${conversationId}`;
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running']);
 const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled', 'interrupted', 'abandoned']);
+const createConversationTurnId = () => globalThis.crypto?.randomUUID?.()
+  || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
 
 const toChatMessages = (persistedMessages = []) => persistedMessages
   .filter(message => message.role === 'user' || message.role === 'assistant')
@@ -588,41 +593,124 @@ export default function App() {
           activeConversationId = conversation.id;
           setConversationId(activeConversationId);
         }
-        const accepted = await sendConversationMessage(activeConversationId, textPrompt);
-        if (accepted.status === 'accepted' && accepted.turn_id) {
-          awaitingConversationStream = true;
-          if (conversationStreamRef.current) conversationStreamRef.current();
-          conversationStreamRef.current = subscribeConversationEvents(
-            activeConversationId,
-            accepted.turn_id,
-            (eventData) => {
-              const payload = eventData.payload || {};
-              if (eventData.type === 'planning_started') {
-              setMessages(prev => [...prev, { sender: 'supervisor', text: 'Đã nhận yêu cầu. Đang xử lý...' }]);
-              } else if (eventData.type === 'workflow_draft_updated') {
-                const plan = payload.plan || [];
-                setActivePlan(plan);
-                setDraftPlan(plan);
-              } else if (eventData.type === 'assistant_delta' && payload.content) {
-                setMessages(prev => [...prev, { sender: 'supervisor', text: payload.content }]);
-              } else if (eventData.type === 'planning_completed') {
-                if (payload.outcome === 'propose_plan' || !payload.outcome) {
-                  setMessages(prev => [...prev, { sender: 'supervisor', text: 'Quy trình đã sẵn sàng. Bạn có thể xem lại kế hoạch rồi chọn bắt đầu.' }]);
-                }
-                setIsProcessing(false);
-                if (conversationStreamRef.current) conversationStreamRef.current();
-              } else if (eventData.type === 'planning_failed') {
-                setMessages(prev => [...prev, { sender: 'supervisor', text: `Không thể chuẩn bị quy trình: ${payload.message || 'Lỗi không xác định.'}` }]);
-                setIsProcessing(false);
-                if (conversationStreamRef.current) conversationStreamRef.current();
-              }
-            },
-            () => {
-              setIsProcessing(false);
-              setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kết nối theo dõi bị gián đoạn. Bạn có thể kiểm tra tiến độ trong Lịch sử chạy.' }]);
+        const turnId = createConversationTurnId();
+        let streamReadyReceived = false;
+        let messageSubmitted = false;
+        let streamSetupError = null;
+        let resolveStreamReady;
+        let rejectStreamReady;
+        const streamReady = new Promise((resolve, reject) => {
+          resolveStreamReady = resolve;
+          rejectStreamReady = reject;
+        });
+        if (conversationStreamRef.current) conversationStreamRef.current();
+        conversationStreamRef.current = subscribeConversationEvents(
+          activeConversationId,
+          turnId,
+          (eventData) => {
+            if (eventData.type === 'stream_ready') {
+              streamReadyReceived = true;
+              resolveStreamReady();
+              return;
             }
-          );
-        } else {
+
+            const payload = eventData.payload || {};
+            if (eventData.type === 'planning_started') {
+              setMessages(prev => [...prev, {
+                sender: 'supervisor',
+                text: '',
+                turnId,
+                isGenerating: true
+              }]);
+            } else if (eventData.type === 'workflow_draft_updated') {
+              const plan = payload.plan || [];
+              setActivePlan(plan);
+              setDraftPlan(plan);
+            } else if (eventData.type === 'assistant_delta' && payload.content) {
+              setMessages(prev => {
+                const messageIndex = prev.findIndex(message => message.turnId === turnId);
+                if (messageIndex < 0) {
+                  return [...prev, {
+                    sender: 'supervisor',
+                    text: payload.content,
+                    turnId,
+                    isGenerating: true
+                  }];
+                }
+                return prev.map((message, index) => index === messageIndex
+                  ? {
+                    ...message,
+                    text: payload.replace ? payload.content : `${message.text}${payload.content}`,
+                    isGenerating: true
+                  }
+                  : message);
+              });
+            } else if (eventData.type === 'assistant_replace' && payload.content) {
+              setMessages(prev => prev.map(message => message.turnId === turnId
+                ? { ...message, text: payload.content, isGenerating: true }
+                : message));
+            } else if (eventData.type === 'planning_completed') {
+              setMessages(prev => prev.map(message => message.turnId === turnId
+                ? { ...message, isGenerating: false }
+                : message));
+              if (payload.outcome === 'propose_plan' || !payload.outcome) {
+                setMessages(prev => [...prev, {
+                  sender: 'supervisor',
+                  text: 'Quy trình đã sẵn sàng. Bạn có thể xem lại kế hoạch rồi chọn bắt đầu.'
+                }]);
+              }
+              setIsProcessing(false);
+              if (conversationStreamRef.current) conversationStreamRef.current();
+            } else if (eventData.type === 'planning_failed') {
+              const errorText = `Không thể chuẩn bị quy trình: ${payload.message || 'Lỗi không xác định.'}`;
+              setMessages(prev => {
+                const messageIndex = prev.findIndex(message => message.turnId === turnId);
+                if (messageIndex < 0) {
+                  return [...prev, { sender: 'supervisor', text: errorText, turnId }];
+                }
+                if (!prev[messageIndex].text) {
+                  return prev.map((message, index) => index === messageIndex
+                    ? { ...message, text: errorText, isGenerating: false }
+                    : message);
+                }
+                return [
+                  ...prev.map((message, index) => index === messageIndex
+                    ? { ...message, isGenerating: false }
+                    : message),
+                  { sender: 'supervisor', text: errorText }
+                ];
+              });
+              setIsProcessing(false);
+              if (conversationStreamRef.current) conversationStreamRef.current();
+            }
+          },
+          (error) => {
+            if (!streamReadyReceived || !messageSubmitted) {
+              streamSetupError = error;
+              rejectStreamReady(error);
+              return;
+            }
+            console.warn('Conversation progress connection interrupted:', error);
+            setIsProcessing(false);
+            setMessages(prev => prev.map(message => message.turnId === turnId
+              ? { ...message, isGenerating: false }
+              : message));
+            setMessages(prev => [...prev, {
+              sender: 'supervisor',
+              text: 'Kết nối theo dõi bị gián đoạn. Bạn có thể tải lại hội thoại để xem phản hồi đã lưu.'
+            }]);
+          }
+        );
+        awaitingConversationStream = true;
+        await streamReady;
+        if (streamSetupError) throw streamSetupError;
+
+        messageSubmitted = true;
+        const accepted = await sendConversationMessage(activeConversationId, textPrompt, turnId);
+        if (accepted.status !== 'accepted' || !accepted.turn_id) {
+          awaitingConversationStream = false;
+          if (conversationStreamRef.current) conversationStreamRef.current();
+          conversationStreamRef.current = null;
           const plan = accepted.plan || accepted.draft_plan || [];
           setActivePlan(plan);
           setDraftPlan(plan);
@@ -665,6 +753,9 @@ export default function App() {
         }, 600);
       }
     } catch (err) {
+      awaitingConversationStream = false;
+      if (conversationStreamRef.current) conversationStreamRef.current();
+      conversationStreamRef.current = null;
       console.error('Error starting run:', err);
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
       setMessages(prev => [...prev, { sender: 'supervisor', text: `Có lỗi kết nối: ${err.message}`, duration: durationSec }]);
