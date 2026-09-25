@@ -1,8 +1,11 @@
 import asyncio
+import time
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.core.config import settings
 from app.execution.state import State, Task
 from app.execution.model_router import InferencePurpose, model_name_for
 from app.execution.nodes.dispatcher import TaskDispatcher
@@ -12,6 +15,7 @@ from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import is_tool_failure, parse_tool_result
 from app.execution.tools.registry import autodiscover_tools
 from app.execution.checkpointer import get_checkpointer
+from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
 
 # Ensure all tools are registered
 autodiscover_tools()
@@ -254,7 +258,9 @@ async def _execute_worker_node(
                 llm=llm,
                 task=current_task,
             )
-            agent_output = await worker_agent.execute(state)
+            agent_state = dict(state)
+            agent_state["metadata"] = {**metadata, "model_name": model_name}
+            agent_output = await worker_agent.execute(agent_state)
             agent_output["logs"] = logs + (agent_output.get("logs") or [])
             return agent_output
         except Exception as e:
@@ -277,7 +283,55 @@ async def _execute_worker_node(
     result_text = ""
     status = "done"
     error_msg = None
+    execution_timings: list[ExecutionTiming] = []
+    timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
     logs.append(f"[WorkerNode] Legacy execution path selected with {len(tool_instances)} tools.")
+
+    def invoke_legacy_tool(tool: Any, args: Dict[str, Any]) -> Any:
+        started_at = datetime.now(timezone.utc) if timing_enabled else None
+        started = time.perf_counter() if timing_enabled else None
+        try:
+            result = tool.invoke(args)
+        except Exception as exc:
+            if timing_enabled and started_at is not None and started is not None:
+                execution_timings.append(
+                    ExecutionTiming(
+                        operation="tool",
+                        phase="execute",
+                        name=tool.name,
+                        agent_name=current_task.node,
+                        task_id=current_task.id,
+                        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                        status="failed",
+                        error_type=type(exc).__name__,
+                        started_at=started_at,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+                )
+            raise
+        normalized_result = parse_tool_result(result, tool_name=tool.name)
+        if timing_enabled and started_at is not None and started is not None:
+            execution_timings.append(
+                ExecutionTiming(
+                    operation="tool",
+                    phase="execute",
+                    name=tool.name,
+                    agent_name=current_task.node,
+                    task_id=current_task.id,
+                    duration_ms=round((time.perf_counter() - started) * 1000, 3),
+                    status="success",
+                    result_status=(
+                        "success"
+                        if normalized_result.status == "success"
+                        else "partial"
+                        if normalized_result.status == "partial"
+                        else "failed"
+                    ),
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                )
+            )
+        return result
 
     try:
         desc = current_task.description.lower()
@@ -292,7 +346,10 @@ async def _execute_worker_node(
                     if desc.startswith(prefix):
                         query = current_task.description[len(prefix):].strip(" :,-")
                         break
-                result_text = search_tool.invoke({"query": query or current_task.description})
+                result_text = invoke_legacy_tool(
+                    search_tool,
+                    {"query": query or current_task.description},
+                )
             else:
                 result_text = f"Executed search task: '{current_task.description}'"
 
@@ -301,7 +358,7 @@ async def _execute_worker_node(
             if crawler_tool:
                 url_match = [w for w in current_task.description.split() if w.startswith("http")]
                 target_url = url_match[0] if url_match else "https://news.ycombinator.com"
-                result_text = crawler_tool.invoke({"url": target_url})
+                result_text = invoke_legacy_tool(crawler_tool, {"url": target_url})
             else:
                 result_text = f"Executed crawler task '{current_task.description}' successfully."
 
@@ -310,7 +367,10 @@ async def _execute_worker_node(
             prev_results = state.get("result_storage") or []
             source_text = "\n".join([r.get("result", "") for r in prev_results if r.get("result")]) or current_task.description
             if summarizer_tool:
-                result_text = summarizer_tool.invoke({"text": source_text, "max_bullet_points": 6})
+                result_text = invoke_legacy_tool(
+                    summarizer_tool,
+                    {"text": source_text, "max_bullet_points": 6},
+                )
             else:
                 result_text = f"Summarized output for: {current_task.description}"
 
@@ -329,12 +389,15 @@ async def _execute_worker_node(
                 sections = [{"header": "Executive Overview", "content": "Task completed successfully with all objectives met."}]
 
             if report_tool:
-                result_text = report_tool.invoke({
-                    "title": "AgentFlow Comprehensive Intelligence Report",
-                    "summary": f"Báo cáo tổng hợp tự động cho quy trình: {current_task.description}",
-                    "sections": sections,
-                    "filename": "intelligence_report.md"
-                })
+                result_text = invoke_legacy_tool(
+                    report_tool,
+                    {
+                        "title": "AgentFlow Comprehensive Intelligence Report",
+                        "summary": f"Báo cáo tổng hợp tự động cho quy trình: {current_task.description}",
+                        "sections": sections,
+                        "filename": "intelligence_report.md",
+                    },
+                )
             else:
                 result_text = "Report generated successfully."
         else:
@@ -365,12 +428,15 @@ async def _execute_worker_node(
         "error": error_msg
     }
 
-    return {
+    updates = {
         "plan": [updated_task],
         "current_task": updated_task,
         "result_storage": [new_result],
-        "logs": logs
+        "logs": logs,
     }
+    if timing_enabled:
+        updates["execution_timings"] = serialize_execution_timings(execution_timings)
+    return updates
 
 
 async def worker_node(

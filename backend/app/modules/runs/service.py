@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
+from app.core.config import settings
 from app.execution.ports import ExecutionPort
 from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
@@ -30,6 +31,11 @@ from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
 from app.shared.errors import ValidationError
 from app.shared.events import ExecutionEvent
+from app.shared.execution_metrics import (
+    merge_execution_timings,
+    serialize_execution_timings,
+    summarize_execution_timings,
+)
 
 
 TERMINAL_RUN_STATUSES = {
@@ -125,6 +131,7 @@ class RunService:
 
         mode = "conversation"
         result_storage: List[Dict[str, Any]] = []
+        execution_timings: List[Any] = []
         if not plan:
             try:
                 initial_state: State = {
@@ -141,8 +148,18 @@ class RunService:
                 mode = result_state.get("mode", "conversation")
                 logs = result_state.get("logs") or logs
                 result_storage = result_state.get("result_storage") or []
+                execution_timings = result_state.get("execution_timings") or []
             except Exception as exc:
                 logs.append(f"[RunService Warning] Plan creation error: {exc}")
+
+        metadata_values = dict(run_metadata)
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and execution_timings:
+            merged_timings = merge_execution_timings(
+                metadata_values.get("execution_timings"),
+                execution_timings,
+            )
+            metadata_values["execution_timings"] = merged_timings
+            metadata_values["execution_metrics"] = summarize_execution_timings(merged_timings)
 
         document = RunDocument(
             run_id=run_id,
@@ -155,7 +172,7 @@ class RunService:
             plan=plan,
             logs=logs,
             result_storage=result_storage,
-            metadata=run_metadata,
+            metadata=metadata_values,
         )
         await self.save_run_doc(document)
         await self._record_event(
@@ -248,6 +265,14 @@ class RunService:
             )
             run_doc.mode = result_state.get("mode", run_doc.mode)
             run_doc.logs.extend(result_state.get("logs") or [])
+            incoming_timings = result_state.get("execution_timings") or []
+            if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and incoming_timings:
+                merged_timings = merge_execution_timings(
+                    run_doc.metadata.get("execution_timings"),
+                    incoming_timings,
+                )
+                run_doc.metadata["execution_timings"] = merged_timings
+                run_doc.metadata["execution_metrics"] = summarize_execution_timings(merged_timings)
             run_doc.logs.append(f"[User Message]: {message}")
             run_doc.updated_at = datetime.utcnow()
             await self.save_run_doc(run_doc)
@@ -414,6 +439,8 @@ class RunService:
                 "resolved_model_config": run_doc.resolved_model_config,
             },
         }
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            initial_state["execution_timings"] = []
         execution_started_at = time.perf_counter()
 
         try:
@@ -472,6 +499,7 @@ class RunService:
             run_doc.execution_time_ms = (
                 time.perf_counter() - execution_started_at
             ) * 1000
+            self._finalize_execution_metrics(run_doc)
             run_doc.updated_at = datetime.utcnow()
             await self.save_run_doc(run_doc)
             terminal_event_type = "run_failed" if run_doc.status == "failed" else "run_completed"
@@ -494,6 +522,7 @@ class RunService:
             run_doc.execution_time_ms = (
                 time.perf_counter() - execution_started_at
             ) * 1000
+            self._finalize_execution_metrics(run_doc)
             run_doc.updated_at = datetime.utcnow()
             await self.save_run_doc(run_doc)
             await self._record_event(
@@ -687,6 +716,15 @@ class RunService:
                 )
             )
 
+        incoming_timings = node_output.get("execution_timings") or []
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and incoming_timings:
+            merged_timings = merge_execution_timings(
+                run_doc.metadata.get("execution_timings"),
+                incoming_timings,
+            )
+            run_doc.metadata["execution_timings"] = merged_timings
+            run_doc.metadata["execution_metrics"] = summarize_execution_timings(merged_timings)
+
         current_task = node_output.get("current_task")
         if current_task:
             normalized_task = self._normalize_task(current_task)
@@ -734,6 +772,21 @@ class RunService:
                 )
             )
         return events
+
+    @staticmethod
+    def _finalize_execution_metrics(run_doc: RunDocument) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
+        metrics = run_doc.metadata.get("execution_metrics")
+        if not metrics:
+            return
+        execute_phase = metrics.get("phase_totals_ms", {}).get("execute", {})
+        execute_call_time_ms = float(execute_phase.get("total_ms", 0.0))
+        metrics["execute_wall_ms"] = round(run_doc.execution_time_ms, 3)
+        metrics["unattributed_execute_ms"] = round(
+            max(0.0, run_doc.execution_time_ms - execute_call_time_ms),
+            3,
+        )
 
     async def _persist_research_output(
         self,

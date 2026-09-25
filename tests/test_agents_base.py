@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Adjust path to import from backend
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
@@ -10,6 +10,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
+from app.core.config import settings
 from app.execution.state import State, Task, SupervisorOutput
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
 from app.execution.agents.registry import AgentRegistry
@@ -71,7 +72,8 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        updates = await supervisor.execute(state)
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", False):
+            updates = await supervisor.execute(state)
 
         # Assertions
         self.mock_llm.with_structured_output.assert_called_once_with(SupervisorOutput)
@@ -90,6 +92,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["messages"][0].content, "Creating a plan.")
         self.assertEqual(len(updates["plan"]), 1)
         self.assertEqual(updates["plan"][0].description, "Run first task")
+        self.assertNotIn("execution_timings", updates)
 
     async def test_supervisor_cannot_override_internal_inference_purpose(self):
         supervisor = SupervisorAgent(
@@ -117,6 +120,38 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         updates = await supervisor.execute(state)
 
         self.assertEqual(updates["metadata"]["inference_purpose"], "chat")
+
+    async def test_supervisor_timing_uses_routed_model_when_recording_metrics(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        structured_llm.ainvoke.return_value = SupervisorOutput(
+            decision="answer",
+            assistant_message="SSE keeps a response stream open.",
+        )
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {"inference_purpose": "chat"},
+        }
+
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            with patch.object(settings, "LLM_CHAT_MODEL", "chat-test-model"):
+                with patch(
+                    "app.execution.agents.base.perf_counter",
+                    side_effect=[1.0, 1.125],
+                ):
+                    updates = await supervisor.execute(state)
+
+        self.assertEqual(updates["execution_timings"][0]["model"], "chat-test-model")
 
     async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
         supervisor = SupervisorAgent(
@@ -271,7 +306,12 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
             "metadata": {}
         }
 
-        updates = await worker.execute(state)
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            with patch(
+                "app.execution.agents.base.perf_counter",
+                side_effect=[10.0, 10.25, 20.0, 20.2, 30.0, 30.5],
+            ):
+                updates = await worker.execute(state)
 
         # Assertions
         self.mock_llm.bind_tools.assert_called_once_with([add])
@@ -281,6 +321,11 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].status, "done")
         self.assertEqual(updates["result_storage"][0]["result"], "The result is 5.")
         self.assertTrue(any("Executing tool 'add' with args {'a': 2, 'b': 3}" in log for log in updates["logs"]))
+        timings = updates["execution_timings"]
+        self.assertEqual([timing["operation"] for timing in timings], ["llm", "tool", "llm"])
+        self.assertEqual([timing["duration_ms"] for timing in timings], [250.0, 200.0, 500.0])
+        self.assertEqual([timing["iteration"] for timing in timings], [1, 1, 2])
+        self.assertEqual(timings[1]["call_id"], "call_123")
 
     async def test_worker_agent_marks_final_tool_error_as_failed(self):
         @tool

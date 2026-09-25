@@ -3,9 +3,10 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.execution.state import Task
+from app.shared.execution_metrics import strip_internal_execution_metrics
 
 
 ConversationStatus = Literal[
@@ -58,6 +59,11 @@ class ConversationResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("metadata")
+    @classmethod
+    def hide_internal_benchmark_metrics(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return strip_internal_execution_metrics(value)
 
 
 class ConversationMessageRequest(BaseModel):

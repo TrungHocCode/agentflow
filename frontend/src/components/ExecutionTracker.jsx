@@ -119,6 +119,7 @@ export default function ExecutionTracker({
               </div>
             )}
           </div>
+
         </div>
 
         {/* Right Column: Execution Output Artifacts Viewer */}

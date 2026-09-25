@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.config import settings
 from app.execution.ports import ExecutionPort
 from app.execution.model_router import route_conversation
 from app.execution.state import State, Task
@@ -17,6 +18,7 @@ from app.modules.conversations.models import (
 )
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
+from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
 
 
 class ConversationService:
@@ -128,6 +130,7 @@ class ConversationService:
         )
         conversation.draft_plan = effective_plan
         conversation.metadata.update(result_state.get("metadata") or {})
+        self._accumulate_execution_timings(conversation, result_state)
         conversation.metadata["supervisor_decision"] = decision
         conversation.status = "waiting_for_user"
         conversation.updated_at = datetime.utcnow()
@@ -216,6 +219,7 @@ class ConversationService:
             )
             conversation.draft_plan = effective_plan
             conversation.metadata.update(result_state.get("metadata") or {})
+            self._accumulate_execution_timings(conversation, result_state)
             conversation.metadata["supervisor_decision"] = decision
             conversation.status = "waiting_for_user"
             conversation.updated_at = datetime.utcnow()
@@ -283,6 +287,23 @@ class ConversationService:
     async def _publish(self, event: ConversationEvent) -> None:
         if self.event_publisher is not None:
             await self.event_publisher.publish(event)
+
+    @staticmethod
+    def _accumulate_execution_timings(
+        conversation: ConversationRecord,
+        result_state: State,
+    ) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
+        incoming = result_state.get("execution_timings") or []
+        if not incoming:
+            return
+        timings = merge_execution_timings(
+            conversation.metadata.get("execution_timings"),
+            incoming,
+        )
+        conversation.metadata["execution_timings"] = timings
+        conversation.metadata["execution_metrics"] = summarize_execution_timings(timings)
 
     @staticmethod
     def _apply_model_route(conversation: ConversationRecord, content: str) -> None:
