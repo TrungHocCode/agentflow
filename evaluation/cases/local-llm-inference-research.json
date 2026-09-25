@@ -1,0 +1,24 @@
+{
+  "case_id": "local-llm-inference-research",
+  "version": 1,
+  "title": "Research local LLM inference on constrained GPU memory",
+  "category": "technology-research",
+  "mode": "live",
+  "prompt": "Research practical options for running an approximately 8B-parameter language model on a GPU with about 8 GB of VRAM. Compare quantization, context length, inference/runtime choices, and likely trade-offs. Prefer primary documentation from the relevant runtime and model projects. Separate measured facts from general guidance; do not promise that a model will fit without accounting for runtime overhead and context/KV cache.",
+  "requested_dimensions": [
+    "Quantization and memory trade-offs",
+    "Context length and KV-cache considerations",
+    "Runtime options supported by primary documentation",
+    "Performance and quality trade-offs with evidence",
+    "Practical recommendation with assumptions and caveats"
+  ],
+  "acceptance_criteria": [
+    "At least three relevant primary sources are cited",
+    "VRAM claims state their assumptions or are labeled as estimates",
+    "The report distinguishes model weights from runtime/KV-cache memory",
+    "Recommendations are tied to the stated hardware constraint",
+    "Unsupported precise speed claims are omitted"
+  ],
+  "expected_artifacts": ["markdown-report", "source-list"],
+  "tags": ["local-model", "hardware", "research", "recommendation"]
+}

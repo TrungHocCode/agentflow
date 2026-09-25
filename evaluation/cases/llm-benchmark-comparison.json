@@ -1,0 +1,24 @@
+{
+  "case_id": "llm-benchmark-comparison",
+  "version": 1,
+  "title": "Compare published LLM benchmark results",
+  "category": "multi-source-research",
+  "mode": "live",
+  "prompt": "Compare Claude Opus 4.6, OpenAI GPT-4.5, and Google Gemini 2.5 Pro using published evidence for MMLU-family benchmarks, SWE-bench, and multilingual capability. Prefer official model/system cards and benchmark papers. For every score, name the exact benchmark variant, model, evaluation setup, source URL, and publication date. Do not treat MMLU, MMMLU, and Global MMLU Lite as interchangeable; distinguish single-attempt from multi-attempt results. If comparable evidence is unavailable, mark the cell missing rather than infer it. Produce a report with a comparison table and explain which values cannot be fairly ranked.",
+  "requested_dimensions": [
+    "MMLU-family result for each requested model, with exact variant",
+    "SWE-bench result for each requested model, with exact variant and attempt setup",
+    "Multilingual evidence for each model, or an explicit evidence gap",
+    "Source provenance and date for every reported score",
+    "Comparability limitations and evidence gaps"
+  ],
+  "acceptance_criteria": [
+    "No model/provider misattribution",
+    "Every numeric score is traceable to a source that supports that exact model and metric",
+    "Benchmark variants and evaluation setups are not silently mixed",
+    "Missing or conflicting evidence is explicitly marked",
+    "Final report conclusions follow from the cited evidence"
+  ],
+  "expected_artifacts": ["markdown-report", "comparison-table"],
+  "tags": ["research", "benchmarks", "provenance", "coverage"]
+}

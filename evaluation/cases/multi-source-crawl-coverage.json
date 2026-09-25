@@ -1,0 +1,24 @@
+{
+  "case_id": "multi-source-crawl-coverage",
+  "version": 1,
+  "title": "Collect and synthesize information from several explicit sources",
+  "category": "crawler-and-coverage",
+  "mode": "live",
+  "prompt": "Research Python asyncio task cancellation and structured concurrency from the official Python documentation and relevant official library documentation. Use several source pages, extract the passages relevant to cancellation, TaskGroup behavior, and exception handling, then synthesize the differences. If one page is inaccessible or has no extractable content, continue with the other sources and clearly identify the missing source and its effect on coverage.",
+  "requested_dimensions": [
+    "Task cancellation behavior",
+    "TaskGroup or structured-concurrency behavior",
+    "Exception handling implications",
+    "Evidence from more than one source page",
+    "Explicit accounting for any failed or unusable source"
+  ],
+  "acceptance_criteria": [
+    "Each usable source is identified by its exact URL",
+    "One failed source does not erase usable results from other sources",
+    "The final status is partial when required coverage is not met",
+    "The synthesis does not invent content for an inaccessible page",
+    "Crawler output preserves enough page content to support the summary"
+  ],
+  "expected_artifacts": ["evidence-dossier", "markdown-summary"],
+  "tags": ["crawler", "partial-results", "source-coverage"]
+}
