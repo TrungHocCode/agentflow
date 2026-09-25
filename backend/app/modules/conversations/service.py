@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
@@ -11,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import settings
 from app.execution.ports import ExecutionPort
+from app.execution.model_router import route_conversation
 from app.execution.state import State, Task
 from app.modules.conversations.models import (
     ConversationMessage,
@@ -88,12 +88,11 @@ class ConversationService:
         conversation_id: str,
         content: str,
         user_id: str = "default_user",
-        model_name: str | None = None,
     ) -> ConversationRecord | None:
         conversation = await self.get_conversation(conversation_id, user_id)
         if conversation is None or conversation.status == "archived":
             return None
-        self._select_model(conversation, model_name)
+        self._apply_model_route(conversation, content)
 
         user_message = ConversationMessage(
             id=str(uuid.uuid4()),
@@ -154,14 +153,13 @@ class ConversationService:
         conversation_id: str,
         content: str,
         user_id: str = "default_user",
-        model_name: str | None = None,
     ) -> Dict[str, Any] | None:
         """Persist a message and run planning asynchronously for the API contract."""
 
         conversation = await self.get_conversation(conversation_id, user_id)
         if conversation is None or conversation.status == "archived":
             return None
-        self._select_model(conversation, model_name)
+        self._apply_model_route(conversation, content)
         conversation.updated_at = datetime.utcnow()
         await self.repository.save(conversation)
         user_message = ConversationMessage(
@@ -308,15 +306,21 @@ class ConversationService:
         conversation.metadata["execution_metrics"] = summarize_execution_timings(timings)
 
     @staticmethod
-    def _select_model(conversation: ConversationRecord, model_name: str | None) -> None:
-        """Enable the selected local model for every build-phase conversation turn."""
+    def _apply_model_route(conversation: ConversationRecord, content: str) -> None:
+        """Choose a model profile internally for this conversation turn."""
         metadata = dict(conversation.metadata or {})
-        selected_model = (
-            (model_name or "").strip()
-            or metadata.get("model_name")
-            or os.getenv("OLLAMA_MODEL", "qwen3:8b")
+        purpose = route_conversation(
+            content,
+            has_pending_plan=bool(conversation.draft_plan),
+            previous_decision=metadata.get("supervisor_decision"),
         )
-        metadata.update({"use_llm": True, "model_name": selected_model})
+        # Remove the old client-selected model field so stale conversations or
+        # older clients cannot override the server's routing policy.
+        metadata.pop("model_name", None)
+        metadata.update({
+            "use_llm": True,
+            "inference_purpose": purpose.value,
+        })
         conversation.metadata = metadata
 
     @staticmethod

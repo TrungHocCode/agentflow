@@ -94,6 +94,65 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["plan"][0].description, "Run first task")
         self.assertNotIn("execution_timings", updates)
 
+    async def test_supervisor_cannot_override_internal_inference_purpose(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        structured_llm.ainvoke.return_value = SupervisorOutput(
+            decision="answer",
+            assistant_message="SSE keeps a response stream open.",
+            metadata={"inference_purpose": "worker"},
+        )
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {"inference_purpose": "chat"},
+        }
+
+        updates = await supervisor.execute(state)
+
+        self.assertEqual(updates["metadata"]["inference_purpose"], "chat")
+
+    async def test_supervisor_timing_uses_routed_model_when_recording_metrics(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        structured_llm.ainvoke.return_value = SupervisorOutput(
+            decision="answer",
+            assistant_message="SSE keeps a response stream open.",
+        )
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {"inference_purpose": "chat"},
+        }
+
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            with patch.object(settings, "LLM_CHAT_MODEL", "chat-test-model"):
+                with patch(
+                    "app.execution.agents.base.perf_counter",
+                    side_effect=[1.0, 1.125],
+                ):
+                    updates = await supervisor.execute(state)
+
+        self.assertEqual(updates["execution_timings"][0]["model"], "chat-test-model")
+
     async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
         supervisor = SupervisorAgent(
             name="Supervisor",

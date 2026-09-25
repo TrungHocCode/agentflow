@@ -105,7 +105,6 @@ async def send_conversation_message(
         conversation = await service.send_message(
             conversation_id=conversation_id,
             content=request.content,
-            model_name=request.model_name,
             user_id=user_id,
         )
         if conversation is None:
@@ -118,7 +117,6 @@ async def send_conversation_message(
     accepted = await service.start_message(
         conversation_id=conversation_id,
         content=request.content,
-        model_name=request.model_name,
         user_id=user_id,
     )
     if accepted is None:

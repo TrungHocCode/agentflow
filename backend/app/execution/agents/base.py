@@ -9,6 +9,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from app.core.config import settings
+from app.execution.model_router import model_name_for
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
@@ -55,14 +56,23 @@ def _run_input_context(state: State) -> str:
     return "\n".join(lines)
 
 
-def _state_model_name(state: State) -> str | None:
+def _state_model_name(state: State, llm: BaseChatModel | None = None) -> str | None:
+    actual_model = getattr(llm, "model", None)
+    if isinstance(actual_model, str) and actual_model:
+        return actual_model
+
     metadata = state.get("metadata") or {}
     resolved_config = metadata.get("resolved_model_config") or {}
-    return (
+    model_name = (
         metadata.get("model_name")
         or resolved_config.get("model_name")
         or resolved_config.get("model")
     )
+    if model_name:
+        return str(model_name)
+
+    purpose = metadata.get("inference_purpose")
+    return model_name_for(purpose) if purpose else None
 
 
 class BaseAgent(ABC):
@@ -170,7 +180,7 @@ class SupervisorAgent(BaseAgent):
                 name=self.name,
                 agent_name=self.name,
                 iteration=1,
-                model=_state_model_name(state),
+                model=_state_model_name(state, self.llm),
                 duration_ms=round((perf_counter() - llm_started) * 1000, 3),
                 status="success",
                 started_at=llm_started_at,
@@ -185,14 +195,17 @@ class SupervisorAgent(BaseAgent):
         if response.decision in {"clarify", "propose_plan"}:
             updates["plan"] = response.plan
 
-        # Merge existing metadata (e.g. use_llm, model_name) with model metadata.
+        # Merge existing metadata (e.g. use_llm and inference purpose) with model metadata.
         existing_metadata = state.get("metadata") or {}
         new_metadata = response.metadata or {}
-        updates["metadata"] = {
+        merged_metadata = {
             **existing_metadata,
             **new_metadata,
-            "supervisor_decision": response.decision,
         }
+        if "inference_purpose" in existing_metadata:
+            merged_metadata["inference_purpose"] = existing_metadata["inference_purpose"]
+        merged_metadata["supervisor_decision"] = response.decision
+        updates["metadata"] = merged_metadata
         updates["logs"] = updates.get("logs", []) + [
             f"[SupervisorAgent] Produced '{response.decision}' response."
         ]
@@ -279,7 +292,7 @@ class WorkerAgent(BaseAgent):
                                 agent_name=self.name,
                                 task_id=current_task.id,
                                 iteration=iteration,
-                                model=_state_model_name(state),
+                                model=_state_model_name(state, self.llm),
                                 duration_ms=round((perf_counter() - llm_started) * 1000, 3),
                                 status="failed",
                                 error_type=type(exc).__name__,
@@ -297,7 +310,7 @@ class WorkerAgent(BaseAgent):
                             agent_name=self.name,
                             task_id=current_task.id,
                             iteration=iteration,
-                            model=_state_model_name(state),
+                            model=_state_model_name(state, self.llm),
                             duration_ms=round((perf_counter() - llm_started) * 1000, 3),
                             status="success",
                             started_at=llm_started_at,

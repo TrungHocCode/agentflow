@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
+from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.service import CatalogService
@@ -518,12 +519,13 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated.status, "waiting_for_user")
         self.assertEqual(len(updated.draft_plan), 1)
         self.assertTrue(updated.metadata["use_llm"])
-        self.assertEqual(updated.metadata["model_name"], "qwen3:8b")
+        self.assertEqual(updated.metadata["inference_purpose"], InferencePurpose.PLANNER.value)
+        self.assertNotIn("model_name", updated.metadata)
         self.assertTrue(service.execution_port.initial_state["metadata"]["use_llm"])
         messages = await service.list_messages(conversation.id)
         self.assertEqual(messages[0].role, "user")
 
-    async def test_conversation_uses_selected_model_for_plan_and_follow_up(self) -> None:
+    async def test_conversation_routes_plan_and_follow_up_to_planner(self) -> None:
         repository = FakeConversationRepository()
         execution_port = FakeExecutionPort()
         service = ConversationService(repository=repository, execution_port=execution_port)
@@ -532,17 +534,31 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         updated = await service.send_message(
             conversation_id=conversation.id,
             content="Research local LLMs",
-            model_name="gemma2:latest",
         )
-        self.assertEqual(updated.metadata["model_name"], "gemma2:latest")
+        self.assertEqual(updated.metadata["inference_purpose"], InferencePurpose.PLANNER.value)
 
         await service.send_message(
             conversation_id=conversation.id,
             content="Focus on context length",
-            model_name="qwen3:0.6b",
         )
         self.assertTrue(execution_port.continuation_metadata["use_llm"])
-        self.assertEqual(execution_port.continuation_metadata["model_name"], "qwen3:0.6b")
+        self.assertEqual(
+            execution_port.continuation_metadata["inference_purpose"],
+            InferencePurpose.PLANNER.value,
+        )
+
+    async def test_conversation_routes_simple_question_to_chat_profile(self) -> None:
+        repository = FakeConversationRepository()
+        execution_port = FakeExecutionPort()
+        service = ConversationService(repository=repository, execution_port=execution_port)
+        conversation = await service.create_conversation(title="Simple question")
+
+        await service.send_message(conversation.id, "SSE là gì?")
+
+        self.assertEqual(
+            execution_port.initial_state["metadata"]["inference_purpose"],
+            InferencePurpose.CHAT.value,
+        )
 
     async def test_async_message_publishes_replayable_progress_events(self) -> None:
         from app.infrastructure.redis.conversation_event_publisher import (
@@ -561,7 +577,6 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         accepted = await service.start_message(
             conversation_id=conversation.id,
             content="Research local LLMs",
-            model_name="llama3:8b",
         )
 
         self.assertEqual(accepted["status"], "accepted")
@@ -577,7 +592,10 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertIn("planning_completed", "".join(events))
         self.assertIn('"outcome": "propose_plan"', "".join(events))
         self.assertTrue(execution_port.initial_state["metadata"]["use_llm"])
-        self.assertEqual(execution_port.initial_state["metadata"]["model_name"], "llama3:8b")
+        self.assertEqual(
+            execution_port.initial_state["metadata"]["inference_purpose"],
+            InferencePurpose.PLANNER.value,
+        )
 
     async def test_clarification_is_saved_and_the_next_message_continues_the_same_turn(self) -> None:
         class ClarifyingExecutionPort(FakeExecutionPort):

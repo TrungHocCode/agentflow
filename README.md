@@ -34,7 +34,7 @@ The initial audience is technology researchers, developers, students, and techni
 - **Use role-specific agents and tools:** research, synthesis, reporting, and chart work are assigned to agents with authorized tools.
 - **Follow progress:** inspect task status and run events while work is executing.
 - **Keep results:** review research outputs and download generated artifacts such as Markdown reports and charts.
-- **Run locally:** use Ollama-compatible local chat models; the default model is `qwen3:8b`.
+- **Route inference by role:** short, direct chat uses `qwen3:0.6b`; planning and worker execution use `qwen3:8b` by default. Users do not select a model in the UI.
 - **Manage personal work:** sign in, create conversations, and manage workflows and runs associated with the user.
 
 ## How it works
@@ -130,14 +130,15 @@ python backend/app/db/init_db.py
 
 ### 3. Start Ollama and download a model
 
-Start the Ollama application or run `ollama serve` in another terminal, then pull the default model:
+Start the Ollama application or run `ollama serve` in another terminal, then pull the default chat and planning/worker models:
 
 ```powershell
+ollama pull qwen3:0.6b
 ollama pull qwen3:8b
 ollama list
 ```
 
-AgentFlow defaults to `http://localhost:11434`. The UI also includes `llama3:8b` and `gemma2:latest`; pull whichever model you intend to use before selecting it. The actual model tags must match the names available from your local Ollama instance.
+AgentFlow defaults to `http://localhost:11434`. Model routing is configured on the backend with `LLM_CHAT_MODEL`, `LLM_PLANNER_MODEL`, and `LLM_WORKER_MODEL` in `.env`; changing these values does not add a model picker to the user interface. The default router sends obvious short questions and small-talk to the chat profile, routes research/workflow requests to the planner profile, and assigns the worker profile to tool-using tasks. Ambiguous requests default to planning.
 
 ### 4. Start the API
 
@@ -201,7 +202,7 @@ docker compose up --build
 
 The frontend is served at <http://localhost:5173>, the API at <http://localhost:8000>, and Mongo Express at <http://localhost:8081>.
 
-**Ollama is not included in the Compose stack.** For model-backed execution, the API and worker containers must be able to reach your Ollama host. The current Compose configuration does not set a host Ollama URL; the simplest working setup is the local-process workflow above. If you containerize the API and worker, configure `OLLAMA_BASE_URL` to a host-reachable Ollama address and make sure Ollama accepts connections from Docker.
+**Ollama is not included in the Compose stack.** For model-backed execution, the API and worker containers must be able to reach your Ollama host. The simplest working setup is the local-process workflow above. If you use the API and worker containers, set `OLLAMA_BASE_URL` in `.env` to a host-reachable Ollama address and make sure Ollama accepts connections from Docker; Compose forwards that URL and the three model-profile settings to both services.
 
 ## Verify the installation
 
