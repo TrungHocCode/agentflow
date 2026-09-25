@@ -1,0 +1,993 @@
+{
+  "$defs": {
+    "ArtifactReferences": {
+      "additionalProperties": false,
+      "properties": {
+        "report_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Report Path"
+        },
+        "chart_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chart Path"
+        },
+        "raw_log_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Log Path"
+        }
+      },
+      "title": "ArtifactReferences",
+      "type": "object"
+    },
+    "ComponentTiming": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "calls": {
+          "default": 1,
+          "minimum": 0,
+          "title": "Calls",
+          "type": "integer"
+        },
+        "total_ms": {
+          "minimum": 0,
+          "title": "Total Ms",
+          "type": "integer"
+        },
+        "max_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Ms"
+        },
+        "failures": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Failures",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "total_ms"
+      ],
+      "title": "ComponentTiming",
+      "type": "object"
+    },
+    "EvidenceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "format": "uri",
+          "minLength": 1,
+          "title": "Url",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "published_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published At"
+        },
+        "retrieved_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retrieved At"
+        },
+        "source_class": {
+          "default": "other",
+          "enum": [
+            "official_primary",
+            "peer_reviewed",
+            "secondary",
+            "other"
+          ],
+          "title": "Source Class",
+          "type": "string"
+        },
+        "outcome": {
+          "default": "not_checked",
+          "enum": [
+            "success",
+            "partial",
+            "failed",
+            "not_checked"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "supports_claim": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supports Claim"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Note"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "EvidenceSource",
+      "type": "object"
+    },
+    "GitMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "default": "unknown",
+          "title": "Branch",
+          "type": "string"
+        },
+        "commit": {
+          "default": "unknown",
+          "title": "Commit",
+          "type": "string"
+        }
+      },
+      "title": "GitMetadata",
+      "type": "object"
+    },
+    "LLMCallTiming": {
+      "additionalProperties": false,
+      "properties": {
+        "component": {
+          "minLength": 1,
+          "title": "Component",
+          "type": "string"
+        },
+        "calls": {
+          "default": 1,
+          "minimum": 0,
+          "title": "Calls",
+          "type": "integer"
+        },
+        "total_ms": {
+          "minimum": 0,
+          "title": "Total Ms",
+          "type": "integer"
+        },
+        "ttft_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ttft Ms"
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        }
+      },
+      "required": [
+        "component",
+        "total_ms"
+      ],
+      "title": "LLMCallTiming",
+      "type": "object"
+    },
+    "PerformanceMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "api_status_code": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Status Code"
+        },
+        "failure_stage": {
+          "anyOf": [
+            {
+              "enum": [
+                "api",
+                "supervisor",
+                "queue",
+                "worker",
+                "llm",
+                "tool",
+                "persistence",
+                "sse",
+                "artifact",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Stage"
+        },
+        "api_response_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Response Ms"
+        },
+        "supervisor_ttft_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Supervisor Ttft Ms"
+        },
+        "first_progress_event_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Progress Event Ms"
+        },
+        "plan_generation_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plan Generation Ms"
+        },
+        "queue_wait_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Queue Wait Ms"
+        },
+        "workflow_execution_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workflow Execution Ms"
+        },
+        "end_to_end_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "End To End Ms"
+        },
+        "sse_delivery_lag_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sse Delivery Lag Ms"
+        },
+        "sse_reconnects": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sse Reconnects"
+        },
+        "node_timings": {
+          "items": {
+            "$ref": "#/$defs/ComponentTiming"
+          },
+          "title": "Node Timings",
+          "type": "array"
+        },
+        "tool_timings": {
+          "items": {
+            "$ref": "#/$defs/ComponentTiming"
+          },
+          "title": "Tool Timings",
+          "type": "array"
+        },
+        "llm_calls": {
+          "items": {
+            "$ref": "#/$defs/LLMCallTiming"
+          },
+          "title": "Llm Calls",
+          "type": "array"
+        },
+        "load_test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThroughputMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "PerformanceMetrics",
+      "type": "object"
+    },
+    "QualityMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "requested_dimensions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Dimensions"
+        },
+        "covered_dimensions": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Covered Dimensions"
+        },
+        "sources_found": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sources Found"
+        },
+        "sources_validated": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sources Validated"
+        },
+        "factual_claims": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Factual Claims"
+        },
+        "claims_with_citations": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Claims With Citations"
+        },
+        "unsupported_claims": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unsupported Claims"
+        },
+        "acceptance_checks_passed": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acceptance Checks Passed"
+        },
+        "acceptance_checks_total": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Acceptance Checks Total"
+        },
+        "evidence_sources": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSource"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "human_score_1_to_5": {
+          "anyOf": [
+            {
+              "maximum": 5,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Human Score 1 To 5"
+        },
+        "evaluator_notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evaluator Notes"
+        }
+      },
+      "title": "QualityMetrics",
+      "type": "object"
+    },
+    "ResourceMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_utilization_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Utilization Percent"
+        },
+        "peak_ram_mb": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Ram Mb"
+        },
+        "gpu_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Name"
+        },
+        "gpu_utilization_percent": {
+          "anyOf": [
+            {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Utilization Percent"
+        },
+        "peak_vram_mb": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Vram Mb"
+        }
+      },
+      "title": "ResourceMetrics",
+      "type": "object"
+    },
+    "RunConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "default": "live",
+          "enum": [
+            "live",
+            "replay"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "model": {
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        },
+        "quantization": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quantization"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temperature"
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Output Tokens"
+        },
+        "prompt_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Revision"
+        },
+        "tool_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Revision"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "RunConfiguration",
+      "type": "object"
+    },
+    "ThroughputMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Concurrency"
+        },
+        "offered_requests_per_second": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offered Requests Per Second"
+        },
+        "observed_requests_per_second": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed Requests Per Second"
+        },
+        "test_duration_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Test Duration Seconds"
+        },
+        "accepted_runs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Accepted Runs"
+        },
+        "completed_runs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed Runs"
+        },
+        "peak_active_runs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Peak Active Runs"
+        }
+      },
+      "title": "ThroughputMetrics",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "evaluation_id": {
+      "minLength": 1,
+      "title": "Evaluation Id",
+      "type": "string"
+    },
+    "agentflow_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agentflow Run Id"
+    },
+    "case_id": {
+      "minLength": 1,
+      "title": "Case Id",
+      "type": "string"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Finished At"
+    },
+    "git": {
+      "$ref": "#/$defs/GitMetadata"
+    },
+    "configuration": {
+      "$ref": "#/$defs/RunConfiguration"
+    },
+    "execution_status": {
+      "default": "in_progress",
+      "enum": [
+        "in_progress",
+        "completed",
+        "partial",
+        "failed",
+        "cancelled"
+      ],
+      "title": "Execution Status",
+      "type": "string"
+    },
+    "evaluation_verdict": {
+      "default": "not_evaluated",
+      "enum": [
+        "not_evaluated",
+        "pass",
+        "needs_review",
+        "fail"
+      ],
+      "title": "Evaluation Verdict",
+      "type": "string"
+    },
+    "performance": {
+      "$ref": "#/$defs/PerformanceMetrics"
+    },
+    "quality": {
+      "$ref": "#/$defs/QualityMetrics"
+    },
+    "resources": {
+      "$ref": "#/$defs/ResourceMetrics"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/ArtifactReferences"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    }
+  },
+  "required": [
+    "evaluation_id",
+    "case_id",
+    "started_at",
+    "configuration"
+  ],
+  "title": "EvaluationRunRecord",
+  "type": "object"
+}

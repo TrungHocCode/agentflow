@@ -15,6 +15,7 @@ AgentFlow turns a research question into a workflow you can review, edit, approv
 - [Run locally](#run-locally)
 - [Run with Docker Compose](#run-with-docker-compose)
 - [Verify the installation](#verify-the-installation)
+- [Evaluate research runs](#evaluate-research-runs)
 - [Repository layout](#repository-layout)
 - [Current scope and limitations](#current-scope-and-limitations)
 - [Contributing](#contributing)
@@ -221,6 +222,16 @@ npm run build
 ```
 
 The CI workflow runs database migrations, backend tests, Python compilation, frontend lint, and frontend build on pull requests to `dev` and `main`.
+
+## Evaluate research runs
+
+Use the versioned [evaluation cases and metrics](evaluation/README.md) to compare research quality and runtime behavior across changes. The record tool saves one structured JSON file per run under ignored `workspace_data/evaluations/`, then summarizes latency, throughput, source/citation coverage, and outcomes:
+
+```powershell
+python scripts/evaluation_runs.py new --case-id llm-benchmark-comparison --model qwen3:8b --quantization Q4_K_M
+```
+
+The case chooses live or replay mode by default. Fill in measurements and evidence sources, mark the run's execution status/verdict, validate it, and generate the aggregate report as described in the evaluation guide.
 
 ## Repository layout
 

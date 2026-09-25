@@ -1,0 +1,24 @@
+{
+  "case_id": "conflicting-evidence-synthesis",
+  "version": 1,
+  "title": "Reconcile conflicting technical claims",
+  "category": "evidence-synthesis",
+  "mode": "live",
+  "prompt": "Research whether SWE-bench Verified results can be compared directly across model providers. Gather the benchmark's own description and at least two provider evaluation reports. Explain differences in harness, number of attempts, scaffolding, and known benchmark limitations. If sources make claims that appear to conflict, quote or summarize the relevant evidence, attribute each claim, and explain whether the difference is actually due to a different setup.",
+  "requested_dimensions": [
+    "Benchmark task and scoring definition",
+    "Evaluation harness and attempt settings",
+    "Provider-specific scaffolding differences",
+    "Known validity or contamination limitations",
+    "Evidence-based resolution or explicit unresolved conflict"
+  ],
+  "acceptance_criteria": [
+    "Benchmark definition is sourced from the benchmark authors or official materials",
+    "Provider claims are attributed to their own technical reports",
+    "Different evaluation setups are not presented as directly equivalent",
+    "Conflicts are surfaced rather than averaged away",
+    "The conclusion separates evidence from interpretation"
+  ],
+  "expected_artifacts": ["evidence-dossier", "markdown-report"],
+  "tags": ["conflict", "benchmark-methodology", "source-quality"]
+}
