@@ -29,6 +29,11 @@ class InMemoryConversationEventPublisher(ConversationEventPublisher):
         queue: asyncio.Queue[ConversationEvent] = asyncio.Queue()
         self._subscribers[conversation_id].add(queue)
         try:
+            yield ConversationEvent(
+                conversation_id=conversation_id,
+                turn_id=turn_id or "",
+                type="stream_ready",
+            )
             for event in tuple(self._history.get(conversation_id, ())):
                 if turn_id is None or event.turn_id == turn_id:
                     yield event
@@ -66,6 +71,11 @@ class RedisConversationEventPublisher(ConversationEventPublisher):
         channel = f"{self.channel_prefix}{conversation_id}"
         await pubsub.subscribe(channel)
         try:
+            yield ConversationEvent(
+                conversation_id=conversation_id,
+                turn_id=turn_id or "",
+                type="stream_ready",
+            )
             while True:
                 message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message and message.get("data"):

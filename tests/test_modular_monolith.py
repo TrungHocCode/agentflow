@@ -5,7 +5,7 @@ import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List
 
 from langchain_core.messages import AIMessage
 
@@ -164,9 +164,17 @@ class FakeExecutionPort:
         self.initial_state: State | None = None
         self.continuation_metadata: Dict[str, Any] | None = None
 
-    async def create_plan(self, run_id: str, initial_state: State) -> State:
+    async def create_plan(
+        self,
+        run_id: str,
+        initial_state: State,
+        on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+    ) -> State:
         self.created_plan_for = run_id
         self.initial_state = initial_state
+        if on_assistant_token:
+            await on_assistant_token("I drafted ")
+            await on_assistant_token("a workflow for review.")
         return {
             "mode": "conversation",
             "plan": [make_task(1)],
@@ -181,8 +189,12 @@ class FakeExecutionPort:
         run_id: str,
         message: str,
         metadata: Dict[str, Any] | None = None,
+        on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> State:
         self.continuation_metadata = dict(metadata or {})
+        if on_assistant_token:
+            await on_assistant_token("I updated ")
+            await on_assistant_token("the workflow for review.")
         return {
             "mode": "conversation",
             "plan": [make_task(1)],
@@ -590,16 +602,52 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertIn("planning_started", "".join(events))
         self.assertIn("workflow_draft_updated", "".join(events))
         self.assertIn("planning_completed", "".join(events))
+        self.assertIn('"type": "stream_ready"', "".join(events))
         self.assertIn('"outcome": "propose_plan"', "".join(events))
+        self.assertIn('"content": "I drafted "', "".join(events))
         self.assertTrue(execution_port.initial_state["metadata"]["use_llm"])
         self.assertEqual(
             execution_port.initial_state["metadata"]["inference_purpose"],
             InferencePurpose.PLANNER.value,
         )
+        persisted_conversation = await service.get_conversation(conversation.id)
+        self.assertEqual(len(persisted_conversation.metadata["chat_ttft_samples"]), 1)
+
+    async def test_ready_sse_subscriber_receives_first_streamed_assistant_chunk(self) -> None:
+        from app.infrastructure.redis.conversation_event_publisher import (
+            InMemoryConversationEventPublisher,
+        )
+
+        publisher = InMemoryConversationEventPublisher()
+        service = ConversationService(
+            repository=FakeConversationRepository(),
+            execution_port=FakeExecutionPort(),
+            event_publisher=publisher,
+        )
+        conversation = await service.create_conversation(title="Preconnected chat")
+        turn_id = "preconnected-turn"
+        event_stream = service.stream_events(conversation.id, turn_id=turn_id)
+
+        ready_frame = await anext(event_stream)
+        self.assertIn('"type": "stream_ready"', ready_frame)
+        await service.start_message(
+            conversation.id,
+            "Research local models",
+            turn_id=turn_id,
+        )
+        frames = [frame async for frame in event_stream]
+
+        self.assertIn('"content": "I drafted "', "".join(frames))
+        self.assertIn('"content": "a workflow for review."', "".join(frames))
 
     async def test_clarification_is_saved_and_the_next_message_continues_the_same_turn(self) -> None:
         class ClarifyingExecutionPort(FakeExecutionPort):
-            async def create_plan(self, run_id: str, initial_state: State) -> State:
+            async def create_plan(
+                self,
+                run_id: str,
+                initial_state: State,
+                on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+            ) -> State:
                 self.created_plan_for = run_id
                 self.initial_state = initial_state
                 return {
@@ -633,7 +681,12 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         )
 
         class FailingExecutionPort(FakeExecutionPort):
-            async def create_plan(self, run_id: str, initial_state: State) -> State:
+            async def create_plan(
+                self,
+                run_id: str,
+                initial_state: State,
+                on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+            ) -> State:
                 del run_id, initial_state
                 return {
                     "mode": "conversation",

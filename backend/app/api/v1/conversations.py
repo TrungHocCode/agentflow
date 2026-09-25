@@ -118,6 +118,7 @@ async def send_conversation_message(
         conversation_id=conversation_id,
         content=request.content,
         user_id=user_id,
+        turn_id=str(request.turn_id) if request.turn_id else None,
     )
     if accepted is None:
         raise HTTPException(

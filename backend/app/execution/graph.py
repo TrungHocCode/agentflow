@@ -4,8 +4,11 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.runtime import Runtime
 
 from app.core.config import settings
+from app.execution.context import ExecutionContext
+from app.execution.ports import AssistantTokenCallback
 from app.execution.state import State, Task
 from app.execution.model_router import InferencePurpose, model_name_for
 from app.execution.nodes.dispatcher import TaskDispatcher
@@ -58,6 +61,7 @@ SUPERVISOR_SYSTEM_PROMPT = (
 async def supervisor_node(
     state: State,
     agent_resolver: AgentResolver | None = None,
+    on_assistant_token: AssistantTokenCallback | None = None,
 ) -> Dict[str, Any]:
     """
     Supervisor Node handles intent analysis, multi-turn clarification, and plan formulation.
@@ -91,7 +95,10 @@ async def supervisor_node(
                 system_prompt=f"{SUPERVISOR_SYSTEM_PROMPT}\n{tool_catalog}",
                 llm=llm
             )
-            updates = await supervisor.execute(state)
+            updates = await supervisor.execute(
+                state,
+                on_assistant_token=on_assistant_token,
+            )
             decision = (updates.get("metadata") or {}).get("supervisor_decision")
             if decision == "propose_plan":
                 tasks = updates.get("plan") or []
@@ -535,12 +542,19 @@ def build_execution_graph(
     Args:
         checkpointer: Checkpointer tùy chọn (dùng trong tests để inject MemorySaver riêng)
     """
-    workflow = StateGraph(State)
+    workflow = StateGraph(State, context_schema=ExecutionContext)
     resolver = agent_resolver or AgentResolver()
 
     # Add Nodes with the same active catalog resolver used by worker execution.
-    async def resolved_supervisor_node(state: State) -> Dict[str, Any]:
-        return await supervisor_node(state, agent_resolver=resolver)
+    async def resolved_supervisor_node(
+        state: State,
+        runtime: Runtime[ExecutionContext],
+    ) -> Dict[str, Any]:
+        return await supervisor_node(
+            state,
+            agent_resolver=resolver,
+            on_assistant_token=(runtime.context or {}).get("on_assistant_token"),
+        )
 
     workflow.add_node("supervisor_node", resolved_supervisor_node)
     workflow.add_node("hitl_gate", hitl_gate_node)  # HITL checkpoint: PAUSE khi mode=conversation

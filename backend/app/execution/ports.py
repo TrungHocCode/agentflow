@@ -1,18 +1,28 @@
 """Execution subsystem ports consumed by the Runs module."""
 
-from typing import Any, AsyncGenerator, Dict, Protocol
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Protocol
 
 from app.execution.state import State
 
 
+AssistantTokenCallback = Callable[[str], Awaitable[None]]
+
+
 class ExecutionPort(Protocol):
-    async def create_plan(self, run_id: str, initial_state: State) -> State:
+    async def create_plan(
+        self,
+        run_id: str,
+        initial_state: State,
+        on_assistant_token: AssistantTokenCallback | None = None,
+    ) -> State:
         ...
+
     async def continue_conversation(
         self,
         run_id: str,
         message: str,
         metadata: Dict[str, Any] | None = None,
+        on_assistant_token: AssistantTokenCallback | None = None,
     ) -> State:
         ...
 

@@ -140,6 +140,7 @@ class TestExecutionMetrics(unittest.TestCase):
             metadata={
                 "execution_timings": [{"duration_ms": 20}],
                 "execution_metrics": {"total_call_time_ms": 20},
+                "chat_ttft_samples": [{"turn_id": "turn-1", "ttft_ms": 42.0}],
                 "supervisor_decision": "answer",
             },
         )

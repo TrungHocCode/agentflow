@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Send, Bot, User, CheckCircle2, Circle, Play, Trash2, XCircle, AlertCircle, ArrowRight, Clock, LoaderCircle, SkipForward, FileText, ExternalLink } from 'lucide-react';
 import StructuredText from './StructuredText';
 
@@ -42,6 +42,7 @@ export default function ChatStudio({
 }) {
   const [inputPrompt, setInputPrompt] = useState('');
   const [liveThinkingSeconds, setLiveThinkingSeconds] = useState(0);
+  const hasStreamingAssistantMessage = messages.some(message => message.isGenerating);
 
   // Live timer while AI is thinking
   useEffect(() => {
@@ -171,7 +172,17 @@ export default function ChatStudio({
                   )}
                 </div>
                 <div style={{ fontSize: '0.875rem', lineHeight: 1.5 }}>
-                  <StructuredText text={msg.text} />
+                  {msg.text
+                    ? <>
+                      <StructuredText text={msg.text} />
+                      {msg.isGenerating && <span className="streaming-caret" aria-hidden="true">▍</span>}
+                    </>
+                    : msg.isGenerating && (
+                      <span className="streaming-placeholder" role="status">
+                        <LoaderCircle className="spin-slow" size={14} />
+                        Đang soạn phản hồi…
+                      </span>
+                    )}
                 </div>
               </div>
 
@@ -185,7 +196,7 @@ export default function ChatStudio({
         )}
 
         {/* Typing 3-Dots & Live Thinking Timer Indicator */}
-        {isProcessing && (
+        {isProcessing && !hasStreamingAssistantMessage && (
           <div style={{ display: 'flex', gap: '0.875rem', alignSelf: 'flex-start', margin: '0.5rem 0' }}>
             <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'linear-gradient(135deg, #06b6d4, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Bot style={{ width: '18px', height: '18px', color: '#fff' }} />

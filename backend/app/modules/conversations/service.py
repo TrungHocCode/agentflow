@@ -2,15 +2,17 @@
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
+from time import perf_counter
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import settings
 from app.execution.ports import ExecutionPort
-from app.execution.model_router import route_conversation
+from app.execution.model_router import model_name_for, route_conversation
 from app.execution.state import State, Task
 from app.modules.conversations.models import (
     ConversationMessage,
@@ -19,6 +21,9 @@ from app.modules.conversations.models import (
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationService:
@@ -153,9 +158,11 @@ class ConversationService:
         conversation_id: str,
         content: str,
         user_id: str = "default_user",
+        turn_id: str | None = None,
     ) -> Dict[str, Any] | None:
         """Persist a message and run planning asynchronously for the API contract."""
 
+        turn_started_at = perf_counter()
         conversation = await self.get_conversation(conversation_id, user_id)
         if conversation is None or conversation.status == "archived":
             return None
@@ -170,7 +177,7 @@ class ConversationService:
             created_at=datetime.utcnow(),
         )
         await self.repository.add_message(user_message)
-        turn_id = str(uuid.uuid4())
+        turn_id = turn_id or str(uuid.uuid4())
         await self._publish(
             ConversationEvent(
                 conversation_id=conversation.id,
@@ -179,7 +186,14 @@ class ConversationService:
                 payload={"user_message_id": user_message.id},
             )
         )
-        asyncio.create_task(self._process_turn(conversation, content, turn_id))
+        asyncio.create_task(
+            self._process_turn(
+                conversation,
+                content,
+                turn_id,
+                turn_started_at=turn_started_at,
+            )
+        )
         return {
             "turn_id": turn_id,
             "conversation_id": conversation.id,
@@ -193,13 +207,36 @@ class ConversationService:
         conversation: ConversationRecord,
         content: str,
         turn_id: str,
+        turn_started_at: float,
     ) -> None:
+        streamed_content: List[str] = []
+        first_token_ttft_ms: float | None = None
+
+        async def publish_assistant_token(token: str) -> None:
+            nonlocal first_token_ttft_ms
+            if not token:
+                return
+            if first_token_ttft_ms is None:
+                first_token_ttft_ms = round((perf_counter() - turn_started_at) * 1000, 3)
+            streamed_content.append(token)
+            await self._publish(
+                ConversationEvent(
+                    conversation_id=conversation.id,
+                    turn_id=turn_id,
+                    type="assistant_delta",
+                    payload={"content": token},
+                )
+            )
+
         try:
             if self._should_continue(conversation):
                 result_state = await self.execution_port.continue_conversation(
                     conversation.id,
                     content,
                     metadata=conversation.metadata,
+                    on_assistant_token=(
+                        publish_assistant_token if self.event_publisher is not None else None
+                    ),
                 )
             else:
                 initial_state: State = {
@@ -211,16 +248,35 @@ class ConversationService:
                     "mode": "conversation",
                     "metadata": conversation.metadata,
                 }
-                result_state = await self.execution_port.create_plan(conversation.id, initial_state)
+                result_state = await self.execution_port.create_plan(
+                    conversation.id,
+                    initial_state,
+                    on_assistant_token=(
+                        publish_assistant_token if self.event_publisher is not None else None
+                    ),
+                )
 
             decision, effective_plan, assistant_messages = self._interpret_planner_result(
                 result_state,
                 conversation.draft_plan,
             )
+            if (
+                self.event_publisher is not None
+                and assistant_messages
+                and first_token_ttft_ms is None
+            ):
+                # If an adapter does not stream, its first visible token is the completed response.
+                first_token_ttft_ms = round((perf_counter() - turn_started_at) * 1000, 3)
             conversation.draft_plan = effective_plan
             conversation.metadata.update(result_state.get("metadata") or {})
             self._accumulate_execution_timings(conversation, result_state)
             conversation.metadata["supervisor_decision"] = decision
+            if first_token_ttft_ms is not None:
+                self._record_chat_ttft(
+                    conversation,
+                    turn_id=turn_id,
+                    ttft_ms=first_token_ttft_ms,
+                )
             conversation.status = "waiting_for_user"
             conversation.updated_at = datetime.utcnow()
             await self.repository.save(conversation)
@@ -235,6 +291,7 @@ class ConversationService:
                     },
                 )
             )
+            streamed_message = "".join(streamed_content)
             for message in assistant_messages:
                 await self.repository.add_message(
                     ConversationMessage(
@@ -245,14 +302,22 @@ class ConversationService:
                         created_at=datetime.utcnow(),
                     )
                 )
-                await self._publish(
-                    ConversationEvent(
-                        conversation_id=conversation.id,
-                        turn_id=turn_id,
-                        type="assistant_delta",
-                        payload={"content": message},
+                if not streamed_message:
+                    await publish_assistant_token(message)
+                    streamed_message = message
+                elif message.startswith(streamed_message):
+                    await publish_assistant_token(message[len(streamed_message):])
+                    streamed_message = message
+                elif message != streamed_message:
+                    await self._publish(
+                        ConversationEvent(
+                            conversation_id=conversation.id,
+                            turn_id=turn_id,
+                            type="assistant_replace",
+                            payload={"content": message},
+                        )
                     )
-                )
+                    streamed_message = message
             await self._publish(
                 ConversationEvent(
                     conversation_id=conversation.id,
@@ -262,6 +327,16 @@ class ConversationService:
                 )
             )
         except Exception as exc:
+            if first_token_ttft_ms is not None:
+                self._record_chat_ttft(
+                    conversation,
+                    turn_id=turn_id,
+                    ttft_ms=first_token_ttft_ms,
+                )
+                try:
+                    await self.repository.save(conversation)
+                except Exception:
+                    logger.exception("Could not persist chat TTFT sample for turn %s", turn_id)
             await self._publish(
                 ConversationEvent(
                     conversation_id=conversation.id,
@@ -283,6 +358,30 @@ class ConversationService:
             yield f"id: {event.event_id}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
             if event.type in {"planning_completed", "planning_failed"}:
                 return
+
+    @staticmethod
+    def _record_chat_ttft(
+        conversation: ConversationRecord,
+        *,
+        turn_id: str,
+        ttft_ms: float,
+    ) -> None:
+        """Persist a bounded, content-free server TTFT sample for internal evaluation."""
+
+        samples = [
+            sample
+            for sample in conversation.metadata.get("chat_ttft_samples", [])
+            if sample.get("turn_id") != turn_id
+        ]
+        sample = {
+            "turn_id": turn_id,
+            "ttft_ms": ttft_ms,
+            "model": model_name_for(
+                conversation.metadata.get("inference_purpose", "planner")
+            ),
+            "measured_at": datetime.utcnow().isoformat(),
+        }
+        conversation.metadata["chat_ttft_samples"] = [*samples[-49:], sample]
 
     async def _publish(self, event: ConversationEvent) -> None:
         if self.event_publisher is not None:
