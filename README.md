@@ -17,7 +17,6 @@ AgentFlow turns a research question into a workflow you can review, edit, approv
 - [Verify the installation](#verify-the-installation)
 - [Repository layout](#repository-layout)
 - [Current scope and limitations](#current-scope-and-limitations)
-- [Project documentation](#project-documentation)
 - [Contributing](#contributing)
 - [Security](#security)
 
@@ -235,8 +234,6 @@ agentflow/
 │       └── workers/          # Background run worker
 ├── frontend/                 # React + Vite application
 ├── tests/                    # Backend unit and integration tests
-├── docs/
-│   └── architecture/         # Practical arc42-inspired architecture set
 ├── workspace_data/           # Local generated artifacts (not source code)
 ├── docker-compose.yml
 └── requirements.txt
@@ -250,19 +247,6 @@ agentflow/
 - Local model speed and structured-output quality vary with model, quantization, context size, and CPU/GPU resources. Multi-agent runs can take substantially longer than a single chat response.
 - A successful task/tool status does not by itself guarantee that research covered every requested subject. Review source coverage and citations before relying on a report.
 - The project targets local development and a small number of users. Production deployment still requires additional operational hardening, secure secret management, TLS, backups, and load testing.
-
-## Project documentation
-
-- [Documentation map](docs/README.md)
-- [Product direction and MVP](docs/PROJECT_CORE.md)
-- [Design system](docs/DESIGN_SYSTEM.md)
-- [Architecture](docs/architecture/02-architecture.md)
-- [Requirements and use cases](docs/architecture/01-requirements.md)
-- [Data model](docs/architecture/03-data-model.md)
-- [OpenAPI contract](docs/architecture/04-openapi.yaml)
-- [Security](docs/architecture/05-security.md)
-- [Testing strategy](docs/architecture/06-testing.md)
-- [Deployment](docs/architecture/07-deployment.md)
 
 ## Contributing
 
