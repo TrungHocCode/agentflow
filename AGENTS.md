@@ -10,7 +10,7 @@ AgentFlow là một AI Agent Platform cho phép người dùng tạo, quản lý
 | ---------- | ---------------------------------- |
 | Backend    | Python, FastAPI                    |
 | Frontend   | React                              |
-| Database   | PostgreSQL, MongoDB, Redis         |
+| Database   | PostgreSQL, Redis (MongoDB optional) |
 | Container  | Docker, Docker Compose             |
 | CI/CD      | GitHub Actions                     |
 | AI/Agent   | LangChain, LangGraph               |
@@ -21,8 +21,9 @@ AgentFlow là một AI Agent Platform cho phép người dùng tạo, quản lý
 | Data Entity / Scope | Database | Rationale |
 | --- | --- | --- |
 | Users, Flow Definitions, Agent & Tool Catalog | **PostgreSQL** | Relational, strict schemas, ACID transactions |
-| Run History, Execution Logs, Output Artifacts | **MongoDB** | Flexible document schema, nested JSON outputs, high-write logging |
-| Session State, Realtime Cache, Rate-limit counters | **Redis** | High speed in-memory access, key TTL support |
+| Conversations, Workflow Versions, Runs, Replayable Events, Evidence, Artifact Metadata | **PostgreSQL** | Durable source of truth; not MongoDB |
+| Report/chart files | **Filesystem** | Scoped artifact storage; PostgreSQL holds ownership and references |
+| Queue and realtime fan-out; future rate-limit/cache counters | **Redis** | Coordination only; not authoritative run/conversation state |
 
 ## Project Structure
 
@@ -63,7 +64,7 @@ Hệ thống tách biệt rõ ràng giữa hai giai đoạn:
 2. **Run Phase (Deterministic Execution Engine)**:
    - **ExecutionManager / TaskDispatcher**: Node điều phối bằng code (code-based router) đọc `plan`, lọc ra các `Task` có status `pending` đã thỏa mãn `dependencies`, và gán `current_task` cho WorkerAgent tương ứng.
    - **WorkerAgent**: Thực thi task bằng ReAct loop (LLM + tool calls). Kết quả tool output được bao bọc trong tag `<tool_output>...</tool_output>` để chống prompt injection.
-   - Điều phối tuần tự/song song mà **không cần gọi lại Supervisor LLM sau mỗi bước worker**, giúp tối ưu chi phí token và giảm latency.
+   - Dispatcher hiện chọn task tuần tự theo DAG, **không gọi lại Supervisor LLM sau mỗi bước worker**. Bounded parallel DAG execution là mục tiêu; tool crawl batch đã có concurrency riêng.
 
 ### State Management
 
@@ -85,7 +86,7 @@ Cả Agent và Tool đều sử dụng Registry pattern:
 
 - **Prompt Injection Defense**: Tất cả kết quả thực thi tool từ bên ngoài (HTTP, file read, web search) được bao bọc trong các tag `<tool_output>...</tool_output>` kèm chỉ thị system prompt để LLM phân biệt dữ liệu thô và mệnh lệnh gốc.
 - **Dynamic Task Limits**: Cho phép cấu hình `max_iterations` và `timeout_seconds` cho từng Task/WorkerAgent thay vì hardcode.
-- **Token & Cost Budget Guardrails**: Hỗ trợ giới hạn `max_token_budget` và `wall_clock_timeout` cho mỗi đợt Run.
+- **Token & Cost Budget Guardrails (target)**: Cần enforce token và wall-clock budget ở run level; không coi việc có setting là đã có guardrail. Per-task timeout/iteration controls hiện có và cần được test riêng.
 - **Tool Authorization**: Worker Agent chỉ được phép truy cập các tools nằm trong whitelist đăng ký của agent đó.
 
 ## Coding Conventions
@@ -163,7 +164,10 @@ Khi cập nhật State, **chỉ trả về các fields cần thay đổi** trong
 
 - Framework: `unittest` với `IsolatedAsyncioTestCase` cho async tests.
 - Mock LLM: Sử dụng `unittest.mock.AsyncMock` và `MagicMock` cho `BaseChatModel`.
-- Chạy tests: `python -m unittest discover tests/`.
+- Unit suite: `python scripts/run_tests.py unit` (isolated workspace, mocked HTTP/DNS, no live model).
+- Legacy discovery remains available: `python -m unittest discover tests/`; it does not install the suite-level network guard.
+- Real PostgreSQL/Redis suite: `python scripts/run_tests.py integration`; see `integration_tests/README.md` for dedicated targets and required safety flags. Never point it at development data.
+- Every test that changes environment variables must restore them. File-producing tests must use a temporary workspace; never remove the repository's `workspace_data`.
 - Test path setup: Tests thêm `backend/` vào `sys.path` để import `app.*` modules.
 - Mọi tool và agent mới **phải có unit test** trước khi merge.
 
@@ -210,4 +214,3 @@ Khi cập nhật State, **chỉ trả về các fields cần thay đổi** trong
 - **File tools** sử dụng `workspace_data/` directory để sandbox file I/O, tránh path traversal.
 - **Worker agent** mặc định tối đa 5 iterations trong tool loop (hoặc theo cấu hình task) để tránh infinite loops.
 - **Messages** được giữ tối đa 10 messages gần nhất để kiểm soát context window.
-

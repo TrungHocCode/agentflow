@@ -2,7 +2,7 @@ import os
 import sys
 import uuid
 import unittest
-import shutil
+from test_support import isolated_workspace
 from unittest.mock import patch, MagicMock
 
 # Adjust path to import backend app
@@ -13,10 +13,8 @@ from app.execution.graph import build_execution_graph, get_graph_config
 
 
 class TestGraphExecution(unittest.IsolatedAsyncioTestCase):
-    def tearDown(self):
-        data_dir = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(data_dir):
-            shutil.rmtree(data_dir)
+    def setUp(self) -> None:
+        self.enterContext(isolated_workspace())
 
     @patch("requests.get")
     async def test_end_to_end_graph_execution(self, mock_get):

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import os
-import shutil
+from test_support import isolated_workspace
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -51,11 +51,12 @@ class TestToolContracts(unittest.TestCase):
 
 
 class TestToolLab(unittest.TestCase):
+    def setUp(self) -> None:
+        self.enterContext(isolated_workspace())
+        clear_cache()
+
     def tearDown(self):
         clear_cache()
-        workspace_data = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(workspace_data):
-            shutil.rmtree(workspace_data)
 
     def test_failed_tool_skips_the_full_dependent_chain(self):
         plan = [

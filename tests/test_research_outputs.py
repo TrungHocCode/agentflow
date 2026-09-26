@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from test_support import isolated_workspace, use_test_adapters
 from pathlib import Path
 
 import httpx
@@ -19,7 +20,8 @@ from app.infrastructure.postgres.run_repository import PostgresRunRepository
 
 class TestResearchOutputAdapters(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
+        self.enterContext(isolated_workspace())
 
     async def test_result_evidence_and_artifact_round_trip(self) -> None:
         repository = PostgresResearchRepository()

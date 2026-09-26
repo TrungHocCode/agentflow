@@ -13,7 +13,8 @@ Kiểm tra:
 import os
 import sys
 import unittest
-import shutil
+from unittest.mock import MagicMock, patch
+from test_support import isolated_workspace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
@@ -75,12 +76,17 @@ class TestGraphWithCheckpointer(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         reset_checkpointer()
         self._test_checkpointer = MemorySaver()
+        self.enterContext(isolated_workspace())
+        response = MagicMock(status_code=200)
+        response.text = (
+            "<html><head><title>Fixture</title></head><body><article><p>"
+            "Deterministic source content for checkpoint isolation, with enough evidence to avoid browser rendering."
+            "</p></article></body></html>"
+        )
+        self.enterContext(patch("requests.get", return_value=response))
 
     def tearDown(self):
         reset_checkpointer()
-        data_dir = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(data_dir):
-            shutil.rmtree(data_dir)
 
     def _build_graph(self):
         """Build graph với MemorySaver riêng để isolation trong tests."""

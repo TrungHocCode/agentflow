@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import unittest
+from test_support import use_test_adapters
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
@@ -17,7 +18,7 @@ from app.modules.runs.service import RunService
 
 class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
 
     def test_supervisor_requires_explicit_coverage_for_comparisons(self) -> None:
         self.assertIn("preserve every subject", SUPERVISOR_SYSTEM_PROMPT)

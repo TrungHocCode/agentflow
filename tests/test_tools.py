@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-import shutil
+from test_support import isolated_workspace
 from typing import Any
 from unittest.mock import patch, MagicMock
 
@@ -17,11 +17,8 @@ from app.execution.tools.news_crawler_tool import normalize_news_url
 
 
 class TestToolsAndReducers(unittest.TestCase):
-    def tearDown(self):
-        # Clean up files in workspace_data if created
-        data_dir = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(data_dir):
-            shutil.rmtree(data_dir)
+    def setUp(self) -> None:
+        self.enterContext(isolated_workspace())
 
     def test_state_reducers(self):
         """Test the state reducers perform list merging correctly."""
