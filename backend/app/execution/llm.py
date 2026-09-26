@@ -16,14 +16,17 @@ def get_llm(
     Instantiate the ChatOllama model assigned to an internal inference purpose.
     """
     try:
-        from langchain_ollama import ChatOllama
-    except ImportError:
-        raise ImportError("langchain-ollama is required for live Ollama execution. Install via: pip install langchain-ollama")
+        from app.execution.instrumented_ollama import InstrumentedChatOllama
+    except ImportError as exc:
+        raise ImportError(
+            "langchain-ollama is required for live Ollama execution. "
+            "Install via: pip install langchain-ollama"
+        ) from exc
 
     model = model_name_for(purpose)
     url = base_url or os.getenv("OLLAMA_BASE_URL") or settings.LLM_BASE_URL
 
-    return ChatOllama(
+    return InstrumentedChatOllama(
         model=model,
         temperature=temperature,
         base_url=url

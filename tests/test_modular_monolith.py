@@ -28,6 +28,7 @@ from app.modules.workflows.schemas import WorkflowCreateRequest
 from app.modules.workflows.service import WorkflowService
 from app.modules.workflows.validator import validate_workflow_definition
 from app.shared.errors import ValidationError
+from app.shared.ollama_timing import active_ollama_turn
 
 
 def make_task(
@@ -612,6 +613,49 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         )
         persisted_conversation = await service.get_conversation(conversation.id)
         self.assertEqual(len(persisted_conversation.metadata["chat_ttft_samples"]), 1)
+
+    async def test_async_message_persists_raw_ollama_timing_without_exposing_it(self) -> None:
+        from app.infrastructure.redis.conversation_event_publisher import (
+            InMemoryConversationEventPublisher,
+        )
+        from app.modules.conversations.models import ConversationResponse
+
+        class TimedExecutionPort(FakeExecutionPort):
+            async def create_plan(
+                self,
+                run_id: str,
+                initial_state: State,
+                on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+            ) -> State:
+                trace = active_ollama_turn.get()
+                if trace is None:
+                    raise AssertionError("The conversation has no active Ollama timing context")
+                timing = trace.begin_request("qwen3:8b")
+                timing.observe({"message": {"thinking": "private reasoning"}, "done": False})
+                timing.observe({"message": {"content": "private answer"}, "done": False})
+                timing.observe({"message": {}, "done": True, "eval_count": 42})
+                timing.finish()
+                return await super().create_plan(run_id, initial_state, on_assistant_token)
+
+        repository = FakeConversationRepository()
+        service = ConversationService(
+            repository=repository,
+            execution_port=TimedExecutionPort(),
+            event_publisher=InMemoryConversationEventPublisher(),
+        )
+        conversation = await service.create_conversation(title="Timing test")
+        accepted = await service.start_message(conversation.id, "Research local LLMs")
+        _ = [frame async for frame in service.stream_events(conversation.id, accepted["turn_id"])]
+
+        persisted = await service.get_conversation(conversation.id)
+        sample = persisted.metadata["chat_ttft_samples"][0]
+        self.assertEqual(sample["turn_id"], accepted["turn_id"])
+        self.assertIsNotNone(sample["ttft_ms"])
+        self.assertEqual(sample["ollama_requests"][0]["model"], "qwen3:8b")
+        self.assertIsNotNone(sample["ollama_requests"][0]["raw_ttft_ms"])
+        self.assertNotIn("private reasoning", json.dumps(sample))
+        public_record = ConversationResponse.model_validate(persisted.model_dump())
+        self.assertNotIn("chat_ttft_samples", public_record.metadata)
 
     async def test_ready_sse_subscriber_receives_first_streamed_assistant_chunk(self) -> None:
         from app.infrastructure.redis.conversation_event_publisher import (
