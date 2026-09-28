@@ -8,7 +8,7 @@ import secrets
 import time
 from typing import Any, Dict
 
-from app.shared.errors import ValidationError
+from app.shared.errors import AuthenticationError
 
 
 def _b64(value: bytes) -> str:
@@ -73,4 +73,4 @@ def decode_access_token(token: str, secret: str) -> Dict[str, Any]:
             raise ValueError("expired token")
         return data
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValidationError("Invalid or expired access token.", code="invalid_token") from exc
+        raise AuthenticationError("Invalid or expired access token.", code="invalid_token") from exc

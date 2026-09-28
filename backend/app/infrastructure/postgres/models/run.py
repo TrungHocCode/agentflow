@@ -42,6 +42,8 @@ class RunModel(Base):
         ForeignKey("workflow_versions.id", ondelete="SET NULL"),
         nullable=True,
     )
+    plan_revision: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    approved_plan_revision: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="created")
     approval_status: Mapped[str] = mapped_column(
         String(32),
@@ -74,7 +76,10 @@ class RunModel(Base):
     idempotency_key: Mapped[Optional[str]] = mapped_column(
         String(255),
         nullable=True,
-        unique=True,
+    )
+    idempotency_fingerprint: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
     )
     error_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -82,6 +87,11 @@ class RunModel(Base):
     execution_time_ms: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
     __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_runs_user_id_idempotency_key",
+        ),
         Index("ix_runs_user_id_created_at", "user_id", "created_at"),
         Index("ix_runs_flow_id_created_at", "flow_id", "created_at"),
         Index("ix_runs_status", "status"),

@@ -6,7 +6,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app.api.dependencies import get_conversation_service, get_current_user_id
+from app.api.dependencies import get_conversation_service, get_current_user_id, get_rate_limiter
+from app.core.config import settings
 from app.modules.conversations.models import (
     ConversationCreateRequest,
     ConversationMessage,
@@ -14,6 +15,7 @@ from app.modules.conversations.models import (
     ConversationResponse,
 )
 from app.modules.conversations.service import ConversationService
+from app.modules.system.ports import RateLimiter
 
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
@@ -100,7 +102,14 @@ async def send_conversation_message(
     request: ConversationMessageRequest,
     service: ConversationService = Depends(get_conversation_service),
     user_id: str = Depends(get_current_user_id),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ):
+    await limiter.consume(
+        "conversation-chat",
+        user_id,
+        settings.CHAT_RATE_LIMIT_PER_MINUTE,
+        60,
+    )
     if os.getenv("TESTING", "").lower() == "true":
         conversation = await service.send_message(
             conversation_id=conversation_id,

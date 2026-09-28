@@ -1,6 +1,7 @@
 """Ports owned by the Runs bounded context."""
 
-from typing import List, Protocol
+from datetime import datetime
+from typing import List, Protocol, Sequence
 
 from app.modules.runs.models import RunDocument
 from app.shared.events import ExecutionEvent
@@ -8,6 +9,16 @@ from app.shared.events import ExecutionEvent
 
 class RunRepository(Protocol):
     async def save(self, document: RunDocument) -> None:
+        ...
+
+    async def save_if_plan_revision_matches(
+        self,
+        document: RunDocument,
+        expected_revision: str,
+        expected_updated_at: datetime,
+        allowed_statuses: Sequence[str],
+    ) -> bool:
+        """Atomically persist a transition against its revision and source snapshot."""
         ...
     async def get(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
         ...
@@ -20,7 +31,11 @@ class RunRepository(Protocol):
     ) -> List[RunDocument]:
         ...
 
-    async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:
+    async def find_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        user_id: str,
+    ) -> RunDocument | None:
         ...
 
     async def claim(self, run_id: str) -> RunDocument | None:

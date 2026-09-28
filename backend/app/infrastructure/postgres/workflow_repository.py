@@ -8,7 +8,13 @@ from typing import Any, Dict, List
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.infrastructure.postgres.models import FlowModel, WorkflowVersionModel
+from app.infrastructure.postgres.models import (
+    FlowModel,
+    WorkflowStepDependencyModel,
+    WorkflowStepModel,
+    WorkflowStepToolModel,
+    WorkflowVersionModel,
+)
 from app.modules.workflows.domain import WorkflowRecord, WorkflowVersionRecord
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.errors import PersistenceError
@@ -88,6 +94,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     output_schema={},
                 )
             )
+            self._add_step_rows(self.session, version_id, definition)
             await self.session.commit()
             await self.session.refresh(workflow)
             record = self._to_domain(workflow)
@@ -163,6 +170,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     output_schema={},
                 )
             )
+            self._add_step_rows(self.session, version_id, definition)
             await self.session.commit()
             await self.session.refresh(workflow)
             record = self._to_domain(workflow)
@@ -345,6 +353,43 @@ class PostgresWorkflowRepository(WorkflowRepository):
         versions = await self.list_versions(workflow_id, user_id)
         return next((version for version in versions if version.id == version_id), None)
 
+    async def get_published_version_snapshot(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str,
+    ) -> WorkflowVersionRecord | None:
+        """Read ownership, active workflow state, version status and snapshot together."""
+
+        if self.use_memory:
+            workflow = _IN_MEMORY_WORKFLOWS.get(workflow_id)
+            version = await self.get_version(workflow_id, version_id, user_id)
+            if (
+                workflow is None
+                or workflow.user_id != user_id
+                or workflow.status != "active"
+                or version is None
+                or version.status != "published"
+            ):
+                return None
+            return version
+        try:
+            result = await self.session.execute(
+                select(WorkflowVersionModel)
+                .join(FlowModel, FlowModel.id == WorkflowVersionModel.workflow_id)
+                .where(
+                    WorkflowVersionModel.id == version_id,
+                    WorkflowVersionModel.workflow_id == workflow_id,
+                    WorkflowVersionModel.status == "published",
+                    FlowModel.user_id == user_id,
+                    FlowModel.status == "active",
+                )
+            )
+            row = result.scalar_one_or_none()
+            return self._version_to_domain(row) if row is not None else None
+        except Exception as exc:
+            raise PersistenceError("Could not load the requested published workflow version.") from exc
+
     async def create_version(
         self,
         workflow_id: str,
@@ -401,6 +446,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                 output_schema={},
             )
             self.session.add(version)
+            self._add_step_rows(self.session, version.id, definition)
             workflow.definition = definition
             await self.session.commit()
             return self._version_to_domain(version)
@@ -444,6 +490,76 @@ class PostgresWorkflowRepository(WorkflowRepository):
         except Exception as exc:
             await self.session.rollback()
             raise PersistenceError("Could not publish workflow version.") from exc
+
+    @staticmethod
+    def _step_id(version_id: str, task_key: str) -> str:
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"agentflow:{version_id}:step:{task_key}",
+            )
+        )
+
+    @classmethod
+    def _add_step_rows(
+        cls,
+        session: AsyncSession,
+        version_id: str,
+        definition: Dict[str, Any],
+    ) -> None:
+        """Materialize searchable step/dependency/tool relations for one snapshot."""
+
+        from app.modules.workflows.contract import normalize_workflow_definition
+
+        normalized = normalize_workflow_definition(definition)
+        steps = normalized.get("steps") or []
+        keys = {str(step["task_key"]): step for step in steps}
+        ids = {key: cls._step_id(version_id, key) for key in keys}
+        step_rows = []
+        dependency_rows = []
+        tool_rows = []
+        for position, (task_key, step) in enumerate(keys.items()):
+            config = step.get("config") or {}
+            step_rows.append(
+                WorkflowStepModel(
+                    id=ids[task_key],
+                    workflow_version_id=version_id,
+                    task_key=task_key,
+                    name=str(step.get("name") or task_key),
+                    description=str(step.get("description") or step.get("name") or task_key),
+                    agent_ref=(
+                        str(step.get("agent_id") or step.get("agent_name") or "") or None
+                    ),
+                    config=config,
+                    input_mapping=(
+                        step.get("input_mapping")
+                        or step.get("input_mappings")
+                        or config.get("input_mapping")
+                        or {}
+                    ),
+                    expected_output_type=str(step.get("expected_output_type") or "raw_data"),
+                    position=int(step.get("position", position)),
+                )
+            )
+            for dependency in step.get("dependencies") or []:
+                dependency_key = str(dependency)
+                if dependency_key in ids:
+                    dependency_rows.append(
+                        WorkflowStepDependencyModel(
+                            step_id=ids[task_key],
+                            depends_on_step_id=ids[dependency_key],
+                        )
+                    )
+            tool_refs = step.get("tool_ids") or step.get("tool_names") or config.get("tool_names") or []
+            for tool_ref in tool_refs:
+                tool_rows.append(
+                    WorkflowStepToolModel(
+                        step_id=ids[task_key],
+                        tool_ref=str(tool_ref),
+                        config_override={},
+                    )
+                )
+        session.add_all(step_rows + dependency_rows + tool_rows)
 
     @staticmethod
     def _version_to_domain(version: WorkflowVersionModel) -> WorkflowVersionRecord:

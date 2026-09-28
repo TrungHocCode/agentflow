@@ -11,7 +11,7 @@ from app.modules.identity.security import (
     hash_password,
     verify_password,
 )
-from app.shared.errors import ApplicationError, ValidationError
+from app.shared.errors import AuthenticationError, ConflictError
 
 
 class IdentityService:
@@ -23,7 +23,7 @@ class IdentityService:
     async def register(self, request: RegisterRequest) -> AuthResponse:
         email = str(request.email).lower()
         if await self.repository.get_by_email(email) is not None:
-            raise ApplicationError("An account with this email already exists.", code="email_exists")
+            raise ConflictError("An account with this email already exists.", code="email_exists")
         now = datetime.now(timezone.utc)
         user = UserRecord(
             id=str(uuid.uuid4()),
@@ -38,17 +38,17 @@ class IdentityService:
     async def login(self, request: LoginRequest) -> AuthResponse:
         entry = await self.repository.get_by_email(str(request.email).lower())
         if entry is None or not verify_password(request.password, entry[1]):
-            raise ApplicationError("Invalid email or password.", code="invalid_credentials")
+            raise AuthenticationError("Invalid email or password.", code="invalid_credentials")
+        if not entry[0].is_active:
+            raise AuthenticationError("Invalid email or password.", code="invalid_credentials")
         user = await self.repository.touch_last_login(entry[0].id) or entry[0]
-        if not user.is_active:
-            raise ApplicationError("Invalid email or password.", code="invalid_credentials")
         return self._auth_response(user)
 
     async def current_user(self, token: str) -> UserRecord:
         claims = decode_access_token(token, self.signing_secret)
         user = await self.repository.get(str(claims["sub"]))
         if user is None or not user.is_active:
-            raise ValidationError("Authenticated user is not available.", code="invalid_token")
+            raise AuthenticationError("Invalid or expired access token.", code="invalid_token")
         return user
 
     def _auth_response(self, user: UserRecord) -> AuthResponse:

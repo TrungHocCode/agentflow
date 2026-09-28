@@ -5,8 +5,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.api.dependencies import (
     get_current_user_id,
     get_persisted_run_service,
+    get_rate_limiter,
     get_run_query_service,
 )
+from app.core.config import settings
 from app.modules.runs.models import (
     RunStartRequest,
     RunCreateRequest,
@@ -15,6 +17,7 @@ from app.modules.runs.models import (
     RunResponse
 )
 from app.modules.runs.service import RunService
+from app.modules.system.ports import RateLimiter
 
 router = APIRouter(prefix="/runs", tags=["Runs"])
 workflow_run_router = APIRouter(prefix="/workflows", tags=["Runs"])
@@ -25,10 +28,12 @@ async def start_run(
     req: RunStartRequest,
     service: RunService = Depends(get_persisted_run_service),
     user_id: str = Depends(get_current_user_id),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """
     Start a new execution run for a given flow.
     """
+    await limiter.consume("run-create", user_id, settings.RUN_CREATE_RATE_LIMIT_PER_MINUTE, 60)
     run_doc = await service.create_run(
         flow_id=req.flow_id,
         input_message=req.input_message,
@@ -85,6 +90,7 @@ async def approve_run(
         approved=req.approved,
         feedback=req.feedback,
         user_id=user_id,
+        plan_revision=req.plan_revision,
     )
     if not run_doc:
         raise HTTPException(
@@ -116,9 +122,11 @@ async def retry_run(
     run_id: str,
     service: RunService = Depends(get_run_query_service),
     user_id: str = Depends(get_current_user_id),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """Retry failed work from the persisted workflow snapshot."""
 
+    await limiter.consume("run-create", user_id, settings.RUN_CREATE_RATE_LIMIT_PER_MINUTE, 60)
     run_doc = await service.retry_run(run_id, user_id=user_id)
     if not run_doc:
         raise HTTPException(
@@ -250,11 +258,14 @@ async def create_workflow_run(
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     service: RunService = Depends(get_persisted_run_service),
     user_id: str = Depends(get_current_user_id),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """Create and enqueue an asynchronous run from a workflow snapshot."""
 
+    await limiter.consume("run-create", user_id, settings.RUN_CREATE_RATE_LIMIT_PER_MINUTE, 60)
     run_doc = await service.create_workflow_run(
         workflow_id=workflow_id,
+        workflow_version_id=req.workflow_version_id,
         input_data=req.input_data,
         execution_mode=req.execution_mode,
         metadata=req.metadata,
@@ -275,6 +286,8 @@ async def chat_run(
     run_id: str,
     req: RunChatRequest,
     service: RunService = Depends(get_run_query_service),
+    user_id: str = Depends(get_current_user_id),
+    limiter: RateLimiter = Depends(get_rate_limiter),
 ):
     """
     Send a follow-up message to a paused run's supervisor conversation.
@@ -283,9 +296,11 @@ async def chat_run(
     trước khi approve plan. Graph được resume từ checkpoint với message mới
     và lại PAUSE chờ phản hồi tiếp.
     """
+    await limiter.consume("run-chat", user_id, settings.CHAT_RATE_LIMIT_PER_MINUTE, 60)
     run_doc = await service.send_message(
         run_id=run_id,
-        message=req.message
+        message=req.message,
+        user_id=user_id,
     )
     if not run_doc:
         raise HTTPException(

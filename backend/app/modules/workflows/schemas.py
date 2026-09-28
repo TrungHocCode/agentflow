@@ -4,13 +4,12 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-from app.execution.state import FlowDefinition
-
-
 class WorkflowCreateRequest(BaseModel):
     name: str = Field(..., example="Research & Coding Workflow")
     description: Optional[str] = Field(None, example="Flow to research topics and write code")
-    definition: Optional[FlowDefinition] = None
+    # Keep the full canonical contract intact. Runtime Task parsing is a
+    # separate adapter and must not discard fields unknown to the executor.
+    definition: Optional[Dict[str, Any]] = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -18,7 +17,7 @@ class WorkflowUpdateRequest(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
-    definition: Optional[FlowDefinition] = None
+    definition: Optional[Dict[str, Any]] = None
 
 
 class WorkflowResponse(BaseModel):

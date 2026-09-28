@@ -26,9 +26,13 @@ from app.infrastructure.redis.event_publisher import InMemoryRunEventPublisher
 from app.infrastructure.redis.run_queue import InMemoryRunCommandQueue
 from app.workers.run_worker import RunWorker
 from app.modules.workflows.domain import WorkflowRecord
+from app.modules.workflows.contract import normalize_workflow_definition
 from app.modules.workflows.schemas import WorkflowCreateRequest
 from app.modules.workflows.service import WorkflowService
-from app.modules.workflows.validator import validate_workflow_definition
+from app.modules.workflows.validator import (
+    validate_workflow_definition,
+    validate_workflow_references,
+)
 from app.shared.errors import ValidationError
 
 
@@ -83,8 +87,8 @@ class FakeWorkflowRepository:
             description=description,
             user_id=user_id,
             definition=definition,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
         )
         self.records[record.id] = record
         return record
@@ -104,6 +108,59 @@ class FakeWorkflowRepository:
         record = await self.get(workflow_id, user_id)
         return record.definition if record else None
 
+    async def get_current_version(
+        self,
+        workflow_id: str,
+        user_id: str = "default_user",
+    ) -> WorkflowRecord | None:
+        record = await self.get(workflow_id, user_id)
+        return record if record and record.status == "active" else None
+
+    async def get_version(self, workflow_id: str, version_id: str, user_id: str):
+        record = await self.get(workflow_id, user_id)
+        if record is None or record.version_id != version_id:
+            return None
+        from app.modules.workflows.domain import WorkflowVersionRecord
+
+        return WorkflowVersionRecord(
+            id=version_id,
+            workflow_id=workflow_id,
+            version_number=record.version_number or 1,
+            status="published",
+            definition=record.definition,
+            created_by=user_id,
+            created_at=record.updated_at,
+        )
+
+
+async def attach_published_version(
+    service: RunService,
+    document: RunDocument,
+    definition: Dict[str, Any] | None = None,
+) -> str:
+    version_id = f"version-{document.run_id}"
+    version_repository = FakeWorkflowRepository()
+    version_definition = definition or {
+        "tasks": [task.model_dump(mode="json") for task in document.plan]
+    }
+    now = datetime.now(timezone.utc)
+    version_repository.records[document.flow_id] = WorkflowRecord(
+        id=document.flow_id,
+        version_id=version_id,
+        version_number=1,
+        name="Approved workflow",
+        user_id=document.user_id,
+        definition=version_definition,
+        created_at=now,
+        updated_at=now,
+    )
+    document.workflow_version_id = version_id
+    document.plan_revision = RunService._plan_revision(document.plan)
+    document.approved_plan_revision = RunService._plan_revision(document.plan)
+    await service.run_repository.save(document)
+    service.workflow_repository = version_repository
+    return version_id
+
 
 class FakeRunRepository:
     def __init__(self) -> None:
@@ -111,10 +168,30 @@ class FakeRunRepository:
         self.events: Dict[str, List[ExecutionEvent]] = {}
 
     async def save(self, document: RunDocument) -> None:
-        self.documents[document.run_id] = document
+        self.documents[document.run_id] = document.model_copy(deep=True)
+
+    async def save_if_plan_revision_matches(
+        self,
+        document: RunDocument,
+        expected_revision: str,
+        expected_updated_at,
+        allowed_statuses,
+    ) -> bool:
+        current = self.documents.get(document.run_id)
+        if (
+            current is None
+            or current.user_id != document.user_id
+            or current.plan_revision != expected_revision
+            or current.updated_at != expected_updated_at
+            or current.status not in set(allowed_statuses)
+        ):
+            return False
+        self.documents[document.run_id] = document.model_copy(deep=True)
+        return True
 
     async def get(self, run_id: str) -> RunDocument | None:
-        return self.documents.get(run_id)
+        document = self.documents.get(run_id)
+        return document.model_copy(deep=True) if document else None
 
     async def list(self, flow_id: str | None = None, limit: int = 50) -> List[RunDocument]:
         values = list(self.documents.values())
@@ -122,22 +199,27 @@ class FakeRunRepository:
             values = [document for document in values if document.flow_id == flow_id]
         return values[:limit]
 
-    async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:
-        return next(
+    async def find_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        user_id: str,
+    ) -> RunDocument | None:
+        document = next(
             (
-                document
-                for document in self.documents.values()
-                if document.idempotency_key == idempotency_key
+                item
+                for item in self.documents.values()
+                if item.idempotency_key == idempotency_key and item.user_id == user_id
             ),
             None,
         )
+        return document.model_copy(deep=True) if document else None
 
     async def claim(self, run_id: str) -> RunDocument | None:
         document = self.documents.get(run_id)
         if document is None or document.status != "queued":
             return None
         document.status = "running"
-        return document
+        return document.model_copy(deep=True)
 
     async def append_event(self, event: ExecutionEvent) -> ExecutionEvent:
         events = self.events.setdefault(event.run_id, [])
@@ -375,6 +457,39 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.available_tool_names, ["file_writer"])
         self.assertEqual(agent.blocked_tool_names, ["python_executor"])
 
+    async def test_workflow_tool_overrides_are_resolved_and_authorized(self) -> None:
+        class TwoToolCatalog(FakeCatalogRepository):
+            async def list_agents(self, active_only: bool = True) -> List[AgentDefinition]:
+                return [AgentDefinition(
+                    id="agent-1",
+                    name="Researcher",
+                    system_prompt="Research carefully.",
+                    tool_names=["web_search", "file_writer"],
+                )]
+
+            async def list_tools(self, active_only: bool = True) -> List[ToolDefinition]:
+                return [
+                    ToolDefinition(id="tool-search", name="web_search"),
+                    ToolDefinition(id="tool-writer", name="file_writer"),
+                ]
+
+        definition = normalize_workflow_definition({
+            "steps": [{
+                "task_key": "collect",
+                "name": "Collect sources",
+                "description": "Find sources",
+                "agent_id": "Researcher",
+                "dependencies": [],
+                "config": {"tool_names": ["web_search"]},
+            }]
+        })
+        with patch.dict(os.environ, {"TESTING": "false"}):
+            resolved = await validate_workflow_references(definition, TwoToolCatalog())
+
+        self.assertEqual(resolved["steps"][0]["tool_names"], ["web_search"])
+        self.assertEqual(resolved["steps"][0]["tool_ids"], ["tool-search"])
+        self.assertEqual(resolved["tasks"][0]["tool_names"], ["web_search"])
+
     async def test_terminal_event_storage_failure_does_not_rewrite_completed_run(self) -> None:
         class TerminalEventFailureRepository(FakeRunRepository):
             async def append_event(self, event: ExecutionEvent) -> ExecutionEvent:
@@ -421,8 +536,10 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(execution.created_plan_for, document.run_id)
         self.assertEqual(document.status, "pending")
+        self.assertIsNone(document.workflow_version_id)
+        await attach_published_version(service, document)
 
-        await service.approve_run(document.run_id)
+        await service.approve_run(document.run_id, plan_revision=document.plan_revision)
         await service.execute_queued_run(document.run_id)
         events = [
             json.loads(
@@ -454,8 +571,8 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
                 "name": "Research",
                 "tasks": [make_task(1).model_dump()],
             },
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
         )
         run_repository = FakeRunRepository()
         queue = InMemoryRunCommandQueue()
@@ -469,6 +586,7 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
 
         document = await service.create_workflow_run(
             workflow_id="workflow-1",
+            workflow_version_id="00000000-0000-0000-0000-000000000001",
             idempotency_key="request-1",
             conversation_id="conversation-1",
         )
@@ -484,9 +602,112 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
 
         same_document = await service.create_workflow_run(
             workflow_id="workflow-1",
+            workflow_version_id="00000000-0000-0000-0000-000000000001",
+            input_data={},
+            conversation_id="conversation-1",
             idempotency_key="request-1",
         )
         self.assertEqual(same_document.run_id, document.run_id)
+
+        with self.assertRaisesRegex(Exception, "different run request"):
+            await service.create_workflow_run(
+                workflow_id="workflow-1",
+                workflow_version_id="00000000-0000-0000-0000-000000000001",
+                input_data={"query": "different request"},
+                conversation_id="conversation-1",
+                idempotency_key="request-1",
+            )
+
+    async def test_approval_requires_the_exact_reviewed_plan_revision(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=FakeExecutionPort(),
+        )
+        document = await service.create_run("workflow-approval")
+
+        with self.assertRaisesRegex(Exception, "Save and publish"):
+            await service.approve_run(document.run_id, plan_revision=document.plan_revision)
+
+        await attach_published_version(service, document)
+        with self.assertRaisesRegex(Exception, "revision is required"):
+            await service.approve_run(document.run_id)
+
+        changed_revision = "0" * 64
+        with self.assertRaisesRegex(Exception, "changed after it was reviewed"):
+            await service.approve_run(document.run_id, plan_revision=changed_revision)
+
+        approved = await service.approve_run(document.run_id, plan_revision=document.plan_revision)
+        self.assertEqual(approved.approved_plan_revision, document.plan_revision)
+        self.assertEqual(approved.status, "queued")
+
+    async def test_approval_rejects_plan_that_differs_from_selected_version(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=FakeExecutionPort(),
+        )
+        document = await service.create_run("workflow-version-mismatch")
+        changed_task = make_task(1).model_copy(update={"description": "Different authored task"})
+        await attach_published_version(
+            service,
+            document,
+            {"tasks": [changed_task.model_dump(mode="json")]},
+        )
+
+        with self.assertRaisesRegex(Exception, "does not match the selected published workflow version"):
+            await service.approve_run(
+                document.run_id,
+                plan_revision=document.plan_revision,
+            )
+
+    async def test_execution_worker_fails_closed_for_unversioned_queued_run(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=FakeWorkflowRepository(),
+            execution_port=FakeExecutionPort(),
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+        document = RunDocument(
+            run_id="unversioned-queued-run",
+            flow_id="workflow-unversioned",
+            status="queued",
+            mode="executing",
+            plan=[make_task(1)],
+        )
+        await repository.save(document)
+
+        failed = await service.execute_queued_run(document.run_id)
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error_code, "approved_workflow_snapshot_invalid")
+
+    async def test_plan_update_rejects_a_stale_run_snapshot_even_if_plan_hash_matches(self) -> None:
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=FakeExecutionPort(),
+        )
+        document = await service.create_run("workflow-stale-snapshot")
+        expected_updated_at = document.updated_at
+        concurrent_update = document.model_copy(deep=True)
+        concurrent_update.updated_at += timedelta(seconds=1)
+        await repository.save(concurrent_update)
+
+        document.logs.append("stale write")
+        self.assertFalse(
+            await repository.save_if_plan_revision_matches(
+                document,
+                document.plan_revision,
+                expected_updated_at,
+                ("pending", "created", "waiting_for_approval", "paused"),
+            )
+        )
+        self.assertNotIn("stale write", repository.documents[document.run_id].logs)
 
     async def test_failed_task_marks_run_failed(self) -> None:
         repository = FakeRunRepository()

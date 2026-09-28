@@ -829,6 +829,7 @@ export default function App() {
             .join('\n\n');
           const run = await createWorkflowRun(
             workflow.id,
+            workflow.version_id,
             { user_prompt: userPrompt },
             { use_llm: true },
             linkedConversationId
@@ -837,7 +838,7 @@ export default function App() {
           setCurrentRun(run);
           setConversationRun(run);
         } else {
-          const approvedRun = await approveRun(runId);
+          const approvedRun = await approveRun(runId, currentRun?.plan_revision);
           setCurrentRun(approvedRun);
           setConversationRun(approvedRun);
         }

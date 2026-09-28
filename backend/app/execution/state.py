@@ -53,16 +53,24 @@ class LogEntry(BaseModel):
 # Task model with dependency and limit extensions
 class Task(BaseModel):
     id: int
+    # Stable definition identity. ``id`` remains a runtime ordering/index field;
+    # task_key survives edits and is the value used by workflow contracts.
+    task_key: Optional[str] = None
+    task_execution_id: Optional[str] = None
     node: str
     agent_id: Optional[str] = None
     capability: Optional[str] = None
     tool_names: List[str] = Field(default_factory=list)
+    tool_ids: List[str] = Field(default_factory=list)
     status: Literal["done", "partial", "pending", "running", "failed", "skipped"]
     error: Optional[str] = None
     description: str
     dependencies: List[int] = Field(default_factory=list)
     timeout_seconds: Optional[int] = None
     max_iterations: Optional[int] = None
+    expected_output_type: str = "raw_data"
+    input_mapping: Dict[str, Any] = Field(default_factory=dict)
+    config: Dict[str, Any] = Field(default_factory=dict)
 
 class FlowDefinition(BaseModel):
     flow_id: str

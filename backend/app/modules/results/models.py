@@ -1,6 +1,6 @@
 """Application-facing research output models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
 
@@ -26,7 +26,7 @@ class ResultRecord(BaseModel):
     content: Any = None
     schema_version: str = "1"
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class EvidenceRecord(BaseModel):
@@ -39,7 +39,7 @@ class EvidenceRecord(BaseModel):
     excerpt: Optional[str] = None
     content_hash: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    collected_at: datetime = Field(default_factory=datetime.utcnow)
+    collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ArtifactRecord(BaseModel):
@@ -53,7 +53,7 @@ class ArtifactRecord(BaseModel):
     size_bytes: int = 0
     checksum: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ArtifactResponse(ArtifactRecord):

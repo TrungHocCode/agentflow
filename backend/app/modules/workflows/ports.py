@@ -55,6 +55,15 @@ class WorkflowRepository(Protocol):
     ) -> WorkflowVersionRecord | None:
         ...
 
+    async def get_published_version_snapshot(
+        self,
+        workflow_id: str,
+        version_id: str,
+        user_id: str,
+    ) -> WorkflowVersionRecord | None:
+        """Atomically resolve one published version owned by an active workflow."""
+        ...
+
     async def create_version(
         self,
         workflow_id: str,

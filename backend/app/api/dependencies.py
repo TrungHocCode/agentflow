@@ -24,24 +24,24 @@ from app.shared.ids import DEFAULT_USER_ID
 from app.modules.identity.service import IdentityService
 from app.modules.results.service import ResearchResultService
 from app.infrastructure.artifacts.storage import LocalArtifactStorage
+from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
+from app.modules.system.ports import RateLimiter
+from app.shared.errors import AuthenticationError
 
 
-def get_current_user_id(authorization: str | None = Header(None)) -> str:
+async def get_current_user_id(authorization: str | None = Header(None)) -> str:
     """Resolve the authenticated user, retaining a test-only compatibility user."""
 
     if os.getenv("TESTING", "").lower() == "true":
         return DEFAULT_USER_ID
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Authentication required.")
-    service = build_auth_service()
     try:
-        # This dependency only verifies token claims. Resource existence is
-        # checked by the application service/repository when needed.
-        from app.modules.identity.security import decode_access_token
-
-        claims = decode_access_token(authorization.split(" ", 1)[1].strip(), service.signing_secret)
-        return str(claims["sub"])
-    except Exception as exc:
+        # Recheck account activity on each authenticated request so disabling an
+        # account takes effect before the access token naturally expires.
+        user = await build_auth_service().current_user(authorization.split(" ", 1)[1].strip())
+        return user.id
+    except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token.") from exc
 
 
@@ -105,3 +105,11 @@ async def get_research_result_service(
 
 def get_artifact_storage() -> LocalArtifactStorage:
     return LocalArtifactStorage()
+
+
+def get_rate_limiter() -> RateLimiter:
+    """Use a shared Redis limiter outside isolated tests."""
+
+    if os.getenv("TESTING", "").lower() == "true":
+        return NoopRateLimiter()
+    return RedisRateLimiter()

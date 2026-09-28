@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     MAX_RUN_DURATION: int = 3600
     MAX_TASK_CONCURRENCY: int = 1
     MAX_REQUEST_BODY_BYTES: int = 1_048_576
+    MAX_WORKFLOW_STEPS: int = 50
+    MAX_TASK_TIMEOUT_SECONDS: int = 600
+    MAX_TASK_ITERATIONS: int = 5
+    MAX_WORKFLOW_DEFINITION_BYTES: int = 786_432
+    MAX_RUN_INPUT_BYTES: int = 262_144
+    MAX_REQUEST_METADATA_BYTES: int = 65_536
+    LOGIN_RATE_LIMIT_PER_MINUTE: int = 10
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 30
+    RUN_CREATE_RATE_LIMIT_PER_MINUTE: int = 10
     # Opt-in internal instrumentation for local benchmark/evaluation runs only.
     ENABLE_EXECUTION_BENCHMARK_METRICS: bool = False
     # The subprocess tool is not an OS/container sandbox; keep it disabled unless
