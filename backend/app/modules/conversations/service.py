@@ -21,6 +21,7 @@ from app.modules.conversations.models import (
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
+from app.shared.ollama_timing import OllamaTurnTiming, active_ollama_turn
 
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,8 @@ class ConversationService:
     ) -> None:
         streamed_content: List[str] = []
         first_token_ttft_ms: float | None = None
+        ollama_turn = OllamaTurnTiming(turn_id=turn_id, turn_started_at=turn_started_at)
+        timing_token = active_ollama_turn.set(ollama_turn)
 
         async def publish_assistant_token(token: str) -> None:
             nonlocal first_token_ttft_ms
@@ -271,11 +274,12 @@ class ConversationService:
             conversation.metadata.update(result_state.get("metadata") or {})
             self._accumulate_execution_timings(conversation, result_state)
             conversation.metadata["supervisor_decision"] = decision
-            if first_token_ttft_ms is not None:
+            if first_token_ttft_ms is not None or ollama_turn.requests:
                 self._record_chat_ttft(
                     conversation,
                     turn_id=turn_id,
                     ttft_ms=first_token_ttft_ms,
+                    ollama_requests=ollama_turn.snapshot(),
                 )
             conversation.status = "waiting_for_user"
             conversation.updated_at = datetime.utcnow()
@@ -327,11 +331,12 @@ class ConversationService:
                 )
             )
         except Exception as exc:
-            if first_token_ttft_ms is not None:
+            if first_token_ttft_ms is not None or ollama_turn.requests:
                 self._record_chat_ttft(
                     conversation,
                     turn_id=turn_id,
                     ttft_ms=first_token_ttft_ms,
+                    ollama_requests=ollama_turn.snapshot(),
                 )
                 try:
                     await self.repository.save(conversation)
@@ -345,6 +350,8 @@ class ConversationService:
                     payload={"message": str(exc) or "Supervisor could not complete this turn."},
                 )
             )
+        finally:
+            active_ollama_turn.reset(timing_token)
 
     async def stream_events(
         self,
@@ -364,7 +371,8 @@ class ConversationService:
         conversation: ConversationRecord,
         *,
         turn_id: str,
-        ttft_ms: float,
+        ttft_ms: float | None,
+        ollama_requests: list[dict[str, Any]] | None = None,
     ) -> None:
         """Persist a bounded, content-free server TTFT sample for internal evaluation."""
 
@@ -381,6 +389,8 @@ class ConversationService:
             ),
             "measured_at": datetime.utcnow().isoformat(),
         }
+        if ollama_requests:
+            sample["ollama_requests"] = ollama_requests
         conversation.metadata["chat_ttft_samples"] = [*samples[-49:], sample]
 
     async def _publish(self, event: ConversationEvent) -> None:
