@@ -2,6 +2,7 @@
 
 from typing import List
 
+from app.core.config import settings
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.ports import CatalogRepository
 
@@ -13,7 +14,45 @@ class CatalogService:
         self.repository = repository
 
     async def list_agents(self, active_only: bool = True) -> List[AgentDefinition]:
-        return await self.repository.list_agents(active_only=active_only)
+        agents = await self.repository.list_agents(active_only=active_only)
+        result = []
+        for agent in agents:
+            available = []
+            blocked = []
+            for tool_name in agent.tool_names:
+                if self._disabled_reason(tool_name):
+                    blocked.append(tool_name)
+                else:
+                    available.append(tool_name)
+            result.append(
+                agent.model_copy(
+                    update={
+                        "available_tool_names": available,
+                        "blocked_tool_names": blocked,
+                    }
+                )
+            )
+        return result
 
     async def list_tools(self, active_only: bool = True) -> List[ToolDefinition]:
-        return await self.repository.list_tools(active_only=active_only)
+        tools = await self.repository.list_tools(active_only=active_only)
+        result = []
+        for tool in tools:
+            disabled_reason = self._disabled_reason(tool.name)
+            result.append(
+                tool.model_copy(
+                    update={
+                        "is_available": disabled_reason is None,
+                        "unavailable_reason": disabled_reason,
+                    }
+                )
+            )
+        return result
+
+    @staticmethod
+    def _disabled_reason(tool_name: str) -> str | None:
+        if tool_name == "python_executor" and not settings.ENABLE_UNSANDBOXED_PYTHON_EXECUTION:
+            return "Disabled by deployment policy: this executor is not an OS sandbox."
+        if tool_name == "email_sender" and not settings.ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS:
+            return "Disabled by deployment policy: external side effects are off by default."
+        return None

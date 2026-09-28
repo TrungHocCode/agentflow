@@ -3,7 +3,8 @@ import os
 import re
 import sys
 import unittest
-from datetime import datetime
+from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List
 
@@ -11,6 +12,7 @@ from langchain_core.messages import AIMessage
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
+from app.core.config import settings
 from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
@@ -342,6 +344,67 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
         )
         record = await workflows.create_workflow(request)
         self.assertEqual(record.name, "Research workflow")
+
+    async def test_catalog_reports_tools_blocked_by_deployment_policy(self) -> None:
+        class PolicyCatalogRepository(FakeCatalogRepository):
+            async def list_agents(self, active_only: bool = True) -> List[AgentDefinition]:
+                return [AgentDefinition(
+                    id="agent-report",
+                    name="report_agent",
+                    system_prompt="Write reports.",
+                    tool_names=["python_executor", "file_writer"],
+                )]
+
+            async def list_tools(self, active_only: bool = True) -> List[ToolDefinition]:
+                return [
+                    ToolDefinition(id="tool-python", name="python_executor"),
+                    ToolDefinition(id="tool-writer", name="file_writer"),
+                ]
+
+        with (
+            patch.object(settings, "ENABLE_UNSANDBOXED_PYTHON_EXECUTION", False),
+            patch.object(settings, "ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS", False),
+        ):
+            catalog = CatalogService(repository=PolicyCatalogRepository())
+            tool_map = {tool.name: tool for tool in await catalog.list_tools()}
+            agent = (await catalog.list_agents())[0]
+
+        self.assertFalse(tool_map["python_executor"].is_available)
+        self.assertIn("not an OS sandbox", tool_map["python_executor"].unavailable_reason)
+        self.assertTrue(tool_map["file_writer"].is_available)
+        self.assertEqual(agent.available_tool_names, ["file_writer"])
+        self.assertEqual(agent.blocked_tool_names, ["python_executor"])
+
+    async def test_terminal_event_storage_failure_does_not_rewrite_completed_run(self) -> None:
+        class TerminalEventFailureRepository(FakeRunRepository):
+            async def append_event(self, event: ExecutionEvent) -> ExecutionEvent:
+                if event.type == "run_completed":
+                    raise RuntimeError("terminal event table unavailable")
+                return await super().append_event(event)
+
+        repository = TerminalEventFailureRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=FakeExecutionPort(),
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+        document = RunDocument(
+            run_id="completed-event-write-failure",
+            flow_id="workflow-1",
+            status="queued",
+            mode="executing",
+            plan=[make_task(1)],
+        )
+        await repository.save(document)
+
+        completed = await service.execute_queued_run(document.run_id)
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(repository.documents[document.run_id].status, "completed")
+        self.assertFalse(
+            any(event.type == "run_failed" for event in repository.events[document.run_id])
+        )
 
     async def test_run_service_uses_ports_and_emits_event_ids(self) -> None:
         repository = FakeRunRepository()
@@ -681,6 +744,18 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         )
 
         class FailingExecutionPort(FakeExecutionPort):
+            async def _failed_result(self) -> State:
+                return {
+                    "mode": "conversation",
+                    "messages": [AIMessage(content="Could not form a valid plan.")],
+                    "metadata": {
+                        "planning_failed": True,
+                        "planning_error_message": "Invalid Supervisor response.",
+                        "planning_error_id": "planner-error-1",
+                        "planning_error_code": "supervisor_planning_failed",
+                    },
+                }
+
             async def create_plan(
                 self,
                 run_id: str,
@@ -688,14 +763,18 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
                 on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
             ) -> State:
                 del run_id, initial_state
-                return {
-                    "mode": "conversation",
-                    "messages": [AIMessage(content="Could not form a valid plan.")],
-                    "metadata": {
-                        "planning_failed": True,
-                        "planning_error_message": "Invalid Supervisor response.",
-                    },
-                }
+                del on_assistant_token
+                return await self._failed_result()
+
+            async def continue_conversation(
+                self,
+                run_id: str,
+                message: str,
+                metadata: Dict[str, Any] | None = None,
+                on_assistant_token: Callable[[str], Awaitable[None]] | None = None,
+            ) -> State:
+                del run_id, message, metadata, on_assistant_token
+                return await self._failed_result()
 
         repository = FakeConversationRepository()
         publisher = InMemoryConversationEventPublisher()
@@ -705,6 +784,9 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             event_publisher=publisher,
         )
         conversation = await service.create_conversation(title="Failed planning chat")
+        conversation.draft_plan = [make_task(9)]
+        conversation.metadata["supervisor_decision"] = "propose_plan"
+        await repository.save(conversation)
         accepted = await service.start_message(
             conversation_id=conversation.id,
             content="Research something",
@@ -718,6 +800,19 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("planning_failed", event_text)
         self.assertNotIn("planning_completed", event_text)
+        persisted = await service.get_conversation(conversation.id)
+        self.assertEqual(persisted.draft_plan, [])
+        self.assertNotIn("supervisor_decision", persisted.metadata)
+        self.assertEqual(persisted.metadata["last_turn"]["status"], "failed")
+        self.assertEqual(persisted.metadata["last_turn"]["error_id"], "planner-error-1")
+        event_payloads = [
+            json.loads(line.removeprefix("data: "))
+            for frame in events
+            for line in frame.splitlines()
+            if line.startswith("data: ")
+        ]
+        failure_event = next(event for event in event_payloads if event["type"] == "planning_failed")
+        self.assertEqual(failure_event["payload"]["error_id"], "planner-error-1")
 
 
 if __name__ == "__main__":
