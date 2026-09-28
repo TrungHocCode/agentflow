@@ -584,6 +584,7 @@ export default function App() {
       return;
     }
 
+    const turnId = createConversationTurnId();
     let awaitingConversationStream = false;
     try {
       if (backendStatus) {
@@ -593,7 +594,6 @@ export default function App() {
           activeConversationId = conversation.id;
           setConversationId(activeConversationId);
         }
-        const turnId = createConversationTurnId();
         let streamReadyReceived = false;
         let messageSubmitted = false;
         let streamSetupError = null;
@@ -662,23 +662,31 @@ export default function App() {
               setIsProcessing(false);
               if (conversationStreamRef.current) conversationStreamRef.current();
             } else if (eventData.type === 'planning_failed') {
-              const errorText = `Không thể chuẩn bị quy trình: ${payload.message || 'Lỗi không xác định.'}`;
+              const errorText = payload.message || 'Không thể hoàn tất yêu cầu lúc này. Vui lòng thử lại.';
+              if (payload.invalidate_draft) {
+                setActivePlan([]);
+                setDraftPlan([]);
+              }
               setMessages(prev => {
                 const messageIndex = prev.findIndex(message => message.turnId === turnId);
                 if (messageIndex < 0) {
-                  return [...prev, { sender: 'supervisor', text: errorText, turnId }];
+                  return [...prev, {
+                    sender: 'supervisor',
+                    text: errorText,
+                    turnId,
+                    isError: true,
+                    errorId: payload.error_id
+                  }];
                 }
-                if (!prev[messageIndex].text) {
-                  return prev.map((message, index) => index === messageIndex
-                    ? { ...message, text: errorText, isGenerating: false }
-                    : message);
-                }
-                return [
-                  ...prev.map((message, index) => index === messageIndex
-                    ? { ...message, isGenerating: false }
-                    : message),
-                  { sender: 'supervisor', text: errorText }
-                ];
+                return prev.map((message, index) => index === messageIndex
+                  ? {
+                    ...message,
+                    text: errorText,
+                    isGenerating: false,
+                    isError: true,
+                    errorId: payload.error_id
+                  }
+                  : message);
               });
               setIsProcessing(false);
               if (conversationStreamRef.current) conversationStreamRef.current();
@@ -693,12 +701,13 @@ export default function App() {
             console.warn('Conversation progress connection interrupted:', error);
             setIsProcessing(false);
             setMessages(prev => prev.map(message => message.turnId === turnId
-              ? { ...message, isGenerating: false }
+              ? {
+                ...message,
+                text: 'Kết nối theo dõi bị gián đoạn. Hãy tải lại hội thoại để xem trạng thái mới nhất.',
+                isGenerating: false,
+                isError: true
+              }
               : message));
-            setMessages(prev => [...prev, {
-              sender: 'supervisor',
-              text: 'Kết nối theo dõi bị gián đoạn. Bạn có thể tải lại hội thoại để xem phản hồi đã lưu.'
-            }]);
           }
         );
         awaitingConversationStream = true;
@@ -730,27 +739,25 @@ export default function App() {
           }]);
         }
       } else {
-
-        // Fallback simulation mode
-        setTimeout(() => {
-          const simulatedPlan = [
-            { id: 1, node: 'news_crawler', status: 'pending', description: `Cào dữ liệu từ URL liên quan đến: ${textPrompt}` },
-            { id: 2, node: 'text_summarizer', status: 'pending', dependencies: [1], description: 'Tóm tắt nội dung cào được thành các điểm chính' },
-            { id: 3, node: 'markdown_report_generator', status: 'pending', dependencies: [2], description: 'Xuất báo cáo Markdown lưu vào workspace_data/reports/' }
-          ];
-          setActivePlan(simulatedPlan);
-          setDraftPlan(simulatedPlan);
-          const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-          setMessages(prev => [
-            ...prev,
-            { 
-              sender: 'supervisor', 
-              text: `Tôi đã lập kế hoạch 3 bước dựa trên yêu cầu "${textPrompt}". Bạn có muốn duyệt và bắt đầu không?`,
-              duration: durationSec
-            }
-          ]);
-          setIsProcessing(false);
-        }, 600);
+        const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
+        const errorText = 'Không thể kết nối backend. Hãy kiểm tra backend rồi thử lại.';
+        setMessages(prev => {
+          const messageIndex = prev.findIndex(message => message.turnId === turnId);
+          if (messageIndex < 0) {
+            return [...prev, {
+              sender: 'supervisor',
+              text: errorText,
+              turnId,
+              duration: durationSec,
+              isError: true
+            }];
+          }
+          return prev.map((message, index) => index === messageIndex
+            ? { ...message, text: errorText, duration: durationSec, isGenerating: false, isError: true }
+            : message);
+        });
+        setActivePlan([]);
+        setDraftPlan([]);
       }
     } catch (err) {
       awaitingConversationStream = false;
@@ -758,7 +765,22 @@ export default function App() {
       conversationStreamRef.current = null;
       console.error('Error starting run:', err);
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-      setMessages(prev => [...prev, { sender: 'supervisor', text: `Có lỗi kết nối: ${err.message}`, duration: durationSec }]);
+      const errorText = `Có lỗi kết nối: ${err.message}`;
+      setMessages(prev => {
+        const messageIndex = prev.findIndex(message => message.turnId === turnId);
+        if (messageIndex < 0) {
+          return [...prev, {
+            sender: 'supervisor',
+            text: errorText,
+            turnId,
+            duration: durationSec,
+            isError: true
+          }];
+        }
+        return prev.map((message, index) => index === messageIndex
+          ? { ...message, text: errorText, duration: durationSec, isGenerating: false, isError: true }
+          : message);
+      });
     } finally {
       if (!awaitingConversationStream) setIsProcessing(false);
     }
