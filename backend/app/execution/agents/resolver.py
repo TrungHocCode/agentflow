@@ -7,6 +7,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.execution.agents.base import BaseAgent
 from app.execution.agents.registry import AgentRegistry
 from app.execution.state import Task
@@ -82,7 +83,7 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
             "You turn structured research data into an accurate, readable chart "
             "specification and explain the data fields used."
         ),
-        tool_names=["python_executor", "file_reader", "file_writer"],
+        tool_names=["chart_generator", "file_reader", "file_writer"],
     ),
 }
 
@@ -147,7 +148,8 @@ AGENT_RUNTIME_GUIDANCE: Mapping[str, str] = {
         "do not fill those evidence gaps from model memory. Clearly separate verified findings from unresolved gaps. "
         "If evidence is narrow, contradictory, or limited to one source, explain what can and cannot be concluded "
         "instead of manufacturing depth. Mention limitations only when they materially affect interpretation. Use "
-        "markdown_report_generator to publish the report. Use python_executor only for reproducible calculations or "
+        "markdown_report_generator to publish the report. Use python_executor only if it is in your authorized tool "
+        "list (it is disabled by default) and only for reproducible calculations or "
         "data analysis required by the evidence. After a successful tool call, return a one-line completion record "
         "with the artifact path and status. Do not repeat the report, add generic notes, or invite follow-up; put "
         "material caveats in the report. If generation fails, return a concise failure status and do not claim that "
@@ -200,13 +202,17 @@ class AgentResolver:
             for tool_name in task.tool_names:
                 canonical_name = self._canonical_tool_name(tool_name)
                 if canonical_name in profile_tools:
-                    if canonical_name not in requested_tools:
+                    if not self._tool_enabled(canonical_name):
+                        denied_tool_names.append(tool_name)
+                    elif canonical_name not in requested_tools:
                         requested_tools.append(canonical_name)
                 else:
                     denied_tool_names.append(tool_name)
         else:
             requested_tools = list(dict.fromkeys(
-                self._canonical_tool_name(tool_name) for tool_name in profile.tool_names
+                self._canonical_tool_name(tool_name)
+                for tool_name in profile.tool_names
+                if self._tool_enabled(self._canonical_tool_name(tool_name))
             ))
 
         denied = tuple(denied_tool_names)
@@ -250,6 +256,7 @@ class AgentResolver:
                     for name in profile.tool_names
                     if (canonical_name := self._canonical_tool_name(name))
                     in registered_tools
+                    and self._tool_enabled(canonical_name)
                 )
             )
             tool_list = ", ".join(available_tools) or "no registered tools"
@@ -283,6 +290,16 @@ class AgentResolver:
     def _canonical_tool_name(tool_name: str) -> str:
         normalized_name = tool_name.strip().lower()
         return TOOL_NAME_ALIASES.get(normalized_name, normalized_name)
+
+    @staticmethod
+    def _tool_enabled(tool_name: str) -> bool:
+        """Apply deployment safety policy before exposing a tool to an agent."""
+
+        if tool_name == "python_executor":
+            return settings.ENABLE_UNSANDBOXED_PYTHON_EXECUTION
+        if tool_name == "email_sender":
+            return settings.ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS
+        return True
 
     async def _resolve_profile(self, task: Task) -> AgentProfile:
         explicit_identifier = task.agent_id
