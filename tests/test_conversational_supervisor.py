@@ -13,7 +13,7 @@ import os
 import sys
 import uuid
 import unittest
-import shutil
+from test_support import isolated_workspace
 from unittest.mock import patch, MagicMock
 
 # Adjust path to import backend app
@@ -29,15 +29,13 @@ from app.execution.checkpointer import reset_checkpointer
 
 class TestConversationalSupervisor(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        self.enterContext(isolated_workspace())
         reset_checkpointer()
         # Dùng MemorySaver riêng mỗi test để isolation
         self._checkpointer = MemorySaver()
 
     def tearDown(self):
         reset_checkpointer()
-        data_dir = os.path.join(os.getcwd(), "workspace_data")
-        if os.path.exists(data_dir):
-            shutil.rmtree(data_dir)
 
     async def test_multi_turn_conversation_to_execution_flow(self):
         """

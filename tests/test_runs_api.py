@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from test_support import use_test_adapters
 import httpx
 
 # Adjust path to import backend app
@@ -11,7 +12,7 @@ from app.main import app
 
 class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
         self.transport = httpx.ASGITransport(app=app)
         self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test", follow_redirects=True)
 

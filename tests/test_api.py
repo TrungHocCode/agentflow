@@ -1,8 +1,9 @@
 import os
 import sys
 import unittest
-from typing import Any
-from unittest.mock import patch
+from test_support import use_test_adapters
+from typing import Any, AsyncIterator
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -18,6 +19,9 @@ from app.modules.identity.security import create_access_token
 
 
 class _FakeStructuredOutput:
+    async def astream(self, messages: Any) -> AsyncIterator[dict[str, Any]]:
+        yield (await self.ainvoke(messages)).model_dump()
+
     async def ainvoke(self, messages: Any) -> SupervisorOutput:
         return SupervisorOutput(
             decision="propose_plan",
@@ -35,12 +39,17 @@ class _FakeStructuredOutput:
 
 
 class _FakeLLM:
-    def with_structured_output(self, schema: type[SupervisorOutput]) -> _FakeStructuredOutput:
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> _FakeStructuredOutput:
         return _FakeStructuredOutput()
 
 class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
+        # API unit tests must not resolve agent profiles from a running user database.
+        self.enterContext(patch(
+            "app.infrastructure.postgres.agent_profile_provider.PostgresAgentProfileProvider.get_agent",
+            new=AsyncMock(return_value=None),
+        ))
         self.transport = httpx.ASGITransport(app=app)
         self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test", follow_redirects=True)
 

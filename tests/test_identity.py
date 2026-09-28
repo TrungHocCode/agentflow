@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from test_support import use_test_adapters
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -85,7 +86,7 @@ class TestIdentityPersistenceMapping(unittest.TestCase):
 
 class TestIdentityAPI(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",

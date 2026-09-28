@@ -210,7 +210,7 @@ The frontend is served at <http://localhost:5173>, the API at <http://localhost:
 Run the backend unit tests from the repository root:
 
 ```powershell
-python -m unittest discover tests/
+python scripts/run_tests.py unit
 ```
 
 Check frontend code and create a production build:
@@ -221,7 +221,9 @@ npm run lint
 npm run build
 ```
 
-The CI workflow runs database migrations, backend tests, Python compilation, frontend lint, and frontend build on pull requests to `dev` and `main`.
+The CI workflow separates isolated unit tests, real PostgreSQL/Redis migration and adapter integration tests,
+and frontend lint/build on pull requests to `dev` and `main`. See [integration test setup](integration_tests/README.md)
+for disposable local test services. The integration suite refuses development database targets and test-auth bypass.
 
 ## Evaluate research runs
 
@@ -245,7 +247,8 @@ agentflow/
 │       ├── modules/          # Identity, conversations, workflows, runs, results
 │       └── workers/          # Background run worker
 ├── frontend/                 # React + Vite application
-├── tests/                    # Backend unit and integration tests
+├── tests/                    # Backend unit tests (mocked dependencies)
+├── integration_tests/        # Dedicated real PostgreSQL/Redis tests
 ├── workspace_data/           # Local generated artifacts (not source code)
 ├── docker-compose.yml
 └── requirements.txt

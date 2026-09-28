@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from test_support import use_test_adapters
 
 import httpx
 
@@ -54,7 +55,7 @@ class TestCanonicalWorkflowContract(unittest.TestCase):
 
 class TestCanonicalWorkflowAPI(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        os.environ["TESTING"] = "true"
+        use_test_adapters(self)
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",
