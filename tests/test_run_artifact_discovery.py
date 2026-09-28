@@ -41,6 +41,9 @@ class RunArtifactDiscoveryTests(unittest.TestCase):
         ])
 
     def test_run_create_request_accepts_conversation_link(self) -> None:
-        request = RunCreateRequest(conversation_id="conversation-1")
+        request = RunCreateRequest(
+            conversation_id="conversation-1",
+            workflow_version_id="version-1",
+        )
 
         self.assertEqual(request.conversation_id, "conversation-1")

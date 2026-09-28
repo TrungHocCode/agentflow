@@ -74,13 +74,16 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         # Approve run
         approve_res = await self.client.post(
             f"/api/v1/runs/{run_id}/approve",
-            json={"approved": True, "feedback": "Looks good to go!"}
+            json={
+                "approved": True,
+                "feedback": "Looks good to go!",
+                "plan_revision": start_res.json()["plan_revision"],
+            }
         )
-        self.assertEqual(approve_res.status_code, 200)
-        approve_data = approve_res.json()
-        # Approval now queues execution; the worker owns the long-running run.
-        self.assertIn(approve_data["status"], ("queued", "running", "completed", "failed"),
-                      f"Status sau approve không hợp lệ: {approve_data['status']}")
+        # With the isolated API test adapter there is no configured planner, so
+        # the run has no valid plan and must not be approved or queued.
+        self.assertEqual(approve_res.status_code, 422)
+        self.assertEqual(approve_res.json()["error"]["code"], "validation_error")
 
     async def test_stream_run_events(self):
         # Start a run
@@ -117,19 +120,26 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(flow_response.status_code, 201)
         workflow_id = flow_response.json()["id"]
+        conversation_response = await self.client.post(
+            "/api/v1/conversations",
+            json={"title": "Run link"},
+        )
+        self.assertEqual(conversation_response.status_code, 201)
+        conversation_id = conversation_response.json()["id"]
 
         run_response = await self.client.post(
             f"/api/v1/workflows/{workflow_id}/runs",
             headers={"Idempotency-Key": "queued-run-test"},
             json={
-                "conversation_id": "conversation-run-link-test",
+                "workflow_version_id": flow_response.json()["version_id"],
+                "conversation_id": conversation_id,
                 "input_data": {"query": "local LLM"},
             },
         )
         self.assertEqual(run_response.status_code, 201)
         run = run_response.json()
         self.assertEqual(run["status"], "queued")
-        self.assertEqual(run["conversation_id"], "conversation-run-link-test")
+        self.assertEqual(run["conversation_id"], conversation_id)
 
         events_response = await self.client.get(
             f"/api/v1/runs/{run['run_id']}/events"
@@ -140,7 +150,11 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         duplicate_response = await self.client.post(
             f"/api/v1/workflows/{workflow_id}/runs",
             headers={"Idempotency-Key": "queued-run-test"},
-            json={"input_data": {"query": "local LLM"}},
+            json={
+                "workflow_version_id": flow_response.json()["version_id"],
+                "conversation_id": conversation_id,
+                "input_data": {"query": "local LLM"},
+            },
         )
         self.assertEqual(duplicate_response.status_code, 201)
         self.assertEqual(duplicate_response.json()["run_id"], run["run_id"])

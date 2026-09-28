@@ -289,12 +289,26 @@ async def _execute_worker_node(
     use_llm = metadata.get("use_llm", False)
 
     if use_llm:
+        purpose = InferencePurpose.WORKER.value
+        model_name: str | None = None
         try:
             from app.execution.llm import get_llm
-            purpose = InferencePurpose.WORKER
-            model_name = model_name_for(purpose)
+            resolved_config = metadata.get("resolved_model_config") or {}
+            model_name = resolved_config.get("worker_model") or model_name_for(purpose)
             resolver = agent_resolver or AgentResolver()
-            resolved_agent = await resolver.resolve(current_task)
+            profiles = resolved_config.get("agent_profiles") or {}
+            step_configs = resolved_config.get("steps") or {}
+            step_snapshot = step_configs.get(current_task.task_key or str(current_task.id), {})
+            profile_data = (
+                profiles.get(current_task.agent_id)
+                or profiles.get(current_task.node)
+            )
+            profile_override = None
+            if isinstance(profile_data, dict):
+                from app.execution.agents.resolver import AgentProfile
+
+                profile_override = AgentProfile.model_validate(profile_data)
+            resolved_agent = await resolver.resolve(current_task, profile_override=profile_override)
             logs.append(
                 f"[WorkerNode] Resolved agent '{resolved_agent.profile.name}' "
                 f"with {len(resolved_agent.tools)} authorized tools: "
@@ -311,11 +325,16 @@ async def _execute_worker_node(
                     f"agent policy: {', '.join(resolved_agent.denied_tool_names)}."
                 )
             logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
-            llm = get_llm(purpose=purpose, temperature=0.2)
+            llm = get_llm(
+                purpose=InferencePurpose.WORKER,
+                temperature=float(resolved_config.get("worker_temperature", 0.2)),
+                model_name_override=model_name,
+            )
             worker_agent = AgentResolver.create_agent(
                 resolved=resolved_agent,
                 llm=llm,
                 task=current_task,
+                system_prompt_override=step_snapshot.get("effective_system_prompt"),
             )
             agent_state = dict(state)
             agent_state["metadata"] = {**metadata, "model_name": model_name}

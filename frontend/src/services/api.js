@@ -170,14 +170,19 @@ export async function retryRun(runId) {
   return requestJson(`${API_BASE}/runs/${runId}/retry`, { method: 'POST' });
 }
 
-export async function createWorkflowRun(workflowId, inputData = {}, metadata = {}, conversationId = null) {
+export async function createWorkflowRun(workflowId, workflowVersionId, inputData = {}, metadata = {}, conversationId = null) {
   return requestJson(`${API_BASE}/workflows/${workflowId}/runs`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Idempotency-Key': crypto.randomUUID()
     },
-    body: JSON.stringify({ input_data: inputData, metadata, conversation_id: conversationId })
+    body: JSON.stringify({
+      workflow_version_id: workflowVersionId,
+      input_data: inputData,
+      metadata,
+      conversation_id: conversationId
+    })
   });
 }
 
@@ -252,11 +257,11 @@ export async function sendChatMessage(runId, message) {
   });
 }
 
-export async function approveRun(runId) {
+export async function approveRun(runId, planRevision) {
   return requestJson(`${API_BASE}/runs/${runId}/approve`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approved: true })
+    body: JSON.stringify({ approved: true, plan_revision: planRevision })
   });
 }
 

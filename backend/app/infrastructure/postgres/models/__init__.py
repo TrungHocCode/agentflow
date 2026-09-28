@@ -12,6 +12,12 @@ from app.infrastructure.postgres.models.flow import FlowModel
 from app.infrastructure.postgres.models.run import RunEventModel, RunModel
 from app.infrastructure.postgres.models.identity import UserModel
 from app.infrastructure.postgres.models.workflow import WorkflowVersionModel
+from app.infrastructure.postgres.models.workflow_step import (
+    WorkflowStepDependencyModel,
+    WorkflowStepModel,
+    WorkflowStepToolModel,
+)
+from app.infrastructure.postgres.models.task_execution import TaskExecutionModel
 from app.infrastructure.postgres.models.results import (
     ArtifactModel,
     EvidenceModel,
@@ -27,6 +33,10 @@ __all__ = [
     "RunEventModel",
     "RunModel",
     "WorkflowVersionModel",
+    "WorkflowStepModel",
+    "WorkflowStepDependencyModel",
+    "WorkflowStepToolModel",
+    "TaskExecutionModel",
     "UserModel",
     "ResultModel",
     "EvidenceModel",

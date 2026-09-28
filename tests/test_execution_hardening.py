@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from test_support import use_test_adapters
 from unittest.mock import AsyncMock, patch
 
@@ -14,6 +15,7 @@ from app.infrastructure.redis.event_publisher import InMemoryRunEventPublisher
 from app.infrastructure.redis.run_queue import InMemoryRunCommandQueue
 from app.modules.runs.models import RunDocument
 from app.modules.runs.service import RunService
+from app.modules.workflows.domain import WorkflowVersionRecord
 
 
 class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
@@ -66,9 +68,24 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
     async def test_retry_creates_new_queued_attempt_and_resets_failed_tasks(self) -> None:
         repository = PostgresRunRepository()
         queue = InMemoryRunCommandQueue()
+
+        class WorkflowRepository:
+            async def get_version(self, workflow_id, version_id, user_id):
+                if workflow_id != "flow-hardening" or version_id != "published-v1":
+                    return None
+                return WorkflowVersionRecord(
+                    id=version_id,
+                    workflow_id=workflow_id,
+                    version_number=1,
+                    status="published",
+                    definition={"tasks": [task.model_dump(mode="json") for task in source.plan]},
+                    created_by=user_id,
+                    created_at=datetime.now(timezone.utc),
+                )
+
         service = RunService(
             run_repository=repository,
-            workflow_repository=None,
+            workflow_repository=WorkflowRepository(),
             execution_port=AsyncMock(),
             command_queue=queue,
             event_publisher=InMemoryRunEventPublisher(),
@@ -80,11 +97,16 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
             status="failed",
             mode="executing",
             plan=[
-                Task(id=1, node="done", status="done", description="Done"),
-                Task(id=2, node="failed", status="failed", description="Failed", error="network"),
+                Task(id=1, task_key="done", node="done", agent_id="done", status="done", description="Done"),
+                Task(id=2, task_key="failed", node="failed", agent_id="failed", status="failed", description="Failed", error="network"),
             ],
             result_storage=[{"task_id": 1, "result": "kept", "status": "done"}],
+            workflow_version_id="published-v1",
+            plan_revision="",
+            approved_plan_revision="",
         )
+        source.plan_revision = RunService._plan_revision(source.plan)
+        source.approved_plan_revision = source.plan_revision
         await repository.save(source)
 
         retry = await service.retry_run(source.run_id, user_id="default_user")

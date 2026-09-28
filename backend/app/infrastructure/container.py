@@ -81,7 +81,10 @@ def build_catalog_service(session: AsyncSession) -> CatalogService:
 def build_workflow_service(session: AsyncSession) -> WorkflowService:
     """Compose the Workflow application service."""
 
-    return WorkflowService(repository=PostgresWorkflowRepository(session))
+    return WorkflowService(
+        repository=PostgresWorkflowRepository(session),
+        catalog_repository=PostgresCatalogRepository(session),
+    )
 
 
 def build_auth_service(session: AsyncSession | None = None) -> IdentityService:
@@ -100,6 +103,7 @@ def build_conversation_service(session: AsyncSession | None = None) -> Conversat
     return ConversationService(
         repository=PostgresConversationRepository(session),
         execution_port=build_execution_port(),
+        workflow_repository=PostgresWorkflowRepository(session),
         event_publisher=(
             get_in_memory_conversation_publisher()
             if os.getenv("TESTING", "").lower() == "true"
@@ -119,6 +123,8 @@ def build_run_service(session: AsyncSession | None = None) -> RunService:
         event_publisher=build_event_publisher(),
         research_repository=PostgresResearchRepository(session),
         artifact_storage=LocalArtifactStorage(),
+        conversation_repository=PostgresConversationRepository(session),
+        catalog_repository=PostgresCatalogRepository(session),
     )
 
 

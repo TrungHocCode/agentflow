@@ -22,6 +22,8 @@ from app.modules.runs.events import (
 )
 from app.modules.runs.models import RunDocument
 from app.modules.runs.ports import RunRepository
+from app.modules.conversations.ports import ConversationRepository
+from app.modules.catalog.ports import CatalogRepository
 from app.modules.runs.queue import (
     DiscardingRunCommandQueue,
     RunCommandQueue,
@@ -30,7 +32,7 @@ from app.modules.results.models import EvidenceRecord, ResultRecord
 from app.modules.results.ports import ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
-from app.shared.errors import PersistenceError, ValidationError
+from app.shared.errors import ConflictError, PersistenceError, ValidationError
 from app.shared.events import ExecutionEvent
 from app.shared.execution_metrics import (
     merge_execution_timings,
@@ -81,6 +83,8 @@ class RunService:
         event_publisher: RunEventPublisher | None = None,
         research_repository: ResearchDataRepository | None = None,
         artifact_storage: Any | None = None,
+        conversation_repository: ConversationRepository | None = None,
+        catalog_repository: CatalogRepository | None = None,
     ) -> None:
         self.run_repository = run_repository
         self.workflow_repository = workflow_repository
@@ -89,6 +93,8 @@ class RunService:
         self.event_publisher = event_publisher or DiscardingRunEventPublisher()
         self.research_repository = research_repository
         self.artifact_storage = artifact_storage
+        self.conversation_repository = conversation_repository
+        self.catalog_repository = catalog_repository
 
     async def save_run_doc(self, document: RunDocument) -> None:
         await self.run_repository.save(document)
@@ -161,7 +167,24 @@ class RunService:
                 result_storage = result_state.get("result_storage") or []
                 execution_timings = result_state.get("execution_timings") or []
             except Exception as exc:
-                logs.append(f"[RunService Warning] Plan creation error: {exc}")
+                error_id = str(uuid.uuid4())
+                logger.error(
+                    "Legacy run planning failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"error_id": error_id, "error_code": "planning_failed"},
+                )
+                metadata_values = run_metadata
+                metadata_values["last_error"] = {
+                    "error_id": error_id,
+                    "code": "planning_failed",
+                    "category": "model",
+                    "retryable": True,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                }
+                logs.append(f"[RunService Warning] Plan creation failed (reference {error_id}).")
+
+        if plan:
+            plan = await self._validate_task_plan(plan)
 
         metadata_values = dict(run_metadata)
         if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and execution_timings:
@@ -176,7 +199,10 @@ class RunService:
             run_id=run_id,
             flow_id=flow_id,
             user_id=user_id,
-            workflow_version_id=self._version_id(flow_id, plan),
+            # This endpoint only creates a planning draft. It has not selected
+            # an immutable, published workflow version and must not invent one.
+            workflow_version_id=None,
+            plan_revision=self._plan_revision(plan),
             status="pending",
             approval_status="pending",
             mode=mode,
@@ -198,6 +224,7 @@ class RunService:
     async def create_workflow_run(
         self,
         workflow_id: str,
+        workflow_version_id: str,
         input_data: Optional[Dict[str, Any]] = None,
         execution_mode: str = "manual",
         metadata: Optional[Dict[str, Any]] = None,
@@ -207,52 +234,159 @@ class RunService:
     ) -> RunDocument | None:
         """Create and enqueue an asynchronous run from a workflow snapshot."""
 
+        from app.modules.workflows.contract import normalize_workflow_definition
+        from app.modules.workflows.validator import (
+            validate_workflow_definition,
+            validate_workflow_references,
+        )
+        from app.shared.errors import ResourceNotFoundError
+
         if self.workflow_repository is None:
             return None
-        if idempotency_key:
-            existing = await self.run_repository.find_by_idempotency_key(idempotency_key)
-            if existing:
-                return existing
-
-        definition = await self._load_workflow_definition(workflow_id, user_id)
-        if definition is None:
+        if not workflow_version_id:
+            raise ValidationError("A published workflow version must be selected before creating a run.")
+        if conversation_id is not None and self.conversation_repository is not None:
+            conversation = await self.conversation_repository.get(conversation_id, user_id)
+            if conversation is None:
+                raise ResourceNotFoundError(
+                    "The linked conversation was not found.",
+                    entity="conversation",
+                )
+            if conversation.workflow_id and conversation.workflow_id != workflow_id:
+                raise ConflictError(
+                    "The linked conversation belongs to a different workflow.",
+                    code="conversation_workflow_mismatch",
+                )
+        version_snapshot = None
+        if self.workflow_repository is not None and workflow_version_id:
+            loader = getattr(
+                self.workflow_repository,
+                "get_published_version_snapshot",
+                None,
+            )
+            if loader is not None:
+                version_snapshot = await loader(workflow_id, workflow_version_id, user_id)
+            else:
+                version_snapshot = await self.workflow_repository.get_version(
+                    workflow_id,
+                    workflow_version_id,
+                    user_id,
+                )
+                if version_snapshot and version_snapshot.status != "published":
+                    version_snapshot = None
+        if version_snapshot is None:
             return None
+
+        definition = normalize_workflow_definition(version_snapshot.definition)
+        validate_workflow_definition(definition, require_steps=True)
+        definition = await validate_workflow_references(definition, self.catalog_repository)
+        validate_workflow_definition(definition, require_steps=True)
         plan = self._normalize_tasks(definition.get("tasks") or [])
         if not plan:
             raise ValidationError("Workflow must contain at least one task.")
+        workflow_version_id = str(
+            getattr(version_snapshot, "version_id", None)
+            or getattr(version_snapshot, "id", None)
+            or workflow_version_id
+        )
+        resolved_model_config = await self._resolve_execution_snapshot(
+            definition,
+            plan,
+            workflow_version_id=workflow_version_id,
+        )
+        fingerprint = self._idempotency_fingerprint(
+            user_id=user_id,
+            workflow_id=workflow_id,
+            workflow_version_id=workflow_version_id,
+            input_data=input_data or {},
+            execution_mode=execution_mode,
+            metadata=metadata or {},
+            conversation_id=conversation_id,
+        )
+        if idempotency_key:
+            existing = await self.run_repository.find_by_idempotency_key(
+                idempotency_key,
+                user_id,
+            )
+            if existing is not None:
+                if existing.idempotency_fingerprint == fingerprint:
+                    return existing
+                raise ConflictError(
+                    "This idempotency key was already used for a different run request.",
+                    code="idempotency_key_reused",
+                )
 
         run_id = str(uuid.uuid4())
-        version_id = await self._load_workflow_version_id(
-            workflow_id,
-            user_id,
-            definition,
-        )
+        plan = [
+            task.model_copy(
+                update={
+                    "task_execution_id": str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"agentflow:{run_id}:task:{task.task_key or task.id}",
+                        )
+                    )
+                }
+            )
+            for task in plan
+        ]
         document_metadata = dict(metadata or {})
         document_metadata.pop("model_name", None)
         document_metadata.pop("inference_purpose", None)
+        document_metadata["use_llm"] = True
         document_metadata["workflow_snapshot"] = definition
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            document_metadata["request_started_at"] = datetime.now(timezone.utc).isoformat()
         document = RunDocument(
             run_id=run_id,
             flow_id=workflow_id,
             user_id=user_id,
             conversation_id=conversation_id,
-            workflow_version_id=version_id,
+            workflow_version_id=workflow_version_id,
+            plan_revision=self._plan_revision(plan),
+            approved_plan_revision=self._plan_revision(plan),
             status="queued",
-            approval_status="not_required",
+            approval_status="approved",
             execution_mode=execution_mode,
             mode="executing",
             plan=plan,
+            resolved_model_config=resolved_model_config,
             metadata=document_metadata,
             input_data=input_data or {},
             idempotency_key=idempotency_key,
+            idempotency_fingerprint=fingerprint if idempotency_key else None,
         )
-        await self.save_run_doc(document)
+        try:
+            await self.save_run_doc(document)
+        except PersistenceError:
+            # The database unique constraint is the concurrency arbiter. If a
+            # simultaneous identical request won, return that run; otherwise
+            # preserve the original persistence failure or report key reuse.
+            if idempotency_key:
+                try:
+                    existing = await self.run_repository.find_by_idempotency_key(
+                        idempotency_key,
+                        user_id,
+                    )
+                except Exception:
+                    existing = None
+                if existing is not None:
+                    if existing.idempotency_fingerprint == fingerprint:
+                        return existing
+                    raise ConflictError(
+                        "This idempotency key was already used for a different run request.",
+                        code="idempotency_key_reused",
+                    )
+            raise
         await self._record_event(
             run_id,
             "run_progress",
             phase="execute",
             status="queued",
-            payload={"workflow_id": workflow_id, "workflow_version_id": version_id},
+            payload={
+                "workflow_id": workflow_id,
+                "workflow_version_id": workflow_version_id,
+            },
         )
         return await self._enqueue_document(document)
 
@@ -260,20 +394,30 @@ class RunService:
         self,
         run_id: str,
         message: str,
+        user_id: str | None = None,
     ) -> Optional[RunDocument]:
         """Resume the build-phase conversation for a legacy run."""
 
-        run_doc = await self.get_run(run_id)
+        run_doc = await self.get_run(run_id, user_id=user_id)
         if not run_doc:
             return None
         if run_doc.status in TERMINAL_RUN_STATUSES:
             return run_doc
+        if run_doc.status not in {"pending", "created", "waiting_for_approval", "paused"}:
+            raise ConflictError(
+                "The plan can no longer be changed after approval or execution has started.",
+                code="plan_is_locked",
+            )
+        expected_revision = run_doc.plan_revision or self._plan_revision(run_doc.plan)
+        expected_updated_at = run_doc.updated_at
 
         try:
+            run_doc.metadata["use_llm"] = True
             result_state = await self.execution_port.continue_conversation(run_id, message)
             run_doc.plan = self._normalize_tasks(
                 result_state.get("plan") or run_doc.plan
             )
+            run_doc.plan_revision = self._plan_revision(run_doc.plan)
             run_doc.mode = result_state.get("mode", run_doc.mode)
             run_doc.logs.extend(result_state.get("logs") or [])
             incoming_timings = result_state.get("execution_timings") or []
@@ -284,9 +428,24 @@ class RunService:
                 )
                 run_doc.metadata["execution_timings"] = merged_timings
                 run_doc.metadata["execution_metrics"] = summarize_execution_timings(merged_timings)
-            run_doc.logs.append(f"[User Message]: {message}")
-            run_doc.updated_at = datetime.utcnow()
-            await self.save_run_doc(run_doc)
+            self._accumulate_llm_call_metrics(run_doc, result_state)
+            run_doc.logs.append("[User Message] Follow-up accepted for planning.")
+            run_doc.updated_at = datetime.now(timezone.utc)
+            saver = getattr(self.run_repository, "save_if_plan_revision_matches", None)
+            if saver is not None:
+                saved = await saver(
+                    run_doc,
+                    expected_revision,
+                    expected_updated_at,
+                    ("pending", "created", "waiting_for_approval", "paused"),
+                )
+                if not saved:
+                    raise ConflictError(
+                        "The plan changed while this message was being processed. Please reload it.",
+                        code="plan_revision_changed",
+                    )
+            else:
+                await self.save_run_doc(run_doc)
             await self._record_event(
                 run_id,
                 "run_progress",
@@ -294,9 +453,35 @@ class RunService:
                 status=run_doc.status,
                 payload={"message": message},
             )
+        except ConflictError:
+            raise
         except Exception as exc:
-            run_doc.logs.append(f"[RunService Warning] send_message error: {exc}")
-            await self.save_run_doc(run_doc)
+            error_id = str(uuid.uuid4())
+            logger.error(
+                "Legacy run conversation update failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={"run_id": run_id, "error_id": error_id, "error_code": "conversation_update_failed"},
+            )
+            run_doc.metadata["last_error"] = {
+                "error_id": error_id,
+                "code": "conversation_update_failed",
+                "category": "model",
+                "retryable": True,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            }
+            run_doc.logs.append(f"[RunService Warning] Conversation update failed (reference {error_id}).")
+            try:
+                await self.save_run_doc(run_doc)
+            except Exception as persistence_exc:
+                logger.error(
+                    "Could not persist legacy conversation failure",
+                    exc_info=(
+                        type(persistence_exc),
+                        persistence_exc,
+                        persistence_exc.__traceback__,
+                    ),
+                    extra={"run_id": run_id, "error_id": error_id},
+                )
         return run_doc
 
     async def approve_run(
@@ -305,8 +490,11 @@ class RunService:
         approved: bool = True,
         feedback: Optional[str] = None,
         user_id: str | None = None,
+        plan_revision: str | None = None,
     ) -> Optional[RunDocument]:
         """Approve a plan and enqueue it without blocking on execution."""
+
+        from app.shared.errors import ConflictError
 
         run_doc = await self.get_run(run_id, user_id=user_id)
         if not run_doc:
@@ -322,7 +510,7 @@ class RunService:
             run_doc.approval_status = "rejected"
             run_doc.error_code = "workflow_rejected"
             run_doc.error_message = feedback or "Workflow plan rejected by user."
-            run_doc.updated_at = datetime.utcnow()
+            run_doc.updated_at = datetime.now(timezone.utc)
             await self.save_run_doc(run_doc)
             await self._record_event(
                 run_id,
@@ -333,13 +521,91 @@ class RunService:
             )
             return run_doc
 
+        if not run_doc.plan:
+            raise ValidationError("A workflow plan must contain at least one task before approval.")
+        if not run_doc.workflow_version_id or self.workflow_repository is None:
+            raise ConflictError(
+                "Save and publish this plan as a workflow version before approving it for execution.",
+                code="workflow_version_required",
+            )
+        expected_updated_at = run_doc.updated_at
+        validated_plan = await self._validate_task_plan(run_doc.plan)
+        current_revision = self._plan_revision(validated_plan)
+        persisted_revision = run_doc.plan_revision or self._plan_revision(run_doc.plan)
+        if persisted_revision != current_revision:
+            raise ConflictError(
+                "The workflow plan is no longer identical to the reviewed revision.",
+                code="plan_revision_changed",
+            )
+        snapshot_loader = getattr(
+            self.workflow_repository,
+            "get_published_version_snapshot",
+            None,
+        )
+        if snapshot_loader is not None:
+            version_snapshot = await snapshot_loader(
+                run_doc.flow_id,
+                run_doc.workflow_version_id,
+                run_doc.user_id,
+            )
+        else:
+            version_snapshot = await self.workflow_repository.get_version(
+                run_doc.flow_id,
+                run_doc.workflow_version_id,
+                run_doc.user_id,
+            )
+            if version_snapshot is not None and version_snapshot.status != "published":
+                version_snapshot = None
+        if version_snapshot is None:
+            raise ConflictError(
+                "The selected published workflow version is no longer available.",
+                code="workflow_version_unavailable",
+            )
+        from app.modules.workflows.contract import normalize_workflow_definition
+
+        version_definition = normalize_workflow_definition(version_snapshot.definition)
+        version_plan = await self._validate_task_plan(
+            self._normalize_tasks(version_definition.get("tasks") or [])
+        )
+        if self._plan_revision(version_plan) != current_revision:
+            raise ConflictError(
+                "The reviewed plan does not match the selected published workflow version.",
+                code="workflow_version_mismatch",
+            )
+        if not plan_revision:
+            raise ValidationError("The plan revision is required to approve a workflow.")
+        if plan_revision != current_revision:
+            raise ConflictError(
+                "The plan changed after it was reviewed. Review the latest plan before approving.",
+                code="plan_revision_changed",
+            )
+        run_doc.plan = validated_plan
+
         run_doc.logs.append(
             f"[User Approval]: Plan approved. Feedback: {feedback or 'None'}"
         )
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            run_doc.metadata["request_started_at"] = datetime.now(timezone.utc).isoformat()
         run_doc.status = "queued"
         run_doc.approval_status = "approved"
-        run_doc.updated_at = datetime.utcnow()
-        await self.save_run_doc(run_doc)
+        run_doc.plan_revision = current_revision
+        run_doc.approved_plan_revision = current_revision
+        run_doc.updated_at = datetime.now(timezone.utc)
+        saver = getattr(self.run_repository, "save_if_plan_revision_matches", None)
+        if saver is not None:
+            saved = await saver(
+                run_doc,
+                current_revision,
+                expected_updated_at,
+                ("pending", "created", "waiting_for_approval", "paused"),
+            )
+            if not saved:
+                raise ConflictError(
+                    "The plan changed before approval could be recorded. Review the latest plan.",
+                    code="plan_revision_changed",
+                )
+        else:
+            await self.save_run_doc(run_doc)
         await self._record_event(
             run_id,
             "run_progress",
@@ -397,6 +663,37 @@ class RunService:
         source = await self.get_run(run_id, user_id=user_id)
         if source is None or source.status not in {"failed", "interrupted", "cancelled"}:
             return None
+        if (
+            self.workflow_repository is None
+            or not source.workflow_version_id
+            or not source.approved_plan_revision
+            or source.approved_plan_revision != self._plan_revision(source.plan)
+        ):
+            raise ConflictError(
+                "This run is not bound to an intact approved workflow version and cannot be retried.",
+                code="workflow_version_required",
+            )
+        version_snapshot = await self.workflow_repository.get_version(
+            source.flow_id,
+            source.workflow_version_id,
+            source.user_id,
+        )
+        if version_snapshot is None or version_snapshot.status != "published":
+            raise ConflictError(
+                "The original published workflow version is no longer available for retry.",
+                code="workflow_version_unavailable",
+            )
+        from app.modules.workflows.contract import normalize_workflow_definition
+
+        version_definition = normalize_workflow_definition(version_snapshot.definition)
+        version_plan = await self._validate_task_plan(
+            self._normalize_tasks(version_definition.get("tasks") or [])
+        )
+        if self._plan_revision(version_plan) != source.approved_plan_revision:
+            raise ConflictError(
+                "The failed run no longer matches its approved workflow version.",
+                code="workflow_version_mismatch",
+            )
         retry_plan = [
             task.model_copy(update={"status": "pending", "error": None})
             if task.status in {"failed", "skipped"}
@@ -404,23 +701,28 @@ class RunService:
             for task in source.plan
         ]
         retry_count = int(source.metadata.get("retry_count", 0)) + 1
+        retry_metadata = dict(source.metadata)
+        retry_metadata.pop("last_error", None)
+        retry_metadata["use_llm"] = True
+        retry_metadata["retry_of"] = source.run_id
+        retry_metadata["retry_count"] = retry_count
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            retry_metadata["request_started_at"] = datetime.now(timezone.utc).isoformat()
         retry = RunDocument(
             run_id=str(uuid.uuid4()),
             flow_id=source.flow_id,
             user_id=source.user_id,
             conversation_id=source.conversation_id,
             workflow_version_id=source.workflow_version_id,
+            plan_revision=self._plan_revision(retry_plan),
+            approved_plan_revision=self._plan_revision(retry_plan),
             status="queued",
-            approval_status="not_required",
+            approval_status="approved",
             execution_mode=source.execution_mode,
             mode="executing",
             plan=retry_plan,
             result_storage=list(source.result_storage),
-            metadata={
-                **source.metadata,
-                "retry_of": source.run_id,
-                "retry_count": retry_count,
-            },
+            metadata=retry_metadata,
             input_data=dict(source.input_data),
             resolved_model_config=dict(source.resolved_model_config),
         )
@@ -444,13 +746,33 @@ class RunService:
         run_doc = await self.run_repository.claim(run_id)
         if not run_doc:
             return await self.get_run(run_id)
-
-        await self._record_event(
-            run_id,
-            "run_started",
-            phase="execute",
-            status="running",
-            payload={"workflow_version_id": run_doc.workflow_version_id},
+        current_revision = self._plan_revision(run_doc.plan)
+        if (
+            self.workflow_repository is not None
+            and (
+                not run_doc.workflow_version_id
+                or not run_doc.approved_plan_revision
+                or run_doc.approved_plan_revision != current_revision
+            )
+        ):
+            run_doc.status = "failed"
+            run_doc.error_code = "approved_workflow_snapshot_invalid"
+            run_doc.error_message = (
+                "The run is not bound to an intact approved workflow version."
+            )
+            run_doc.updated_at = datetime.now(timezone.utc)
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_id,
+                "run_failed",
+                phase="execute",
+                status=run_doc.status,
+                payload={"code": run_doc.error_code},
+            )
+            return run_doc
+        logger.info(
+            "Workflow run claimed by execution worker",
+            extra={"run_id": run_id, "run_status": "running"},
         )
 
         if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
@@ -1098,19 +1420,13 @@ class RunService:
 
             if self.artifact_storage is not None:
                 artifact_paths = set(self._find_artifact_paths(serialized))
-                raw_logs = node_output.get("logs") or []
-                logs = raw_logs if isinstance(raw_logs, list) else [raw_logs]
-                for log in logs:
-                    log_text = str(log)
-                    if any(
-                        marker in log_text
-                        for marker in (
-                            "Tool 'markdown_report_generator' result:",
-                            "Tool 'chart_generator' result:",
-                        )
-                    ):
-                        tool_result = log_text.split(" result:", 1)[-1].strip()
-                        artifact_paths.update(self._find_artifact_paths(tool_result))
+                explicit_artifact_paths = item.get("artifact_paths") or []
+                if isinstance(explicit_artifact_paths, list):
+                    artifact_paths.update(
+                        path.strip()
+                        for path in explicit_artifact_paths
+                        if isinstance(path, str) and path.strip()
+                    )
 
                 for source_path in artifact_paths:
                     if source_path in ingested_paths:
@@ -1305,24 +1621,6 @@ class RunService:
         definition = await self._load_workflow_definition(flow_id)
         return self._normalize_tasks(definition.get("tasks") or []) if definition else []
 
-    async def _load_workflow_version_id(
-        self,
-        workflow_id: str,
-        user_id: str,
-        definition: Dict[str, Any],
-    ) -> str:
-        if self.workflow_repository is not None:
-            get_current_version = getattr(
-                self.workflow_repository,
-                "get_current_version",
-                None,
-            )
-            if get_current_version is not None:
-                version = await get_current_version(workflow_id, user_id)
-                if version is not None and version.version_id:
-                    return version.version_id
-        return self._version_id(workflow_id, definition)
-
     async def _record_event(
         self,
         run_id: str,
@@ -1428,12 +1726,168 @@ class RunService:
     def _task_data(task: Task) -> Dict[str, Any]:
         return task.model_dump(mode="json")
 
-    @staticmethod
-    def _version_id(workflow_id: str, definition: Any) -> str:
-        serialized = json.dumps(
-            definition,
-            sort_keys=True,
-            default=lambda value: value.model_dump() if hasattr(value, "model_dump") else str(value),
+    async def _validate_task_plan(self, plan: Sequence[Task]) -> List[Task]:
+        """Apply workflow DAG and catalog permission checks to an execution plan."""
+
+        from app.modules.workflows.contract import normalize_workflow_definition
+        from app.modules.workflows.validator import (
+            validate_workflow_definition,
+            validate_workflow_references,
         )
-        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:24]
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"agentflow:{workflow_id}:{digest}"))
+
+        if not plan:
+            return []
+        definition = normalize_workflow_definition(
+            {"name": "Run plan", "tasks": [task.model_dump(mode="json") for task in plan]}
+        )
+        validate_workflow_definition(definition, require_steps=True)
+        definition = await validate_workflow_references(definition, self.catalog_repository)
+        validate_workflow_definition(definition, require_steps=True)
+        return self._normalize_tasks(definition.get("tasks") or [])
+
+    async def _resolve_execution_snapshot(
+        self,
+        definition: Dict[str, Any],
+        plan: Sequence[Task],
+        *,
+        workflow_version_id: str,
+    ) -> Dict[str, Any]:
+        """Freeze model routing, prompts, step bindings and active tool metadata for replay."""
+
+        from app.execution.agents.resolver import AGENT_RUNTIME_GUIDANCE, DEFAULT_AGENT_PROFILES
+        from app.execution.model_router import model_name_for
+
+        agents_by_ref: Dict[str, Any] = {}
+        tools_by_ref: Dict[str, Any] = {}
+        if self.catalog_repository is not None and os.getenv("TESTING", "").lower() != "true":
+            agents = await self.catalog_repository.list_agents(active_only=True)
+            tools = await self.catalog_repository.list_tools(active_only=True)
+            agents_by_ref = {
+                str(ref): agent
+                for agent in agents
+                for ref in (agent.id, agent.name)
+            }
+            tools_by_ref = {
+                str(ref): tool
+                for tool in tools
+                for ref in (tool.id, tool.name)
+            }
+
+        agent_profiles: Dict[str, Dict[str, Any]] = {}
+        tool_definitions: Dict[str, Dict[str, Any]] = {}
+        steps: Dict[str, Dict[str, Any]] = {}
+        for task in plan:
+            task_key = task.task_key or str(task.id)
+            agent = agents_by_ref.get(str(task.agent_id or task.node))
+            fallback_key = (task.agent_id or task.node or "worker").strip().lower()
+            fallback = DEFAULT_AGENT_PROFILES.get(fallback_key, DEFAULT_AGENT_PROFILES["worker"])
+            profile = {
+                "name": agent.name if agent is not None else fallback.name,
+                "system_prompt": agent.system_prompt if agent is not None else fallback.system_prompt,
+                "tool_names": list(agent.tool_names if agent is not None else fallback.tool_names),
+                "runtime_name": fallback.runtime_name,
+            }
+            for reference in (task.agent_id, task.node, profile["name"]):
+                if reference:
+                    agent_profiles[str(reference)] = profile
+
+            tools_for_task = []
+            for reference in task.tool_ids:
+                tool = tools_by_ref.get(str(reference))
+                if tool is not None:
+                    tool_definitions[str(tool.id)] = {
+                        "id": tool.id,
+                        "name": tool.name,
+                        "config_schema": tool.config_schema,
+                    }
+                    tools_for_task.append({"id": tool.id, "name": tool.name})
+            tool_instruction = (
+                "Authorized tools for this task (use these exact names only): "
+                f"{', '.join(task.tool_names)}."
+                if task.tool_names
+                else "No tools are available for this task; do not attempt tool calls."
+            )
+            prompt_sections = [profile["system_prompt"]]
+            runtime_guidance = AGENT_RUNTIME_GUIDANCE.get(profile["name"])
+            if runtime_guidance:
+                prompt_sections.append(runtime_guidance)
+            prompt_sections.extend([tool_instruction, f"Your assigned task is: {task.description}."])
+            steps[task_key] = {
+                "agent_id": task.agent_id,
+                "tool_ids": list(task.tool_ids),
+                "tool_names": list(task.tool_names),
+                "tools": tools_for_task,
+                "config": task.config,
+                "input_mapping": task.input_mapping,
+                "expected_output_type": task.expected_output_type,
+                "effective_system_prompt": "\n".join(prompt_sections),
+            }
+
+        return {
+            "planner_model": model_name_for(InferencePurpose.PLANNER),
+            "worker_model": model_name_for(InferencePurpose.WORKER),
+            "worker_temperature": 0.2,
+            "agent_profiles": agent_profiles,
+            "tools": tool_definitions,
+            "steps": steps,
+            "workflow_version_id": workflow_version_id,
+        }
+
+    @staticmethod
+    def _plan_revision(plan: Sequence[Task | Dict[str, Any]]) -> str:
+        """Hash only authored task data, excluding mutable execution state."""
+
+        authored_fields = (
+            "task_key",
+            "id",
+            "node",
+            "agent_id",
+            "capability",
+            "tool_names",
+            "tool_ids",
+            "description",
+            "dependencies",
+            "timeout_seconds",
+            "max_iterations",
+            "expected_output_type",
+            "input_mapping",
+            "config",
+        )
+        canonical_tasks = []
+        for value in plan:
+            task = value.model_dump(mode="json") if isinstance(value, Task) else value
+            canonical = {key: task.get(key) for key in authored_fields}
+            canonical["task_key"] = task.get("task_key") or str(task.get("id", ""))
+            canonical["tool_names"] = task.get("tool_names") or []
+            canonical["tool_ids"] = task.get("tool_ids") or []
+            canonical["dependencies"] = task.get("dependencies") or []
+            canonical["expected_output_type"] = task.get("expected_output_type") or "raw_data"
+            canonical["input_mapping"] = task.get("input_mapping") or {}
+            canonical["config"] = task.get("config") or {}
+            canonical_tasks.append(canonical)
+        serialized = json.dumps(canonical_tasks, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _idempotency_fingerprint(
+        *,
+        user_id: str,
+        workflow_id: str,
+        workflow_version_id: str,
+        input_data: Dict[str, Any],
+        execution_mode: str,
+        metadata: Dict[str, Any],
+        conversation_id: str | None,
+    ) -> str:
+        payload = {
+            "operation": "create_workflow_run",
+            "user_id": user_id,
+            "workflow_id": workflow_id,
+            "workflow_version_id": workflow_version_id,
+            "input_data": input_data,
+            "execution_mode": execution_mode,
+            "metadata": metadata,
+            "conversation_id": conversation_id,
+        }
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

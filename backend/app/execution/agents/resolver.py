@@ -189,10 +189,14 @@ class AgentResolver:
         self.fallback_profiles = fallback_profiles or DEFAULT_AGENT_PROFILES
         self._cache: Dict[str, AgentProfile] = {}
 
-    async def resolve(self, task: Task) -> ResolvedAgent:
+    async def resolve(
+        self,
+        task: Task,
+        profile_override: AgentProfile | None = None,
+    ) -> ResolvedAgent:
         """Load the selected profile and resolve its authorized tool instances."""
 
-        profile = await self._resolve_profile(task)
+        profile = profile_override or await self._resolve_profile(task)
         profile_tools = {
             self._canonical_tool_name(tool_name) for tool_name in profile.tool_names
         }
@@ -376,6 +380,7 @@ class AgentResolver:
         resolved: ResolvedAgent,
         llm: BaseChatModel,
         task: Task,
+        system_prompt_override: str | None = None,
     ) -> BaseAgent:
         """Instantiate the registered runtime class with the resolved profile."""
 
@@ -394,7 +399,7 @@ class AgentResolver:
             tool_instruction,
             f"Your assigned task is: {task.description}.",
         ])
-        system_prompt = "\n".join(prompt_sections)
+        system_prompt = system_prompt_override or "\n".join(prompt_sections)
         agent_class = AgentRegistry.get_agent_class(resolved.profile.runtime_name)
         return agent_class(
             name=resolved.profile.name,

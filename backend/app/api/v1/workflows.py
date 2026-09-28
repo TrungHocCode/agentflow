@@ -7,10 +7,9 @@ should use ``/workflows`` and the canonical definition adapter below.
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.dependencies import get_current_user_id, get_workflow_service
-from app.execution.state import FlowDefinition
 from app.modules.workflows.contract import (
     canonicalize_workflow_definition,
     normalize_workflow_definition,
@@ -23,6 +22,8 @@ from app.modules.workflows.schemas import (
 from app.modules.workflows.domain import WorkflowVersionRecord
 from app.modules.workflows.service import WorkflowService
 from app.shared.errors import ValidationError
+from app.core.config import settings
+from app.shared.validation import enforce_json_size
 
 
 router = APIRouter(prefix="/workflows", tags=["Workflows"])
@@ -33,11 +34,31 @@ class CanonicalWorkflowRequest(BaseModel):
     description: Optional[str] = None
     definition: Optional[Dict[str, Any]] = None
 
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> "CanonicalWorkflowRequest":
+        if self.definition is not None:
+            enforce_json_size(
+                self.definition,
+                max_bytes=settings.MAX_WORKFLOW_DEFINITION_BYTES,
+                field_name="definition",
+            )
+        return self
+
 
 class CanonicalWorkflowUpdateRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
     definition: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> "CanonicalWorkflowUpdateRequest":
+        if self.definition is not None:
+            enforce_json_size(
+                self.definition,
+                max_bytes=settings.MAX_WORKFLOW_DEFINITION_BYTES,
+                field_name="definition",
+            )
+        return self
 
 
 class WorkflowValidationResponse(BaseModel):
@@ -48,6 +69,15 @@ class WorkflowValidationResponse(BaseModel):
 
 class WorkflowVersionRequest(BaseModel):
     definition: Dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_payload_size(self) -> "WorkflowVersionRequest":
+        enforce_json_size(
+            self.definition,
+            max_bytes=settings.MAX_WORKFLOW_DEFINITION_BYTES,
+            field_name="definition",
+        )
+        return self
 
 
 def _legacy_create(request: CanonicalWorkflowRequest) -> WorkflowCreateRequest:
@@ -137,9 +167,7 @@ async def validate_workflow(
         raise HTTPException(status_code=404, detail=f"Workflow with ID '{workflow_id}' not found.")
     try:
         definition = normalize_workflow_definition(request.definition)
-        from app.execution.state import FlowDefinition
-
-        FlowDefinition.model_validate(definition)
+        await service.validate_definition(definition, require_steps=True)
         return WorkflowValidationResponse(valid=True)
     except ValidationError as exc:
         return WorkflowValidationResponse(
@@ -174,7 +202,7 @@ async def create_workflow_version(
     definition = normalize_workflow_definition(request.definition)
     version = await service.create_version(
         workflow_id,
-        FlowDefinition.model_validate(definition),
+        definition,
         user_id=user_id,
     )
     if version is None:

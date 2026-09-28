@@ -32,6 +32,31 @@ class TestCanonicalWorkflowContract(unittest.TestCase):
         )
         self.assertEqual([task["id"] for task in normalized["tasks"]], [1, 2])
         self.assertEqual(normalized["tasks"][1]["dependencies"], [1])
+        self.assertEqual(normalized["tasks"][1]["task_key"], "report")
+
+    def test_canonical_step_contract_is_preserved_losslessly(self):
+        step = {
+            "task_key": "collect-primary",
+            "name": "Collect primary sources",
+            "description": "Find official technical documentation.",
+            "agent_id": "source_researcher",
+            "tool_ids": ["tool-uuid"],
+            "dependencies": [],
+            "input_mapping": {"query": "{{input.topic}}"},
+            "expected_output_type": "normalized_data",
+            "config": {"timeout_seconds": 90, "max_iterations": 3, "custom": {"x": 1}},
+            "position": 4,
+            "vendor_extension": {"keep": True},
+            "status": "completed",
+        }
+        normalized = normalize_workflow_definition({"name": "Research", "steps": [step]})
+        self.assertEqual(normalized["steps"][0]["task_key"], "collect-primary")
+        self.assertEqual(normalized["steps"][0]["input_mapping"], {"query": "{{input.topic}}"})
+        self.assertEqual(normalized["steps"][0]["tool_ids"], ["tool-uuid"])
+        self.assertEqual(normalized["steps"][0]["vendor_extension"], {"keep": True})
+        self.assertNotIn("status", normalized["steps"][0])
+        self.assertEqual(normalized["tasks"][0]["expected_output_type"], "normalized_data")
+        self.assertEqual(normalized["tasks"][0]["status"], "pending")
 
     def test_legacy_tasks_are_exposed_as_canonical_steps(self):
         canonical = canonicalize_workflow_definition(

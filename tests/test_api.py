@@ -90,6 +90,26 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(error["error_id"])
         self.assertFalse(error["retryable"])
 
+    async def test_auth_dependency_does_not_relabel_database_outage_as_401(self):
+        from app.shared.errors import PersistenceError
+
+        class UnavailableIdentityService:
+            async def current_user(self, _token):
+                raise PersistenceError("Could not load user.")
+
+        token = create_access_token("api-user", settings.AUTH_SIGNING_SECRET, 300)
+        with patch.dict(os.environ, {"TESTING": "false"}), patch(
+            "app.api.dependencies.build_auth_service",
+            return_value=UnavailableIdentityService(),
+        ):
+            response = await self.client.get(
+                "/api/v1/runs",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "persistence_unavailable")
+
     async def test_http_5xx_does_not_expose_internal_detail(self):
         request = Request({
             "type": "http",
@@ -138,8 +158,23 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         app.dependency_overrides[get_run_query_service] = FakeRunService
         app.dependency_overrides[get_workflow_service] = FakeWorkflowService
         token = create_access_token("api-user", settings.AUTH_SIGNING_SECRET, 300)
+
+        class FakeAuthService:
+            async def current_user(self, _token):
+                now = datetime.now(timezone.utc)
+                return UserRecord(
+                    id="api-user",
+                    email="api-user@example.com",
+                    display_name="API User",
+                    created_at=now,
+                    updated_at=now,
+                )
+
         try:
-            with patch.dict(os.environ, {"TESTING": "false"}):
+            with patch.dict(os.environ, {"TESTING": "false"}), patch(
+                "app.api.dependencies.build_auth_service",
+                return_value=FakeAuthService(),
+            ):
                 canonical_runs = await self.client.get(
                     "/api/v1/runs",
                     headers={"Authorization": f"Bearer {token}"},
@@ -283,7 +318,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
         run_response = await self.client.post(
             f"/api/v1/workflows/{workflow['id']}/runs",
-            json={},
+            json={"workflow_version_id": workflow["version_id"]},
         )
         self.assertEqual(run_response.status_code, 404)
 

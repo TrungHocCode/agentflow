@@ -1,14 +1,20 @@
 """PostgreSQL adapter for durable run state and replayable events."""
 
 import os
-from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, TypeVar
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, List, Sequence, TypeVar
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
-from app.infrastructure.postgres.models import RunEventModel, RunModel
+from app.infrastructure.postgres.models import (
+    RunEventModel,
+    RunModel,
+    TaskExecutionModel,
+    WorkflowStepModel,
+)
 from app.modules.runs.models import RunDocument
 from app.modules.runs.ports import RunRepository
 from app.shared.errors import PersistenceError
@@ -55,15 +61,142 @@ class PostgresRunRepository(RunRepository):
                 values = self._to_orm_values(document)
                 if record is None:
                     session.add(RunModel(**values))
+                    await session.flush()
+                    await self._create_task_execution_rows(session, document)
                 else:
                     for key, value in values.items():
                         setattr(record, key, value)
+                    await self._sync_task_execution_rows(session, document)
                 await session.commit()
 
             await self._with_session(operation)
         except Exception as exc:
             await self._rollback()
             raise PersistenceError("Could not save run state.") from exc
+
+    async def save_if_plan_revision_matches(
+        self,
+        document: RunDocument,
+        expected_revision: str,
+        expected_updated_at: datetime,
+        allowed_statuses: Sequence[str],
+    ) -> bool:
+        """Persist only if neither the reviewed plan nor its run snapshot has changed."""
+
+        if self.use_memory:
+            current = _IN_MEMORY_RUNS.get(document.run_id)
+            if (
+                current is None
+                or current.get("user_id") != document.user_id
+                or current.get("plan_revision") != expected_revision
+                or current.get("updated_at") != expected_updated_at
+                or current.get("status") not in set(allowed_statuses)
+            ):
+                return False
+            self._save_memory(document)
+            return True
+
+        try:
+            async def operation(session: AsyncSession) -> bool:
+                result = await session.execute(
+                    update(RunModel)
+                    .where(
+                        RunModel.run_id == document.run_id,
+                        RunModel.user_id == document.user_id,
+                        RunModel.plan_revision == expected_revision,
+                        RunModel.updated_at == expected_updated_at,
+                        RunModel.status.in_(list(allowed_statuses)),
+                    )
+                    .values(**self._to_orm_values(document))
+                )
+                if result.rowcount != 1:
+                    await session.rollback()
+                    return False
+                await self._sync_task_execution_rows(session, document)
+                await session.commit()
+                return True
+
+            return await self._with_session(operation)
+        except Exception as exc:
+            await self._rollback()
+            raise PersistenceError("Could not conditionally save the workflow plan.") from exc
+
+    @staticmethod
+    async def _create_task_execution_rows(
+        session: AsyncSession,
+        document: RunDocument,
+    ) -> None:
+        """Create the at-most-once task identities alongside a new run row."""
+
+        if not document.workflow_version_id:
+            return
+        task_keys = [task.task_key for task in document.plan if task.task_key]
+        if not task_keys:
+            return
+        result = await session.execute(
+            select(WorkflowStepModel).where(
+                WorkflowStepModel.workflow_version_id == document.workflow_version_id,
+                WorkflowStepModel.task_key.in_(task_keys),
+            )
+        )
+        step_by_key = {step.task_key: step for step in result.scalars().all()}
+        missing = set(task_keys) - set(step_by_key)
+        if missing:
+            raise ValueError(
+                "The selected workflow version is missing normalized steps: "
+                + ", ".join(sorted(missing))
+            )
+
+        session.add_all(
+            [
+                TaskExecutionModel(
+                    id=task.task_execution_id
+                    or str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"agentflow:{document.run_id}:task:{task.task_key}",
+                        )
+                    ),
+                    run_id=document.run_id,
+                    workflow_step_id=step_by_key[task.task_key].id,
+                    task_key=task.task_key,
+                    status="pending",
+                    attempt_number=1,
+                    agent_ref=task.agent_id or task.node,
+                    resolved_tool_ids=list(task.tool_ids),
+                    input_reference=task.input_mapping,
+                )
+                for task in document.plan
+                if task.task_key
+            ]
+        )
+
+    @staticmethod
+    async def _sync_task_execution_rows(
+        session: AsyncSession,
+        document: RunDocument,
+    ) -> None:
+        """Keep normalized runtime status aligned with the durable run snapshot."""
+
+        result = await session.execute(
+            select(TaskExecutionModel).where(TaskExecutionModel.run_id == document.run_id)
+        )
+        rows = {row.task_key: row for row in result.scalars().all()}
+        now = datetime.now(timezone.utc)
+        for task in document.plan:
+            if not task.task_key or task.task_key not in rows:
+                continue
+            row = rows[task.task_key]
+            status = "completed" if task.status in {"done", "partial"} else task.status
+            row.status = status
+            row.agent_ref = task.agent_id or task.node
+            row.resolved_tool_ids = list(task.tool_ids)
+            row.input_reference = task.input_mapping
+            row.error_message = task.error
+            if status == "running" and row.started_at is None:
+                row.started_at = now
+            if status in {"completed", "failed", "skipped", "cancelled", "interrupted"}:
+                row.completed_at = row.completed_at or now
 
     async def get(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
         if self.use_memory:
@@ -121,7 +254,11 @@ class PostgresRunRepository(RunRepository):
 
         return []
 
-    async def find_by_idempotency_key(self, idempotency_key: str) -> RunDocument | None:
+    async def find_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        user_id: str,
+    ) -> RunDocument | None:
         if not idempotency_key:
             return None
         if self.use_memory:
@@ -133,7 +270,10 @@ class PostgresRunRepository(RunRepository):
             try:
                 result = await self._with_session(
                     lambda session: session.execute(
-                        select(RunModel).where(RunModel.idempotency_key == idempotency_key)
+                        select(RunModel).where(
+                            RunModel.idempotency_key == idempotency_key,
+                            RunModel.user_id == user_id,
+                        )
                     )
                 )
                 record = result.scalar_one_or_none()
@@ -153,7 +293,7 @@ class PostgresRunRepository(RunRepository):
             if not data or data.get("status") != "queued":
                 return None
             data["status"] = "running"
-            data["updated_at"] = datetime.utcnow()
+            data["updated_at"] = datetime.now(timezone.utc)
             return RunDocument(**data)
 
         try:
@@ -161,7 +301,7 @@ class PostgresRunRepository(RunRepository):
                 result = await session.execute(
                     update(RunModel)
                     .where(RunModel.run_id == run_id, RunModel.status == "queued")
-                    .values(status="running", updated_at=datetime.utcnow())
+                    .values(status="running", updated_at=datetime.now(timezone.utc))
                 )
                 if result.rowcount != 1:
                     await session.rollback()

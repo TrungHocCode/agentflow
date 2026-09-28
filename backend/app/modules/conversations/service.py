@@ -20,6 +20,7 @@ from app.modules.conversations.models import (
 )
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
+from app.modules.workflows.ports import WorkflowRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
 from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
 from app.shared.errors import ApplicationError, PersistenceError
@@ -37,10 +38,12 @@ class ConversationService:
         repository: ConversationRepository,
         execution_port: ExecutionPort,
         event_publisher: ConversationEventPublisher | None = None,
+        workflow_repository: WorkflowRepository | None = None,
     ) -> None:
         self.repository = repository
         self.execution_port = execution_port
         self.event_publisher = event_publisher
+        self.workflow_repository = workflow_repository
 
     async def create_conversation(
         self,
@@ -49,7 +52,16 @@ class ConversationService:
         metadata: Dict[str, Any] | None = None,
         user_id: str = "default_user",
     ) -> ConversationRecord:
-        now = datetime.utcnow()
+        if workflow_id is not None and self.workflow_repository is not None:
+            workflow = await self.workflow_repository.get(workflow_id, user_id)
+            if workflow is None or workflow.status != "active":
+                from app.shared.errors import ResourceNotFoundError
+
+                raise ResourceNotFoundError(
+                    "The linked workflow was not found.",
+                    entity="workflow",
+                )
+        now = datetime.now(timezone.utc)
         conversation = ConversationRecord(
             id=str(uuid.uuid4()),
             user_id=user_id,
@@ -107,7 +119,7 @@ class ConversationService:
             conversation_id=conversation.id,
             role="user",
             content=content,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         await self.repository.add_message(user_message)
 
@@ -141,7 +153,7 @@ class ConversationService:
         self._accumulate_execution_timings(conversation, result_state)
         conversation.metadata["supervisor_decision"] = decision
         conversation.status = "waiting_for_user"
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = datetime.now(timezone.utc)
         await self.repository.save(conversation)
 
         for message in assistant_messages:
@@ -151,7 +163,7 @@ class ConversationService:
                     conversation_id=conversation.id,
                     role="assistant",
                     content=message,
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                 )
             )
         return conversation
@@ -170,14 +182,14 @@ class ConversationService:
         if conversation is None or conversation.status == "archived":
             return None
         self._apply_model_route(conversation, content)
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = datetime.now(timezone.utc)
         await self.repository.save(conversation)
         user_message = ConversationMessage(
             id=str(uuid.uuid4()),
             conversation_id=conversation.id,
             role="user",
             content=content,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         await self.repository.add_message(user_message)
         turn_id = turn_id or str(uuid.uuid4())
@@ -310,7 +322,7 @@ class ConversationService:
                     ttft_ms=first_token_ttft_ms,
                 )
             conversation.status = "waiting_for_user"
-            conversation.updated_at = datetime.utcnow()
+            conversation.updated_at = datetime.now(timezone.utc)
             await self.repository.save(conversation)
             await self._publish(
                 ConversationEvent(
@@ -331,7 +343,7 @@ class ConversationService:
                         conversation_id=conversation.id,
                         role="assistant",
                         content=message,
-                        created_at=datetime.utcnow(),
+                        created_at=datetime.now(timezone.utc),
                     )
                 )
                 if not streamed_message:
