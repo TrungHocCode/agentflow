@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from math import ceil
@@ -13,9 +15,13 @@ from app.execution.model_router import model_name_for
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
+from app.shared.llm_call_metrics import LLMCallObserver
+from app.shared.observability import bind_context
+from app.shared.task_metrics import TaskExecutionMetric
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
+logger = logging.getLogger(__name__)
 
 
 def _run_input_context(state: State) -> str:
@@ -174,26 +180,89 @@ class SupervisorAgent(BaseAgent):
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
         llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
         llm_started = perf_counter() if timing_enabled else None
-        if on_assistant_token:
-            streamed_output: Dict[str, Any] | None = None
-            streamed_assistant_message = ""
-            async for partial_output in structured_llm.astream(messages):
-                if not isinstance(partial_output, dict):
-                    continue
-                streamed_output = partial_output
-                assistant_message = partial_output.get("assistant_message")
-                if not isinstance(assistant_message, str):
-                    continue
-                if assistant_message.startswith(streamed_assistant_message):
-                    delta = assistant_message[len(streamed_assistant_message):]
-                    if delta:
-                        await on_assistant_token(delta)
-                        streamed_assistant_message = assistant_message
-            if streamed_output is None:
-                raise ValueError("Supervisor streaming returned no structured output.")
-            response: SupervisorOutput = SupervisorOutput.model_validate(streamed_output)
-        else:
-            response = await structured_llm.ainvoke(messages)
+        llm_call_id = str(uuid.uuid4())
+        llm_model = _state_model_name(state, self.llm)
+        llm_observer = (
+            LLMCallObserver(
+                call_id=llm_call_id,
+                component=self.name,
+                purpose="planner",
+                model=llm_model,
+            )
+            if timing_enabled
+            else None
+        )
+        llm_call_metrics: list[dict[str, Any]] = []
+        llm_config = {"callbacks": [llm_observer]} if llm_observer else None
+        llm_call_started = llm_started if llm_started is not None else perf_counter()
+        with bind_context(llm_call_id=llm_call_id):
+            logger.info(
+                "Supervisor LLM call started",
+                extra={"model_name": llm_model, "purpose": "planner"},
+            )
+            try:
+                if on_assistant_token:
+                    streamed_output: Dict[str, Any] | None = None
+                    streamed_assistant_message = ""
+                    output_stream = (
+                        structured_llm.astream(messages, config=llm_config)
+                        if llm_config
+                        else structured_llm.astream(messages)
+                    )
+                    async for partial_output in output_stream:
+                        if not isinstance(partial_output, dict):
+                            continue
+                        streamed_output = partial_output
+                        assistant_message = partial_output.get("assistant_message")
+                        if not isinstance(assistant_message, str):
+                            continue
+                        if assistant_message.startswith(streamed_assistant_message):
+                            delta = assistant_message[len(streamed_assistant_message):]
+                            if delta:
+                                await on_assistant_token(delta)
+                                streamed_assistant_message = assistant_message
+                    if streamed_output is None:
+                        raise ValueError("Supervisor streaming returned no structured output.")
+                    response: SupervisorOutput = SupervisorOutput.model_validate(streamed_output)
+                else:
+                    response = (
+                        await structured_llm.ainvoke(messages, config=llm_config)
+                        if llm_config
+                        else await structured_llm.ainvoke(messages)
+                    )
+            except Exception as exc:
+                llm_duration_ms = round((perf_counter() - llm_call_started) * 1000, 3)
+                if llm_observer:
+                    failed_metric = llm_observer.to_metric(
+                        status="failed",
+                        error_type=type(exc).__name__,
+                    )
+                    llm_call_metrics.append(failed_metric.model_dump(mode="json"))
+                    setattr(exc, "llm_call_metrics", llm_call_metrics)
+                logger.error(
+                    "Supervisor LLM call failed",
+                    extra={
+                        "model_name": llm_model,
+                        "purpose": "planner",
+                        "duration_ms": llm_duration_ms,
+                        "error_type": type(exc).__name__,
+                        "error_code": "supervisor_llm_call_failed",
+                    },
+                )
+                raise
+            llm_duration_ms = round((perf_counter() - llm_call_started) * 1000, 3)
+            if llm_observer:
+                llm_call_metrics.append(
+                    llm_observer.to_metric(status="success").model_dump(mode="json")
+                )
+            logger.info(
+                "Supervisor LLM call completed",
+                extra={
+                    "model_name": llm_model,
+                    "purpose": "planner",
+                    "duration_ms": llm_duration_ms,
+                },
+            )
 
         updates: Dict[str, Any] = {
             "mode": "conversation",
@@ -207,12 +276,14 @@ class SupervisorAgent(BaseAgent):
                 agent_name=self.name,
                 iteration=1,
                 model=_state_model_name(state, self.llm),
-                duration_ms=round((perf_counter() - llm_started) * 1000, 3),
+                duration_ms=llm_duration_ms,
                 status="success",
                 started_at=llm_started_at,
                 completed_at=datetime.now(timezone.utc),
             )
             updates["execution_timings"] = serialize_execution_timings([timing])
+        if llm_call_metrics:
+            updates["llm_call_metrics"] = llm_call_metrics
         if response.mode == "executing":
             updates["logs"] = [
                 "[SupervisorAgent] Ignored model execution transition; "
@@ -251,6 +322,9 @@ class WorkerAgent(BaseAgent):
         current_task = state.get("current_task")
         if not current_task:
             raise ValueError(f"Worker '{self.name}' executed but 'current_task' is missing in state.")
+        timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
+        task_started_at = datetime.now(timezone.utc) if timing_enabled else None
+        task_started = perf_counter() if timing_enabled else None
 
         # Build current task context
         task_context = (
@@ -288,8 +362,11 @@ class WorkerAgent(BaseAgent):
         error_msg = None
         final_result = ""
         tool_outcomes: Dict[str, Dict[str, Any]] = {}
+        tool_artifact_paths: set[str] = set()
+        worker_error_metadata: Dict[str, Any] | None = None
+        worker_error_id: str | None = None
         execution_timings: List[ExecutionTiming] = []
-        timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
+        llm_call_metrics: list[dict[str, Any]] = []
 
         try:
             if self.tools:
@@ -306,9 +383,79 @@ class WorkerAgent(BaseAgent):
                 logs.append(f"[{self.name}] Iteration {iteration}: Invoking LLM.")
                 llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
                 llm_started = perf_counter() if timing_enabled else None
+                llm_call_id = str(uuid.uuid4())
+                llm_model = _state_model_name(state, self.llm)
+                llm_observer = (
+                    LLMCallObserver(
+                        call_id=llm_call_id,
+                        component=self.name,
+                        purpose="worker",
+                        model=llm_model,
+                        task_id=current_task.id,
+                        iteration=iteration,
+                    )
+                    if timing_enabled
+                    else None
+                )
+                llm_config = {"callbacks": [llm_observer]} if llm_observer else None
+                llm_call_started = llm_started if llm_started is not None else perf_counter()
                 try:
-                    response = await llm_with_tools.ainvoke(messages)
+                    with bind_context(
+                        task_execution_id=str(current_task.id),
+                        llm_call_id=llm_call_id,
+                    ):
+                        logger.info(
+                            "Worker LLM call started",
+                            extra={
+                                "model_name": llm_model,
+                                "purpose": "worker",
+                                "iteration": iteration,
+                            },
+                        )
+                        response = (
+                            await llm_with_tools.ainvoke(messages, config=llm_config)
+                            if llm_config
+                            else await llm_with_tools.ainvoke(messages)
+                        )
+                        llm_duration_ms = round(
+                            (perf_counter() - llm_call_started) * 1000,
+                            3,
+                        )
+                        logger.info(
+                            "Worker LLM call completed",
+                            extra={
+                                "model_name": llm_model,
+                                "purpose": "worker",
+                                "iteration": iteration,
+                                "duration_ms": llm_duration_ms,
+                            },
+                        )
                 except Exception as exc:
+                    llm_duration_ms = round((perf_counter() - llm_call_started) * 1000, 3)
+                    if llm_observer:
+                        llm_call_metrics.append(
+                            llm_observer.to_metric(
+                                status="failed",
+                                error_type=type(exc).__name__,
+                            ).model_dump(mode="json")
+                        )
+                    worker_error_id = str(uuid.uuid4())
+                    with bind_context(
+                        task_execution_id=str(current_task.id),
+                        llm_call_id=llm_call_id,
+                    ):
+                        logger.error(
+                            "Worker LLM call failed",
+                            extra={
+                                "model_name": llm_model,
+                                "purpose": "worker",
+                                "iteration": iteration,
+                                "duration_ms": llm_duration_ms,
+                                "error_type": type(exc).__name__,
+                                "error_id": worker_error_id,
+                                "error_code": "worker_llm_call_failed",
+                            },
+                        )
                     if timing_enabled and llm_started_at is not None and llm_started is not None:
                         execution_timings.append(
                             ExecutionTiming(
@@ -319,7 +466,7 @@ class WorkerAgent(BaseAgent):
                                 task_id=current_task.id,
                                 iteration=iteration,
                                 model=_state_model_name(state, self.llm),
-                                duration_ms=round((perf_counter() - llm_started) * 1000, 3),
+                                duration_ms=llm_duration_ms,
                                 status="failed",
                                 error_type=type(exc).__name__,
                                 started_at=llm_started_at,
@@ -327,6 +474,10 @@ class WorkerAgent(BaseAgent):
                             )
                         )
                     raise
+                if llm_observer:
+                    llm_call_metrics.append(
+                        llm_observer.to_metric(status="success").model_dump(mode="json")
+                    )
                 if timing_enabled and llm_started_at is not None and llm_started is not None:
                     execution_timings.append(
                         ExecutionTiming(
@@ -337,7 +488,7 @@ class WorkerAgent(BaseAgent):
                             task_id=current_task.id,
                             iteration=iteration,
                             model=_state_model_name(state, self.llm),
-                            duration_ms=round((perf_counter() - llm_started) * 1000, 3),
+                            duration_ms=llm_duration_ms,
                             status="success",
                             started_at=llm_started_at,
                             completed_at=datetime.now(timezone.utc),
@@ -346,40 +497,98 @@ class WorkerAgent(BaseAgent):
                 messages.append(response)
 
                 if hasattr(response, "tool_calls") and response.tool_calls:
-                    logs.append(f"[{self.name}] Tool calls requested: {response.tool_calls}")
+                    logs.append(f"[{self.name}] Tool calls requested: {len(response.tool_calls)}.")
                     for tool_call in response.tool_calls:
                         tool_name = tool_call["name"]
                         tool_args = tool_call["args"]
                         tool_id = tool_call["id"]
+                        tool_wall_started = perf_counter()
 
                         if tool_name in tool_map:
                             tool_obj = tool_map[tool_name]
-                            logs.append(f"[{self.name}] Executing tool '{tool_name}' with args {tool_args}")
+                            logs.append(f"[{self.name}] Executing tool '{tool_name}'.")
                             tool_started_at = datetime.now(timezone.utc) if timing_enabled else None
-                            tool_started = perf_counter() if timing_enabled else None
+                            tool_started = tool_wall_started if timing_enabled else None
                             tool_error_type = None
                             try:
-                                # Run tool asynchronously or fallback to sync invoke
-                                if hasattr(tool_obj, "_arun") or hasattr(tool_obj, "arun"):
-                                    tool_result = await tool_obj.ainvoke(tool_args)
-                                else:
-                                    tool_result = tool_obj.invoke(tool_args)
-                                logs.append(f"[{self.name}] Tool '{tool_name}' result: {tool_result}")
-                            except Exception as e:
-                                tool_error_type = type(e).__name__
-                                tool_result = f"Error executing tool '{tool_name}': {str(e)}"
-                                logs.append(f"[{self.name}] {tool_result}")
+                                with bind_context(
+                                    task_execution_id=str(current_task.id),
+                                    tool_call_id=tool_id,
+                                ):
+                                    logger.info(
+                                        "Worker tool invocation started",
+                                        extra={"tool_name": tool_name, "purpose": "worker"},
+                                    )
+                                    if hasattr(tool_obj, "_arun") or hasattr(tool_obj, "arun"):
+                                        tool_result = await tool_obj.ainvoke(tool_args)
+                                    else:
+                                        tool_result = tool_obj.invoke(tool_args)
+                            except Exception as exc:
+                                tool_error_type = type(exc).__name__
+                                tool_result = f"Error: tool execution failed ({tool_error_type})."
+                                logs.append(
+                                    f"[{self.name}] Tool '{tool_name}' failed ({tool_error_type})."
+                                )
+                                logger.error(
+                                    "Worker tool invocation failed",
+                                    exc_info=(type(exc), exc, exc.__traceback__),
+                                    extra={
+                                        "tool_name": tool_name,
+                                        "tool_call_id": tool_id,
+                                        "task_execution_id": str(current_task.id),
+                                    },
+                                )
                         else:
                             tool_started_at = datetime.now(timezone.utc) if timing_enabled else None
                             tool_started = perf_counter() if timing_enabled else None
                             tool_error_type = "ToolNotFound"
-                            tool_result = f"Tool '{tool_name}' not found in registry."
-                            logs.append(f"[{self.name}] {tool_result}")
+                            tool_result = "Error: requested tool is unavailable."
+                            logs.append(f"[{self.name}] Requested tool is unavailable.")
+                            logger.warning(
+                                "Worker requested a tool that is not authorized",
+                                extra={
+                                    "tool_name": tool_name,
+                                    "tool_call_id": tool_id,
+                                    "task_execution_id": str(current_task.id),
+                                    "error_code": "tool_unavailable",
+                                },
+                            )
 
-                        normalized_tool_result = parse_tool_result(
-                            tool_result,
-                            tool_name=tool_name,
+                        normalized_tool_result = parse_tool_result(tool_result, tool_name=tool_name)
+                        tool_duration_ms = round((perf_counter() - tool_wall_started) * 1000, 3)
+                        with bind_context(
+                            task_execution_id=str(current_task.id),
+                            tool_call_id=tool_id,
+                        ):
+                            logger.info(
+                                "Worker tool invocation completed",
+                                extra={
+                                    "tool_name": tool_name,
+                                    "purpose": "worker",
+                                    "tool_status": normalized_tool_result.status,
+                                    "duration_ms": tool_duration_ms,
+                                },
+                            )
+                        logs.append(
+                            f"[{self.name}] Tool '{tool_name}' finished with "
+                            f"status '{normalized_tool_result.status}'."
                         )
+                        tool_data = normalized_tool_result.data
+                        if isinstance(tool_data, dict):
+                            for path_key in ("file_path", "svg_path", "spec_path"):
+                                path_value = tool_data.get(path_key)
+                                if isinstance(path_value, str) and path_value.strip():
+                                    tool_artifact_paths.add(path_value.strip())
+                        artifact_text = (
+                            tool_data.get("text", "")
+                            if isinstance(tool_data, dict)
+                            else str(tool_data or "")
+                        )
+                        for artifact_match in re.findall(
+                            r"(?:File Path|Chart Spec Path):\s*([^,\n]+)",
+                            artifact_text,
+                        ):
+                            tool_artifact_paths.add(artifact_match.strip().strip("`\"'"))
                         if timing_enabled and tool_started_at is not None and tool_started is not None:
                             execution_timings.append(
                                 ExecutionTiming(
@@ -390,7 +599,7 @@ class WorkerAgent(BaseAgent):
                                     task_id=current_task.id,
                                     iteration=iteration,
                                     call_id=tool_id,
-                                    duration_ms=round((perf_counter() - tool_started) * 1000, 3),
+                                    duration_ms=tool_duration_ms,
                                     status="failed" if tool_error_type else "success",
                                     result_status=(
                                         "success"
@@ -463,14 +672,8 @@ class WorkerAgent(BaseAgent):
 
                 if failed_outcomes and not successful_outcomes:
                     status = "failed"
-                    failures = [
-                        outcome["result"].error.message
-                        if outcome["result"].error
-                        else f"{outcome['tool_name']} returned no usable result."
-                        for outcome in failed_outcomes
-                    ]
-                    error_msg = "; ".join(dict.fromkeys(failures))
-                    logs.append(f"[{self.name}] Task failed because all tool calls failed: {error_msg}")
+                    error_msg = f"All {len(failed_outcomes)} tool calls failed."
+                    logs.append(f"[{self.name}] Task failed because all tool calls failed.")
                 elif failed_outcomes or partial_outcomes:
                     warnings = self._partial_tool_warnings(failed_outcomes, partial_outcomes)
                     usable_count, source_count = self._tool_outcome_coverage(tool_outcomes.values())
@@ -495,8 +698,28 @@ class WorkerAgent(BaseAgent):
 
         except Exception as e:
             status = "failed"
-            error_msg = str(e)
-            logs.append(f"[{self.name}] Exception occurred: {error_msg}")
+            error_msg = f"Worker execution failed ({type(e).__name__})."
+            error_id = worker_error_id or str(uuid.uuid4())
+            logs.append(f"[{self.name}] Execution failed ({type(e).__name__}).")
+            logger.error(
+                "Worker agent execution failed",
+                exc_info=(type(e), e, e.__traceback__),
+                extra={
+                    "task_execution_id": str(current_task.id),
+                    "error_id": error_id,
+                    "error_code": "worker_execution_failed",
+                },
+            )
+            worker_error_metadata = {
+                **(state.get("metadata") or {}),
+                "last_error": {
+                    "error_id": error_id,
+                    "code": "worker_execution_failed",
+                    "category": "execution",
+                    "retryable": True,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+            }
 
         # Update state
         new_result = {
@@ -505,7 +728,8 @@ class WorkerAgent(BaseAgent):
             "description": current_task.description,
             "result": final_result,
             "status": status,
-            "error": error_msg
+            "error": error_msg,
+            "artifact_paths": sorted(tool_artifact_paths),
         }
 
         updated_task = current_task.model_copy(update={
@@ -519,8 +743,22 @@ class WorkerAgent(BaseAgent):
             "result_storage": [new_result],
             "logs": logs,
         }
-        if timing_enabled:
+        if worker_error_metadata is not None:
+            updates["metadata"] = worker_error_metadata
+        if timing_enabled and task_started_at is not None and task_started is not None:
             updates["execution_timings"] = serialize_execution_timings(execution_timings)
+            updates["llm_call_metrics"] = llm_call_metrics
+            task_completed_at = datetime.now(timezone.utc)
+            updates["task_execution_metrics"] = [
+                TaskExecutionMetric(
+                    task_id=current_task.id,
+                    node=self.name,
+                    status=status,
+                    duration_ms=round((perf_counter() - task_started) * 1000, 3),
+                    started_at=task_started_at,
+                    completed_at=task_completed_at,
+                ).model_dump(mode="json")
+            ]
         return updates
 
     @classmethod
@@ -593,40 +831,9 @@ class WorkerAgent(BaseAgent):
 
         warnings: list[str] = []
         for outcome in failed_outcomes:
-            result = outcome["result"]
-            arguments = outcome["arguments"]
-            subject = arguments.get("query") or arguments.get("url") or outcome["tool_name"]
-            message = result.error.message if result.error else "No usable result returned."
-            warnings.append(f"{subject}: {message}")
+            warnings.append(f"{outcome['tool_name']}: source retrieval failed.")
 
         for outcome in partial_outcomes:
-            result = outcome["result"]
-            details = []
-            data = result.data if isinstance(result.data, dict) else {}
-            for collection_name in ("queries", "sources"):
-                records = data.get(collection_name)
-                if not isinstance(records, list):
-                    continue
-                for record in records:
-                    if not isinstance(record, dict):
-                        continue
-                    error = record.get("error")
-                    if not error and record.get("ok") is not False:
-                        continue
-                    if isinstance(error, dict):
-                        message = error.get("message") or error.get("code") or "failed"
-                    else:
-                        message = str(error or record.get("status") or "failed")
-                    subject = (
-                        record.get("query")
-                        or record.get("requested_url")
-                        or record.get("url")
-                        or outcome["tool_name"]
-                    )
-                    details.append(f"{subject}: {message}")
-            if details:
-                warnings.extend(details)
-            else:
-                warnings.append(f"{outcome['tool_name']} returned partial results.")
+            warnings.append(f"{outcome['tool_name']}: some sources returned partial results.")
 
         return list(dict.fromkeys(warnings))

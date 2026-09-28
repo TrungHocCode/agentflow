@@ -6,6 +6,8 @@ import logging
 from app.infrastructure.container import build_run_queue, build_run_service
 from app.modules.runs.queue import RunCommandQueue
 from app.modules.runs.service import RunService
+from app.core.config import settings, validate_runtime_settings
+from app.shared.observability import bind_context, configure_logging
 
 
 logger = logging.getLogger(__name__)
@@ -28,8 +30,14 @@ class RunWorker:
         command = await self.command_queue.dequeue(timeout=timeout)
         if command is None:
             return False
-        logger.info("Executing run %s from command %s", command.run_id, command.command_id)
-        await self.service.execute_queued_run(command.run_id)
+        with bind_context(
+            request_id=command.metadata.get("request_id"),
+            conversation_id=command.metadata.get("conversation_id"),
+            run_id=command.run_id,
+            command_id=command.command_id,
+        ):
+            logger.info("Executing queued workflow run")
+            await self.service.execute_queued_run(command.run_id)
         return True
 
     async def run_forever(self) -> None:
@@ -48,6 +56,9 @@ class RunWorker:
 
 
 async def main() -> None:
+    configure_logging(settings.LOG_LEVEL)
+    validate_runtime_settings()
+    logger.info("AgentFlow execution worker starting")
     worker = RunWorker(
         service=build_run_service(),
         command_queue=build_run_queue(),

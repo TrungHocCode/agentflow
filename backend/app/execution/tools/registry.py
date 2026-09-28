@@ -1,9 +1,11 @@
 import os
 import pkgutil
 import importlib
+import logging
 from app.execution.tools.base import ToolRegistry
 
 _discovered = False
+logger = logging.getLogger(__name__)
 
 def autodiscover_tools(force: bool = False):
     """
@@ -21,9 +23,12 @@ def autodiscover_tools(force: bool = False):
             full_module_name = f"app.execution.tools.{module_name}"
             try:
                 importlib.import_module(full_module_name)
-            except Exception as e:
-                # We print it to stderr/logs. In actual FastApi runtime, this will go to logs.
-                print(f"Error autodiscovering tool '{full_module_name}': {str(e)}")
+            except Exception as exc:
+                logger.error(
+                    "Tool module autodiscovery failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"tool_name": module_name, "error_code": "tool_discovery_failed"},
+                )
                 
     _discovered = True
 

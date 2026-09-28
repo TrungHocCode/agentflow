@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Dict, List
 
@@ -21,6 +21,9 @@ from app.modules.conversations.models import (
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
+from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
+from app.shared.errors import ApplicationError, PersistenceError
+from app.shared.observability import bind_context
 
 
 logger = logging.getLogger(__name__)
@@ -209,8 +212,24 @@ class ConversationService:
         turn_id: str,
         turn_started_at: float,
     ) -> None:
+        with bind_context(conversation_id=conversation.id, turn_id=turn_id):
+            await self._process_turn_in_context(
+                conversation,
+                content,
+                turn_id,
+                turn_started_at,
+            )
+
+    async def _process_turn_in_context(
+        self,
+        conversation: ConversationRecord,
+        content: str,
+        turn_id: str,
+        turn_started_at: float,
+    ) -> None:
         streamed_content: List[str] = []
         first_token_ttft_ms: float | None = None
+        result_state: State | None = None
 
         async def publish_assistant_token(token: str) -> None:
             nonlocal first_token_ttft_ms
@@ -270,7 +289,20 @@ class ConversationService:
             conversation.draft_plan = effective_plan
             conversation.metadata.update(result_state.get("metadata") or {})
             self._accumulate_execution_timings(conversation, result_state)
+            self._accumulate_llm_call_metrics(conversation, result_state)
             conversation.metadata["supervisor_decision"] = decision
+            completed_at = datetime.now(timezone.utc)
+            conversation.metadata["last_turn"] = {
+                "turn_id": turn_id,
+                "status": "completed",
+                "outcome": decision,
+                "completed_at": completed_at.isoformat(),
+            }
+            if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+                conversation.metadata["last_turn"]["planning_duration_ms"] = round(
+                    (perf_counter() - turn_started_at) * 1000,
+                    3,
+                )
             if first_token_ttft_ms is not None:
                 self._record_chat_ttft(
                     conversation,
@@ -327,22 +359,103 @@ class ConversationService:
                 )
             )
         except Exception as exc:
+            if result_state is not None:
+                self._accumulate_execution_timings(conversation, result_state)
+                self._accumulate_llm_call_metrics(conversation, result_state)
             if first_token_ttft_ms is not None:
                 self._record_chat_ttft(
                     conversation,
                     turn_id=turn_id,
                     ttft_ms=first_token_ttft_ms,
                 )
-                try:
-                    await self.repository.save(conversation)
-                except Exception:
-                    logger.exception("Could not persist chat TTFT sample for turn %s", turn_id)
+            planner_metadata = (result_state or {}).get("metadata") or {}
+            error_id = (
+                planner_metadata.get("planning_error_id")
+                or (exc.error_id if isinstance(exc, ApplicationError) else None)
+                or str(uuid.uuid4())
+            )
+            if planner_metadata.get("planning_failed"):
+                error_code = planner_metadata.get("planning_error_code", "planning_failed")
+                category = planner_metadata.get("planning_error_category", "model")
+                safe_message = "Không thể tạo phản hồi hợp lệ lúc này. Vui lòng thử lại."
+                retryable = category != "configuration"
+                logger.warning(
+                    "Conversation planner returned a failure outcome",
+                    extra={"error_id": error_id, "error_code": error_code},
+                )
+            elif isinstance(exc, PersistenceError):
+                error_code = exc.code
+                category = exc.category
+                safe_message = "Không thể lưu trạng thái hội thoại. Vui lòng thử lại sau."
+                retryable = True
+                logger.error(
+                    "Conversation turn persistence failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"error_id": error_id, "error_code": error_code},
+                )
+            elif isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+                error_code = "llm_unavailable"
+                category = "dependency"
+                safe_message = "Mô hình hiện không phản hồi được. Vui lòng thử lại sau."
+                retryable = True
+                logger.error(
+                    "Conversation model dependency failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"error_id": error_id, "error_code": error_code},
+                )
+            else:
+                error_code = exc.code if isinstance(exc, ApplicationError) else "planning_failed"
+                category = exc.category if isinstance(exc, ApplicationError) else "model"
+                safe_message = "Không thể tạo kế hoạch hoặc câu trả lời hợp lệ. Vui lòng thử lại."
+                retryable = isinstance(exc, ApplicationError) and exc.retryable
+                logger.error(
+                    "Conversation turn failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"error_id": error_id, "error_code": error_code},
+                )
+
+            # A failed revision must never leave an older plan available for approval.
+            conversation.draft_plan = []
+            conversation.metadata.pop("supervisor_decision", None)
+            conversation.metadata.pop("planning_failed", None)
+            conversation.metadata.pop("planning_error_message", None)
+            conversation.metadata["last_turn"] = {
+                "turn_id": turn_id,
+                "status": "failed",
+                "error_id": error_id,
+                "error_code": error_code,
+                "category": category,
+                "retryable": retryable,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+                conversation.metadata["last_turn"]["planning_duration_ms"] = round(
+                    (perf_counter() - turn_started_at) * 1000,
+                    3,
+                )
+            conversation.status = "waiting_for_user"
+            conversation.updated_at = datetime.now(timezone.utc)
+            try:
+                await self.repository.save(conversation)
+            except Exception as persistence_exc:
+                logger.error(
+                    "Could not persist terminal conversation failure",
+                    exc_info=(type(persistence_exc), persistence_exc, persistence_exc.__traceback__),
+                    extra={"error_id": error_id, "error_code": "turn_failure_persistence_failed"},
+                )
             await self._publish(
                 ConversationEvent(
                     conversation_id=conversation.id,
                     turn_id=turn_id,
                     type="planning_failed",
-                    payload={"message": str(exc) or "Supervisor could not complete this turn."},
+                    payload={
+                        "message": safe_message,
+                        "error_id": error_id,
+                        "code": error_code,
+                        "category": category,
+                        "retryable": retryable,
+                        "invalidate_draft": True,
+                    },
                 )
             )
 
@@ -379,13 +492,20 @@ class ConversationService:
             "model": model_name_for(
                 conversation.metadata.get("inference_purpose", "planner")
             ),
-            "measured_at": datetime.utcnow().isoformat(),
+            "measured_at": datetime.now(timezone.utc).isoformat(),
         }
         conversation.metadata["chat_ttft_samples"] = [*samples[-49:], sample]
 
     async def _publish(self, event: ConversationEvent) -> None:
         if self.event_publisher is not None:
-            await self.event_publisher.publish(event)
+            try:
+                await self.event_publisher.publish(event)
+            except Exception as exc:
+                logger.error(
+                    "Conversation event publication failed",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                    extra={"error_code": "conversation_event_publish_failed", "event_type": event.type},
+                )
 
     @staticmethod
     def _accumulate_execution_timings(
@@ -403,6 +523,23 @@ class ConversationService:
         )
         conversation.metadata["execution_timings"] = timings
         conversation.metadata["execution_metrics"] = summarize_execution_timings(timings)
+
+    @staticmethod
+    def _accumulate_llm_call_metrics(
+        conversation: ConversationRecord,
+        result_state: State,
+    ) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
+        incoming = result_state.get("llm_call_metrics") or []
+        if not incoming:
+            return
+        metrics = merge_llm_call_metrics(
+            conversation.metadata.get("llm_call_metrics"),
+            incoming,
+        )
+        conversation.metadata["llm_call_metrics"] = metrics
+        conversation.metadata["llm_inference_metrics"] = summarize_llm_call_metrics(metrics)
 
     @staticmethod
     def _apply_model_route(conversation: ConversationRecord, content: str) -> None:

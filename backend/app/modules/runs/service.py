@@ -3,11 +3,12 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
@@ -29,13 +30,22 @@ from app.modules.results.models import EvidenceRecord, ResultRecord
 from app.modules.results.ports import ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
-from app.shared.errors import ValidationError
+from app.shared.errors import PersistenceError, ValidationError
 from app.shared.events import ExecutionEvent
 from app.shared.execution_metrics import (
     merge_execution_timings,
     serialize_execution_timings,
     summarize_execution_timings,
 )
+from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
+from app.shared.task_metrics import (
+    merge_task_execution_metrics,
+    summarize_task_execution_metrics,
+)
+from app.shared.observability import bind_context, current_context
+
+
+logger = logging.getLogger(__name__)
 
 
 TERMINAL_RUN_STATUSES = {
@@ -123,11 +133,12 @@ class RunService:
         run_metadata = dict(metadata or {})
         run_metadata.pop("model_name", None)
         run_metadata["inference_purpose"] = InferencePurpose.PLANNER.value
+        run_metadata["use_llm"] = True
         run_id = str(uuid.uuid4())
         plan = await self._load_workflow_plan(flow_id)
         logs = [f"[RunService] Initialized Run {run_id} for Flow {flow_id}."]
         if input_message:
-            logs.append(f"[User Input]: {input_message}")
+            logs.append("[User Input] Request accepted for planning.")
 
         mode = "conversation"
         result_storage: List[Dict[str, Any]] = []
@@ -354,7 +365,18 @@ class RunService:
         run_doc.status = "cancelled"
         run_doc.error_code = "cancelled_by_user"
         run_doc.error_message = "Run cancelled by user."
-        run_doc.updated_at = datetime.utcnow()
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            worker_started_at = self._parse_metric_timestamp(
+                run_doc.metadata.get("worker_started_at")
+            )
+            if worker_started_at:
+                run_doc.execution_time_ms = max(
+                    0.0,
+                    (datetime.now(timezone.utc) - worker_started_at).total_seconds() * 1000,
+                )
+            self._finalize_run_timing_metrics(run_doc)
+            self._finalize_execution_metrics(run_doc)
+        run_doc.updated_at = datetime.now(timezone.utc)
         await self.save_run_doc(run_doc)
         await self._record_event(
             run_id,
@@ -413,6 +435,10 @@ class RunService:
         return await self._enqueue_document(retry)
 
     async def execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
+        with bind_context(run_id=run_id):
+            return await self._execute_queued_run(run_id)
+
+    async def _execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
         """Execute one queued run; called by the background worker only."""
 
         run_doc = await self.run_repository.claim(run_id)
@@ -426,6 +452,39 @@ class RunService:
             status="running",
             payload={"workflow_version_id": run_doc.workflow_version_id},
         )
+
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            worker_started_at = datetime.now(timezone.utc)
+            run_doc.metadata["worker_started_at"] = worker_started_at.isoformat()
+            queued_at = self._parse_metric_timestamp(run_doc.metadata.get("queued_at"))
+            request_started_at = self._parse_metric_timestamp(
+                run_doc.metadata.get("request_started_at")
+            )
+            if queued_at:
+                run_doc.metadata["queue_wait_ms"] = round(
+                    max(0.0, (worker_started_at - queued_at).total_seconds() * 1000),
+                    3,
+                )
+            if request_started_at:
+                run_doc.metadata["approval_or_request_wait_ms"] = round(
+                    max(0.0, (worker_started_at - request_started_at).total_seconds() * 1000),
+                    3,
+                )
+
+        try:
+            await self._record_event(
+                run_id,
+                "run_started",
+                phase="execute",
+                status="running",
+                payload={"workflow_version_id": run_doc.workflow_version_id},
+            )
+        except Exception as exc:
+            logger.error(
+                "Run start event could not be recorded; execution will continue",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={"run_id": run_id, "error_code": "run_event_persist_failed"},
+            )
         initial_state: State = {
             "messages": [],
             "plan": run_doc.plan,
@@ -453,20 +512,29 @@ class RunService:
                 for node_name, node_output in chunk.items():
                     if not isinstance(node_output, dict):
                         continue
-                    events = self._apply_execution_output(
-                        run_doc,
-                        node_name,
-                        node_output,
+                    current_task = node_output.get("current_task")
+                    task_id = (
+                        str(current_task.id)
+                        if hasattr(current_task, "id")
+                        else str(current_task.get("id"))
+                        if isinstance(current_task, dict) and current_task.get("id") is not None
+                        else None
                     )
-                    await self._persist_research_output(
-                        run_doc,
-                        node_name,
-                        node_output,
-                    )
-                    run_doc.updated_at = datetime.utcnow()
-                    await self.save_run_doc(run_doc)
-                    for event in events:
-                        await self._record_event_object(event)
+                    with bind_context(task_execution_id=task_id):
+                        events = self._apply_execution_output(
+                            run_doc,
+                            node_name,
+                            node_output,
+                        )
+                        await self._persist_research_output(
+                            run_doc,
+                            node_name,
+                            node_output,
+                        )
+                        run_doc.updated_at = datetime.now(timezone.utc)
+                        await self.save_run_doc(run_doc)
+                        for event in events:
+                            await self._record_event_object(event)
 
             all_finished = bool(run_doc.plan) and all(
                 task.status in ("done", "partial", "failed", "skipped")
@@ -476,8 +544,20 @@ class RunService:
             partial_task_ids = [task.id for task in run_doc.plan if task.status == "partial"]
             if has_failed_task:
                 run_doc.status = "failed"
-                run_doc.error_code = "task_execution_failed"
-                run_doc.error_message = "One or more workflow tasks failed."
+                previous_error = run_doc.metadata.get("last_error") or {}
+                run_doc.error_code = previous_error.get("code", "task_execution_failed")
+                failure_id = previous_error.get("error_id") or str(uuid.uuid4())
+                run_doc.error_message = (
+                    f"One or more workflow tasks failed. Reference: {failure_id}."
+                )
+                run_doc.metadata["last_error"] = {
+                    **previous_error,
+                    "error_id": failure_id,
+                    "code": run_doc.error_code,
+                    "category": previous_error.get("category", "execution"),
+                    "retryable": previous_error.get("retryable", False),
+                    "occurred_at": previous_error.get("occurred_at", datetime.now(timezone.utc).isoformat()),
+                }
             else:
                 run_doc.status = "completed" if all_finished else "interrupted"
                 if partial_task_ids:
@@ -495,43 +575,125 @@ class RunService:
                         run_doc.metadata["partial_completion"] = True
             if run_doc.status == "interrupted":
                 run_doc.error_code = "execution_incomplete"
-                run_doc.error_message = "Execution ended before all tasks completed."
+                previous_error = run_doc.metadata.get("last_error") or {}
+                failure_id = previous_error.get("error_id") or str(uuid.uuid4())
+                run_doc.error_message = (
+                    f"Execution ended before all tasks completed. Reference: {failure_id}."
+                )
+                run_doc.metadata["last_error"] = {
+                    **previous_error,
+                    "error_id": failure_id,
+                    "code": run_doc.error_code,
+                    "category": previous_error.get("category", "execution"),
+                    "retryable": previous_error.get("retryable", True),
+                    "occurred_at": previous_error.get("occurred_at", datetime.now(timezone.utc).isoformat()),
+                }
             run_doc.execution_time_ms = (
                 time.perf_counter() - execution_started_at
             ) * 1000
+            self._finalize_run_timing_metrics(run_doc)
             self._finalize_execution_metrics(run_doc)
-            run_doc.updated_at = datetime.utcnow()
+            run_doc.updated_at = datetime.now(timezone.utc)
             await self.save_run_doc(run_doc)
-            terminal_event_type = "run_failed" if run_doc.status == "failed" else "run_completed"
-            await self._record_event(
-                run_id,
-                terminal_event_type,
-                phase="execute",
-                status=run_doc.status,
-                payload={
-                    "plan": [self._task_data(task) for task in run_doc.plan],
-                    "results": run_doc.result_storage,
-                    "message": run_doc.error_message,
+            logger.info(
+                "Workflow run reached terminal state",
+                extra={
+                    "run_id": run_id,
+                    "run_status": run_doc.status,
+                    "duration_ms": round(run_doc.execution_time_ms or 0, 3),
                 },
             )
+            terminal_event_type = {
+                "failed": "run_failed",
+                "interrupted": "run_interrupted",
+            }.get(run_doc.status, "run_completed")
+            terminal_error = run_doc.metadata.get("last_error") or {}
+            try:
+                await self._record_event(
+                    run_id,
+                    terminal_event_type,
+                    phase="execute",
+                    status=run_doc.status,
+                    payload={
+                        "plan": [self._task_data(task) for task in run_doc.plan],
+                        "results": run_doc.result_storage,
+                        "message": run_doc.error_message,
+                        "error_id": terminal_error.get("error_id"),
+                        "code": run_doc.error_code,
+                    },
+                )
+            except Exception as event_exc:
+                # The durable terminal run state has already been saved. A failure to
+                # publish its final event must not rewrite a completed run as failed.
+                logger.error(
+                    "Terminal run event could not be recorded",
+                    exc_info=(type(event_exc), event_exc, event_exc.__traceback__),
+                    extra={
+                        "run_id": run_id,
+                        "run_status": run_doc.status,
+                        "error_code": "terminal_run_event_persist_failed",
+                    },
+                )
         except Exception as exc:
+            error_id = str(uuid.uuid4())
+            error_code = exc.code if isinstance(exc, PersistenceError) else "execution_error"
+            safe_message = (
+                f"Run data could not be saved. Please retry after storage is available. Reference: {error_id}."
+                if isinstance(exc, PersistenceError)
+                else f"Workflow execution failed unexpectedly. Please retry the run. Reference: {error_id}."
+            )
+            logger.error(
+                "Queued workflow execution failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "error_id": error_id,
+                    "error_code": error_code,
+                    "run_status": "failed",
+                },
+            )
             run_doc.status = "failed"
-            run_doc.error_code = "execution_error"
-            run_doc.error_message = str(exc)
-            run_doc.logs.append(f"[RunService Error]: {exc}")
+            run_doc.error_code = error_code
+            run_doc.error_message = safe_message
+            run_doc.metadata["last_error"] = {
+                "error_id": error_id,
+                "code": error_code,
+                "category": "dependency" if isinstance(exc, PersistenceError) else "execution",
+                "retryable": isinstance(exc, PersistenceError),
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            }
+            run_doc.logs.append(f"[RunService Error] Execution failed (reference {error_id}).")
             run_doc.execution_time_ms = (
                 time.perf_counter() - execution_started_at
             ) * 1000
+            self._finalize_run_timing_metrics(run_doc)
             self._finalize_execution_metrics(run_doc)
-            run_doc.updated_at = datetime.utcnow()
-            await self.save_run_doc(run_doc)
-            await self._record_event(
-                run_id,
-                "run_failed",
-                phase="execute",
-                status="failed",
-                payload={"message": str(exc)},
-            )
+            run_doc.updated_at = datetime.now(timezone.utc)
+            try:
+                await self.save_run_doc(run_doc)
+            except Exception as persistence_exc:
+                logger.error(
+                    "Could not persist terminal run failure",
+                    exc_info=(
+                        type(persistence_exc),
+                        persistence_exc,
+                        persistence_exc.__traceback__,
+                    ),
+                    extra={"error_id": error_id, "error_code": "run_failure_persistence_failed"},
+                )
+            try:
+                await self._record_event(
+                    run_id,
+                    "run_failed",
+                    phase="execute",
+                    status="failed",
+                    payload={"message": safe_message, "error_id": error_id, "code": error_code},
+                )
+            except Exception as event_exc:
+                logger.error(
+                    "Could not record terminal run failure event",
+                    exc_info=(type(event_exc), event_exc, event_exc.__traceback__),
+                    extra={"run_id": run_id, "error_id": error_id},
+                )
         return run_doc
 
     async def list_run_events(
@@ -702,6 +864,9 @@ class RunService:
         node_output: Dict[str, Any],
     ) -> List[ExecutionEvent]:
         events: List[ExecutionEvent] = []
+        diagnostic = (node_output.get("metadata") or {}).get("last_error")
+        if isinstance(diagnostic, dict) and diagnostic.get("error_id"):
+            run_doc.metadata["last_error"] = dict(diagnostic)
         logs = node_output.get("logs") or []
         for log in logs:
             run_doc.logs.append(log)
@@ -724,6 +889,22 @@ class RunService:
             )
             run_doc.metadata["execution_timings"] = merged_timings
             run_doc.metadata["execution_metrics"] = summarize_execution_timings(merged_timings)
+        self._accumulate_llm_call_metrics(run_doc, node_output)
+        incoming_task_metrics = node_output.get("task_execution_metrics") or []
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS and incoming_task_metrics:
+            task_metrics = merge_task_execution_metrics(
+                run_doc.metadata.get("task_execution_metrics"),
+                incoming_task_metrics,
+            )
+            dependency_map = {
+                task.id: list(task.dependencies)
+                for task in run_doc.plan
+            }
+            run_doc.metadata["task_execution_metrics"] = task_metrics
+            run_doc.metadata["task_metrics"] = summarize_task_execution_metrics(
+                task_metrics,
+                dependency_map,
+            )
 
         current_task = node_output.get("current_task")
         if current_task:
@@ -787,6 +968,76 @@ class RunService:
             max(0.0, run_doc.execution_time_ms - execute_call_time_ms),
             3,
         )
+
+    @classmethod
+    def _finalize_run_timing_metrics(cls, run_doc: RunDocument) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
+        finished_at = datetime.now(timezone.utc)
+        run_doc.metadata["finished_at"] = finished_at.isoformat()
+        run_doc.metadata["workflow_execution_ms"] = round(
+            float(run_doc.execution_time_ms or 0.0),
+            3,
+        )
+        queued_at = cls._parse_metric_timestamp(run_doc.metadata.get("queued_at"))
+        worker_started_at = cls._parse_metric_timestamp(
+            run_doc.metadata.get("worker_started_at")
+        )
+        request_started_at = cls._parse_metric_timestamp(
+            run_doc.metadata.get("request_started_at")
+        )
+        if queued_at and worker_started_at:
+            run_doc.metadata["queue_wait_ms"] = round(
+                max(0.0, (worker_started_at - queued_at).total_seconds() * 1000),
+                3,
+            )
+        if request_started_at:
+            run_doc.metadata["end_to_end_ms"] = round(
+                max(0.0, (finished_at - request_started_at).total_seconds() * 1000),
+                3,
+            )
+        run_doc.metadata["run_timing_metrics"] = {
+            key: run_doc.metadata[key]
+            for key in (
+                "request_started_at",
+                "queued_at",
+                "worker_started_at",
+                "finished_at",
+                "queue_wait_ms",
+                "workflow_execution_ms",
+                "end_to_end_ms",
+            )
+            if key in run_doc.metadata
+        }
+
+    @staticmethod
+    def _parse_metric_timestamp(value: Any) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _accumulate_llm_call_metrics(
+        run_doc: RunDocument,
+        source: Dict[str, Any],
+    ) -> None:
+        if not settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            return
+        incoming = source.get("llm_call_metrics") or []
+        if not incoming:
+            return
+        metrics = merge_llm_call_metrics(
+            run_doc.metadata.get("llm_call_metrics"),
+            incoming,
+        )
+        run_doc.metadata["llm_call_metrics"] = metrics
+        run_doc.metadata["llm_inference_metrics"] = summarize_llm_call_metrics(metrics)
 
     async def _persist_research_output(
         self,
@@ -939,16 +1190,79 @@ class RunService:
             return False
 
     async def _enqueue_document(self, document: RunDocument) -> RunDocument:
+        request_context = current_context()
+        queued_at = datetime.now(timezone.utc)
         command = RunCommand(
             command_id=str(uuid.uuid4()),
             run_id=document.run_id,
             workflow_id=document.flow_id,
             workflow_version_id=document.workflow_version_id,
             requested_by=document.user_id,
-            metadata={"input_data": document.input_data},
+            created_at=queued_at,
+            metadata={
+                "input_data": document.input_data,
+                "request_id": request_context.get("request_id"),
+                "conversation_id": document.conversation_id,
+            },
         )
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            document.metadata["queued_at"] = queued_at.isoformat()
+            await self.save_run_doc(document)
         try:
             await self.command_queue.enqueue(command)
+        except Exception as exc:
+            error_id = str(uuid.uuid4())
+            logger.error(
+                "Could not enqueue workflow run",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={"error_id": error_id, "error_code": "queue_unavailable"},
+            )
+            document.status = "interrupted"
+            document.error_code = "queue_unavailable"
+            document.error_message = f"Execution queue is unavailable. Reference: {error_id}."
+            self._finalize_run_timing_metrics(document)
+            document.metadata["last_error"] = {
+                "error_id": error_id,
+                "code": "queue_unavailable",
+                "category": "dependency",
+                "retryable": True,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            }
+            document.logs.append(f"[RunService Queue Error] Run was not enqueued (reference {error_id}).")
+            document.updated_at = datetime.now(timezone.utc)
+            try:
+                await self.save_run_doc(document)
+            except Exception as persistence_exc:
+                logger.error(
+                    "Could not persist queue failure",
+                    exc_info=(
+                        type(persistence_exc),
+                        persistence_exc,
+                        persistence_exc.__traceback__,
+                    ),
+                    extra={"run_id": document.run_id, "error_id": error_id},
+                )
+            try:
+                await self._record_event(
+                    document.run_id,
+                    "run_failed",
+                    phase="execute",
+                    status=document.status,
+                    payload={
+                        "message": document.error_message,
+                        "error_id": error_id,
+                        "code": "queue_unavailable",
+                    },
+                )
+            except Exception as event_exc:
+                logger.error(
+                    "Could not publish queue failure event",
+                    exc_info=(type(event_exc), event_exc, event_exc.__traceback__),
+                    extra={"run_id": document.run_id, "error_id": error_id},
+                )
+            return document
+
+        try:
             await self._record_event(
                 document.run_id,
                 "run_progress",
@@ -957,19 +1271,25 @@ class RunService:
                 payload={"command_id": command.command_id},
             )
         except Exception as exc:
-            document.status = "interrupted"
-            document.error_code = "queue_unavailable"
-            document.error_message = "Execution queue is unavailable."
-            document.logs.append(f"[RunService Queue Error]: {exc}")
-            document.updated_at = datetime.utcnow()
-            await self.save_run_doc(document)
-            await self._record_event(
-                document.run_id,
-                "run_failed",
-                phase="execute",
-                status=document.status,
-                payload={"message": document.error_message},
+            # The command is already in the queue; don't mark the run failed or invite
+            # a duplicate enqueue merely because an observability event could not persist.
+            logger.error(
+                "Queued run progress event could not be recorded",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "run_id": document.run_id,
+                    "command_id": command.command_id,
+                    "error_code": "run_event_persist_failed",
+                },
             )
+        logger.info(
+            "Workflow run enqueued",
+            extra={
+                "run_id": document.run_id,
+                "command_id": command.command_id,
+                "run_status": "queued",
+            },
+        )
         return document
 
     async def _load_workflow_definition(
@@ -1031,9 +1351,17 @@ class RunService:
         persisted = await append_event(event) if append_event else event
         try:
             await self.event_publisher.publish(persisted)
-        except Exception:
+        except Exception as exc:
             # Durable event replay remains available when live fan-out is down.
-            pass
+            logger.error(
+                "Run event live publication failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "run_id": event.run_id,
+                    "event_type": event.type,
+                    "error_code": "run_event_publish_failed",
+                },
+            )
         return persisted
 
     @staticmethod
