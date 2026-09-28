@@ -15,6 +15,8 @@ class AgentDefinition(BaseModel):
     description: Optional[str] = None
     system_prompt: str
     tool_names: List[str] = Field(default_factory=list)
+    available_tool_names: List[str] = Field(default_factory=list)
+    blocked_tool_names: List[str] = Field(default_factory=list)
     is_active: bool = True
 
 class ToolDefinition(BaseModel):
@@ -27,3 +29,5 @@ class ToolDefinition(BaseModel):
     description: Optional[str] = None
     config_schema: Dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
+    is_available: bool = True
+    unavailable_reason: Optional[str] = None
