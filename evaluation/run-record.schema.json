@@ -75,10 +75,42 @@
           "default": null,
           "title": "Max Ms"
         },
+        "p50_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P50 Ms"
+        },
+        "p95_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P95 Ms"
+        },
         "failures": {
           "default": 0,
           "minimum": 0,
           "title": "Failures",
+          "type": "integer"
+        },
+        "timeouts": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Timeouts",
           "type": "integer"
         }
       },
@@ -208,10 +240,34 @@
     "LLMCallTiming": {
       "additionalProperties": false,
       "properties": {
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Call Id"
+        },
         "component": {
           "minLength": 1,
           "title": "Component",
           "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
         },
         "calls": {
           "default": 1,
@@ -236,6 +292,58 @@
           ],
           "default": null,
           "title": "Ttft Ms"
+        },
+        "raw_ttft_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Ttft Ms"
+        },
+        "generation_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Generation Ms"
+        },
+        "itl_p50_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Itl P50 Ms"
+        },
+        "itl_p95_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Itl P95 Ms"
         },
         "input_tokens": {
           "anyOf": [
@@ -262,6 +370,74 @@
           ],
           "default": null,
           "title": "Output Tokens"
+        },
+        "output_tokens_per_second": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens Per Second"
+        },
+        "model_load_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Load Ms"
+        },
+        "prompt_eval_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Eval Ms"
+        },
+        "provider_total_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Total Ms"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "success",
+                "failed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
         }
       },
       "required": [
@@ -324,6 +500,19 @@
           ],
           "default": null,
           "title": "Api Response Ms"
+        },
+        "api_response_p95_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Response P95 Ms"
         },
         "supervisor_ttft_ms": {
           "anyOf": [
@@ -402,6 +591,19 @@
           ],
           "default": null,
           "title": "End To End Ms"
+        },
+        "critical_path_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Critical Path Ms"
         },
         "sse_delivery_lag_ms": {
           "anyOf": [
@@ -784,6 +986,16 @@
     "ThroughputMetrics": {
       "additionalProperties": false,
       "properties": {
+        "target": {
+          "default": "workflow",
+          "enum": [
+            "api",
+            "llm",
+            "workflow"
+          ],
+          "title": "Target",
+          "type": "string"
+        },
         "concurrency": {
           "anyOf": [
             {
@@ -836,6 +1048,45 @@
           "default": null,
           "title": "Test Duration Seconds"
         },
+        "warmup_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmup Requests"
+        },
+        "warmup_successful_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmup Successful Requests"
+        },
+        "warmup_duration_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Warmup Duration Seconds"
+        },
         "accepted_runs": {
           "anyOf": [
             {
@@ -874,6 +1125,58 @@
           ],
           "default": null,
           "title": "Peak Active Runs"
+        },
+        "successful_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Successful Requests"
+        },
+        "failed_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Requests"
+        },
+        "timed_out_requests": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timed Out Requests"
+        },
+        "output_tokens_per_second": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens Per Second"
         }
       },
       "title": "ThroughputMetrics",
@@ -883,8 +1186,11 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.0",
-      "default": "1.0",
+      "default": "1.1",
+      "enum": [
+        "1.0",
+        "1.1"
+      ],
       "title": "Schema Version",
       "type": "string"
     },
