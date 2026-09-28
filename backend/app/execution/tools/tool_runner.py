@@ -10,7 +10,8 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from app.execution.tools.contracts import ToolResult, parse_tool_result
+from app.core.config import settings
+from app.execution.tools.contracts import ToolResult, failure_result, parse_tool_result
 from app.execution.tools.registry import autodiscover_tools
 from app.execution.tools.base import ToolRegistry
 
@@ -20,6 +21,20 @@ def run_tool(tool_name: str, arguments: dict[str, Any]) -> ToolResult:
 
     autodiscover_tools()
     started = perf_counter()
+    if tool_name == "python_executor" and not settings.ENABLE_UNSANDBOXED_PYTHON_EXECUTION:
+        return failure_result(
+            "blocked",
+            code="tool_disabled_by_policy",
+            message="Python execution is disabled by deployment policy.",
+            tool_name=tool_name,
+        )
+    if tool_name == "email_sender" and not settings.ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS:
+        return failure_result(
+            "blocked",
+            code="tool_disabled_by_policy",
+            message="External side-effect tools are disabled by deployment policy.",
+            tool_name=tool_name,
+        )
     try:
         tool = ToolRegistry.get_tool(tool_name)
     except ValueError as exc:

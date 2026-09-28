@@ -37,8 +37,10 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIn("chưa thể tạo phản hồi hợp lệ", result["messages"][0].lower())
-        self.assertIn("llm_error", result["metadata"])
-        self.assertEqual(result["plan"] if "plan" in result else None, None)
+        self.assertTrue(result["metadata"]["planning_failed"])
+        self.assertEqual(result["metadata"]["planning_error_code"], "supervisor_planning_failed")
+        self.assertTrue(result["metadata"]["planning_error_id"])
+        self.assertEqual(result["plan"], {"__replace__": True, "tasks": []})
 
     async def test_worker_timeout_returns_failed_task(self) -> None:
         task = Task(

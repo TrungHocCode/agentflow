@@ -1,5 +1,8 @@
 import asyncio
+import logging
+import os
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END
@@ -19,6 +22,9 @@ from app.execution.tools.contracts import is_tool_failure, parse_tool_result
 from app.execution.tools.registry import autodiscover_tools
 from app.execution.checkpointer import get_checkpointer
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
+
+
+logger = logging.getLogger(__name__)
 
 # Ensure all tools are registered
 autodiscover_tools()
@@ -79,13 +85,35 @@ async def supervisor_node(
     metadata = state.get("metadata") or {}
     use_llm = metadata.get("use_llm", False)
 
+    if not use_llm and os.getenv("TESTING", "").lower() != "true":
+        error_id = str(uuid.uuid4())
+        logger.error(
+            "Refusing synthetic planning outside the isolated test environment",
+            extra={"error_id": error_id, "error_code": "llm_execution_disabled"},
+        )
+        return {
+            "mode": "conversation",
+            "plan": {"__replace__": True, "tasks": []},
+            "messages": ["Không thể lập kế hoạch vì dịch vụ LLM chưa được bật."],
+            "logs": ["[SupervisorNode Error] LLM planning is required in normal operation."],
+            "metadata": {
+                **metadata,
+                "planning_failed": True,
+                "planning_error_id": error_id,
+                "planning_error_code": "llm_execution_disabled",
+                "planning_error_category": "configuration",
+                "planning_error_message": "LLM planning is not enabled.",
+            },
+        }
+
     if use_llm:
+        purpose = metadata.get(
+            "inference_purpose",
+            InferencePurpose.PLANNER.value,
+        )
+        model_name: str | None = None
         try:
             from app.execution.llm import get_llm
-            purpose = metadata.get(
-                "inference_purpose",
-                InferencePurpose.PLANNER.value,
-            )
             model_name = model_name_for(purpose)
             llm = get_llm(purpose=purpose, temperature=0.2)
             resolver = agent_resolver or AgentResolver()
@@ -107,28 +135,52 @@ async def supervisor_node(
             elif decision == "clarify":
                 updates["plan"] = {"__replace__": True, "tasks": []}
             clean_metadata = dict(updates.get("metadata") or {})
-            for stale_key in ("planning_failed", "planning_error_message", "llm_error"):
+            for stale_key in (
+                "planning_failed",
+                "planning_error_message",
+                "planning_error_id",
+                "planning_error_code",
+                "planning_error_category",
+                "llm_error",
+            ):
                 clean_metadata.pop(stale_key, None)
             updates["metadata"] = clean_metadata
             return updates
         except Exception as exc:
             # Never mark malformed structured output as a successful empty plan.
-            return {
+            error_id = str(uuid.uuid4())
+            logger.error(
+                "Supervisor structured planning failed",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "error_id": error_id,
+                    "error_code": "supervisor_planning_failed",
+                    "model_name": model_name,
+                    "purpose": purpose,
+                },
+            )
+            failure_update = {
                 "mode": "conversation",
+                "plan": {"__replace__": True, "tasks": []},
                 "messages": [
                     "Tôi chưa thể tạo phản hồi hợp lệ. Vui lòng thử lại hoặc làm rõ yêu cầu."
                 ],
-                "logs": [f"[SupervisorNode Error] Structured planning failed: {exc}"],
+                "logs": [
+                    f"[SupervisorNode Error] Structured planning failed ({type(exc).__name__})."
+                ],
                 "metadata": {
                     **metadata,
-                    "llm_error": str(exc),
                     "planning_failed": True,
-                    "planning_error_message": (
-                        "Supervisor không thể tạo plan hoặc câu trả lời hợp lệ. "
-                        "Vui lòng thử lại hoặc làm rõ yêu cầu."
-                    ),
+                    "planning_error_id": error_id,
+                    "planning_error_code": "supervisor_planning_failed",
+                    "planning_error_category": "model",
+                    "planning_error_message": "Supervisor could not create a valid response.",
                 },
             }
+            llm_call_metrics = getattr(exc, "llm_call_metrics", None)
+            if llm_call_metrics:
+                failure_update["llm_call_metrics"] = llm_call_metrics
+            return failure_update
 
     user_msgs = state.get("messages") or []
     last_msg = ""
@@ -270,22 +322,82 @@ async def _execute_worker_node(
             agent_output = await worker_agent.execute(agent_state)
             agent_output["logs"] = logs + (agent_output.get("logs") or [])
             return agent_output
-        except Exception as e:
-            logs.append(f"[WorkerNode Error] LLM ReAct unavailable: {e}")
-            updated_task = current_task.model_copy(update={"status": "failed", "error": str(e)})
+        except Exception as exc:
+            error_id = str(uuid.uuid4())
+            logger.error(
+                "Worker could not initialize its model or authorized tools",
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "run_id": metadata.get("run_id"),
+                    "task_execution_id": str(current_task.id),
+                    "error_id": error_id,
+                    "error_code": "worker_initialization_failed",
+                    "model_name": model_name,
+                    "purpose": purpose,
+                },
+            )
+            safe_error = "Worker could not initialize the local model or authorized tools."
+            updated_task = current_task.model_copy(update={"status": "failed", "error": safe_error})
             return {
                 "plan": [updated_task],
                 "current_task": updated_task,
+                "metadata": {
+                    **metadata,
+                    "last_error": {
+                        "error_id": error_id,
+                        "code": "worker_initialization_failed",
+                        "category": "dependency",
+                        "retryable": True,
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                },
                 "result_storage": [{
                     "task_id": current_task.id,
                     "node": current_task.node,
                     "description": current_task.description,
                     "result": "",
                     "status": "failed",
-                    "error": f"Local model unavailable: {e}",
+                    "error": safe_error,
                 }],
-                "logs": logs,
+                "logs": logs + ["[WorkerNode Error] Model or tool initialization failed."],
             }
+
+    if os.getenv("TESTING", "").lower() != "true":
+        error_id = str(uuid.uuid4())
+        logger.error(
+            "Refusing synthetic worker execution outside the isolated test environment",
+            extra={
+                "run_id": metadata.get("run_id"),
+                "task_execution_id": str(current_task.id),
+                "error_id": error_id,
+                "error_code": "llm_execution_disabled",
+            },
+        )
+        safe_error = "LLM-based worker execution is required for normal runs."
+        failed_task = current_task.model_copy(update={"status": "failed", "error": safe_error})
+        return {
+            "plan": [failed_task],
+            "current_task": failed_task,
+            "metadata": {
+                **metadata,
+                "last_error": {
+                    "error_id": error_id,
+                    "code": "llm_execution_disabled",
+                    "category": "configuration",
+                    "retryable": False,
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            "result_storage": [{
+                "task_id": current_task.id,
+                "node": current_task.node,
+                "description": current_task.description,
+                "result": "",
+                "status": "failed",
+                "error": safe_error,
+            }],
+            "logs": logs + ["[WorkerNode Error] Synthetic execution is test-only."],
+        }
 
     result_text = ""
     status = "done"

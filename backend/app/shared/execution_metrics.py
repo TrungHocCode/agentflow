@@ -13,7 +13,21 @@ def strip_internal_execution_metrics(metadata: dict[str, Any] | None) -> dict[st
     public_metadata = dict(metadata or {})
     public_metadata.pop("execution_timings", None)
     public_metadata.pop("execution_metrics", None)
+    public_metadata.pop("llm_call_metrics", None)
+    public_metadata.pop("llm_inference_metrics", None)
+    public_metadata.pop("task_execution_metrics", None)
+    public_metadata.pop("task_metrics", None)
+    public_metadata.pop("run_timing_metrics", None)
+    public_metadata.pop("queue_wait_ms", None)
+    public_metadata.pop("workflow_execution_ms", None)
+    public_metadata.pop("end_to_end_ms", None)
+    public_metadata.pop("critical_path_ms", None)
     public_metadata.pop("chat_ttft_samples", None)
+    last_turn = public_metadata.get("last_turn")
+    if isinstance(last_turn, dict) and "planning_duration_ms" in last_turn:
+        public_last_turn = dict(last_turn)
+        public_last_turn.pop("planning_duration_ms", None)
+        public_metadata["last_turn"] = public_last_turn
     return public_metadata
 
 
@@ -71,6 +85,7 @@ def summarize_execution_timings(values: list[Any] | None) -> dict[str, Any]:
             "total_ms": 0.0,
             "max_ms": 0.0,
             "failed_count": 0,
+            "timeout_count": 0,
             "by_agent": {},
         },
         "tools": {
@@ -78,6 +93,7 @@ def summarize_execution_timings(values: list[Any] | None) -> dict[str, Any]:
             "total_ms": 0.0,
             "max_ms": 0.0,
             "failed_count": 0,
+            "timeout_count": 0,
             "partial_count": 0,
             "by_tool": {},
         },
@@ -95,10 +111,17 @@ def summarize_execution_timings(values: list[Any] | None) -> dict[str, Any]:
         detail_key = "by_agent" if group_key == "llm" else "by_tool"
         details = group[detail_key].setdefault(
             name,
-            {"call_count": 0, "total_ms": 0.0, "max_ms": 0.0, "failed_count": 0},
+            {
+                "call_count": 0,
+                "total_ms": 0.0,
+                "max_ms": 0.0,
+                "failed_count": 0,
+                "timeout_count": 0,
+            },
         )
         duration = float(span["duration_ms"])
         failed = span["status"] == "failed" or span.get("result_status") == "failed"
+        timed_out = "timeout" in str(span.get("error_type") or "").lower()
         group["call_count"] += 1
         group["total_ms"] += duration
         group["max_ms"] = max(group["max_ms"], duration)
@@ -110,6 +133,9 @@ def summarize_execution_timings(values: list[Any] | None) -> dict[str, Any]:
         if failed:
             group["failed_count"] += 1
             details["failed_count"] += 1
+        if timed_out:
+            group["timeout_count"] += 1
+            details["timeout_count"] += 1
         if group_key == "tools" and span.get("result_status") == "partial":
             group["partial_count"] += 1
             details.setdefault("partial_count", 0)

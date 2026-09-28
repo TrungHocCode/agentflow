@@ -206,6 +206,42 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updates["execution_timings"][0]["model"], "chat-test-model")
 
+    async def test_supervisor_attaches_content_free_stream_observer(self):
+        supervisor = SupervisorAgent(
+            name="Supervisor",
+            system_prompt="You are a supervisor.",
+            llm=self.mock_llm,
+        )
+        structured_llm = AsyncMock()
+        self.mock_llm.with_structured_output.return_value = structured_llm
+
+        async def invoke(messages, config=None):
+            observer = config["callbacks"][0]
+            await observer.on_llm_new_token("do not persist this token")
+            return SupervisorOutput(
+                decision="answer",
+                assistant_message="Answer",
+            )
+
+        structured_llm.ainvoke.side_effect = invoke
+        state: State = {
+            "messages": ["SSE là gì?"],
+            "plan": [],
+            "current_task": None,
+            "logs": [],
+            "result_storage": [],
+            "mode": "conversation",
+            "metadata": {"inference_purpose": "chat"},
+        }
+
+        with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
+            updates = await supervisor.execute(state)
+
+        metric = updates["llm_call_metrics"][0]
+        self.assertEqual(metric["purpose"], "planner")
+        self.assertIsNotNone(metric["raw_ttft_ms"])
+        self.assertNotIn("do not persist", str(updates))
+
     async def test_supervisor_structured_output_failure_does_not_fallback_to_plain_chat(self):
         supervisor = SupervisorAgent(
             name="Supervisor",
@@ -362,7 +398,7 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         with patch.object(settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", True):
             with patch(
                 "app.execution.agents.base.perf_counter",
-                side_effect=[10.0, 10.25, 20.0, 20.2, 30.0, 30.5],
+                side_effect=[9.0, 10.0, 10.25, 20.0, 20.2, 30.0, 30.5, 31.0],
             ):
                 updates = await worker.execute(state)
 
@@ -373,7 +409,15 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["current_task"].status, "done")
         self.assertEqual(updates["plan"][0].status, "done")
         self.assertEqual(updates["result_storage"][0]["result"], "The result is 5.")
-        self.assertTrue(any("Executing tool 'add' with args {'a': 2, 'b': 3}" in log for log in updates["logs"]))
+        self.assertTrue(any("Executing tool 'add'." in log for log in updates["logs"]))
+        self.assertFalse(any("'a': 2" in log or "result: 5" in log for log in updates["logs"]))
+        self.assertEqual(len(updates["llm_call_metrics"]), 2)
+        self.assertEqual(
+            [metric["iteration"] for metric in updates["llm_call_metrics"]],
+            [1, 2],
+        )
+        self.assertEqual(updates["task_execution_metrics"][0]["task_id"], 2)
+        self.assertEqual(updates["task_execution_metrics"][0]["status"], "done")
         timings = updates["execution_timings"]
         self.assertEqual([timing["operation"] for timing in timings], ["llm", "tool", "llm"])
         self.assertEqual([timing["duration_ms"] for timing in timings], [250.0, 200.0, 500.0])
@@ -421,7 +465,8 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(updates["current_task"].status, "failed")
-        self.assertIn("upstream service unavailable", updates["current_task"].error)
+        self.assertIn("tool calls failed", updates["current_task"].error)
+        self.assertNotIn("upstream service unavailable", updates["current_task"].error)
 
     async def test_worker_agent_keeps_successful_sources_when_another_source_fails(self):
         @tool
@@ -470,8 +515,9 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updates["current_task"].status, "partial")
         self.assertEqual(updates["result_storage"][0]["status"], "partial")
-        self.assertIn("missing source", updates["result_storage"][0]["result"])
-        self.assertIn("no results", updates["current_task"].error)
+        self.assertNotIn("missing source", updates["result_storage"][0]["result"])
+        self.assertIn("source retrieval failed", updates["current_task"].error)
+        self.assertNotIn("no results", updates["current_task"].error)
 
     async def test_worker_agent_fails_when_usable_source_coverage_is_below_half(self):
         @tool

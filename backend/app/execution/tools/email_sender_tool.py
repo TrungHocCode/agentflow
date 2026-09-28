@@ -14,11 +14,5 @@ def email_sender(recipient: str, subject: str, body: str) -> str:
     Sends an email to the specified recipient.
     In the testing sandbox, it simulates transmission and outputs the email envelope.
     """
-    # Print simulated output
-    print(f"\n--- [MOCK EMAIL OUTBOUND] ---")
-    print(f"To: {recipient}")
-    print(f"Subject: {subject}")
-    print(f"Body:\n{body}")
-    print(f"-----------------------------\n")
-    
+    del body
     return f"Successfully sent email to '{recipient}' (Subject: '{subject}'). [Simulated]"

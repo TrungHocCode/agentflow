@@ -1,21 +1,26 @@
+import json
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from test_support import use_test_adapters
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from starlette.requests import Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Adjust path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.main import app
+from app.main import app, http_error_handler
 from app.api.dependencies import get_run_query_service, get_workflow_service
 from app.execution.model_router import InferencePurpose
 from app.execution.state import SupervisorOutput, Task
 from app.core.config import settings
 from app.modules.identity.security import create_access_token
+from app.modules.identity.models import UserRecord
 
 
 class _FakeStructuredOutput:
@@ -72,6 +77,47 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         data = response.json()
         self.assertIn("status", data)
         self.assertIn("databases", data)
+
+    async def test_authentication_error_uses_standard_envelope_and_request_id(self):
+        with patch.dict(os.environ, {"TESTING": "false"}):
+            response = await self.client.get("/api/v1/runs")
+
+        self.assertEqual(response.status_code, 401)
+        error = response.json()["error"]
+        self.assertEqual(error["category"], "authentication")
+        self.assertEqual(error["code"], "http_401")
+        self.assertEqual(error["request_id"], response.headers["x-request-id"])
+        self.assertTrue(error["error_id"])
+        self.assertFalse(error["retryable"])
+
+    async def test_http_5xx_does_not_expose_internal_detail(self):
+        request = Request({
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/internal",
+            "raw_path": b"/internal",
+            "query_string": b"",
+            "headers": [],
+            "client": ("test", 1),
+            "server": ("test", 80),
+            "state": {"request_id": "request-1"},
+        })
+
+        response = await http_error_handler(
+            request,
+            StarletteHTTPException(status_code=500, detail="database-password=private-value"),
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn(
+            "server error",
+            response.body.decode("utf-8").lower(),
+        )
+        self.assertNotIn("private-value", response.body.decode("utf-8"))
+        self.assertEqual(json.loads(response.body)["error"]["request_id"], "request-1")
 
     async def test_catalog_tools_endpoint(self):
         response = await self.client.get("/api/v1/catalog/tools")

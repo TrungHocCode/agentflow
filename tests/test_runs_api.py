@@ -50,7 +50,10 @@ class TestRunsAPIEndpoints(unittest.IsolatedAsyncioTestCase):
     async def test_get_nonexistent_run(self):
         response = await self.client.get("/api/v1/runs/nonexistent-id-999")
         self.assertEqual(response.status_code, 404)
-        self.assertIn("detail", response.json())
+        error = response.json()["error"]
+        self.assertEqual(error["code"], "http_404")
+        self.assertEqual(error["category"], "not_found")
+        self.assertTrue(error["error_id"])
 
     async def test_list_runs(self):
         # Start a run first
