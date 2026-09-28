@@ -54,26 +54,48 @@ class ComponentTiming(StrictModel):
     calls: NonNegativeInt = 1
     total_ms: NonNegativeInt
     max_ms: Optional[NonNegativeInt] = None
+    p50_ms: Optional[NonNegativeInt] = None
+    p95_ms: Optional[NonNegativeInt] = None
     failures: NonNegativeInt = 0
+    timeouts: NonNegativeInt = 0
 
 
 class LLMCallTiming(StrictModel):
+    call_id: Optional[str] = None
     component: str = Field(min_length=1)
+    model: Optional[str] = None
     calls: NonNegativeInt = 1
     total_ms: NonNegativeInt
     ttft_ms: Optional[NonNegativeInt] = None
+    raw_ttft_ms: Optional[NonNegativeInt] = None
+    generation_ms: Optional[NonNegativeInt] = None
+    itl_p50_ms: Optional[NonNegativeInt] = None
+    itl_p95_ms: Optional[NonNegativeInt] = None
     input_tokens: Optional[NonNegativeInt] = None
     output_tokens: Optional[NonNegativeInt] = None
+    output_tokens_per_second: Optional[NonNegativeFloat] = None
+    model_load_ms: Optional[NonNegativeInt] = None
+    prompt_eval_ms: Optional[NonNegativeInt] = None
+    provider_total_ms: Optional[NonNegativeInt] = None
+    status: Optional[Literal["success", "failed"]] = None
 
 
 class ThroughputMetrics(StrictModel):
+    target: Literal["api", "llm", "workflow"] = "workflow"
     concurrency: Optional[NonNegativeInt] = None
     offered_requests_per_second: Optional[NonNegativeFloat] = None
     observed_requests_per_second: Optional[NonNegativeFloat] = None
     test_duration_seconds: Optional[NonNegativeFloat] = None
+    warmup_requests: Optional[NonNegativeInt] = None
+    warmup_successful_requests: Optional[NonNegativeInt] = None
+    warmup_duration_seconds: Optional[NonNegativeFloat] = None
     accepted_runs: Optional[NonNegativeInt] = None
     completed_runs: Optional[NonNegativeInt] = None
     peak_active_runs: Optional[NonNegativeInt] = None
+    successful_requests: Optional[NonNegativeInt] = None
+    failed_requests: Optional[NonNegativeInt] = None
+    timed_out_requests: Optional[NonNegativeInt] = None
+    output_tokens_per_second: Optional[NonNegativeFloat] = None
 
 
 class EvidenceSource(StrictModel):
@@ -91,12 +113,14 @@ class PerformanceMetrics(StrictModel):
     api_status_code: Optional[int] = Field(default=None, ge=100, le=599)
     failure_stage: Optional[FailureStage] = None
     api_response_ms: Optional[NonNegativeInt] = None
+    api_response_p95_ms: Optional[NonNegativeInt] = None
     supervisor_ttft_ms: Optional[NonNegativeInt] = None
     first_progress_event_ms: Optional[NonNegativeInt] = None
     plan_generation_ms: Optional[NonNegativeInt] = None
     queue_wait_ms: Optional[NonNegativeInt] = None
     workflow_execution_ms: Optional[NonNegativeInt] = None
     end_to_end_ms: Optional[NonNegativeInt] = None
+    critical_path_ms: Optional[NonNegativeInt] = None
     sse_delivery_lag_ms: Optional[NonNegativeInt] = None
     sse_reconnects: Optional[NonNegativeInt] = None
     node_timings: list[ComponentTiming] = Field(default_factory=list)
@@ -150,7 +174,7 @@ class ArtifactReferences(StrictModel):
 
 
 class EvaluationRunRecord(StrictModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     evaluation_id: str = Field(min_length=1)
     agentflow_run_id: Optional[str] = None
     case_id: str = Field(min_length=1)
