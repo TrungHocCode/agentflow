@@ -94,7 +94,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     output_schema={},
                 )
             )
-            self._add_step_rows(self.session, version_id, definition)
+            await self._add_step_rows(self.session, version_id, definition)
             await self.session.commit()
             await self.session.refresh(workflow)
             record = self._to_domain(workflow)
@@ -170,7 +170,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                     output_schema={},
                 )
             )
-            self._add_step_rows(self.session, version_id, definition)
+            await self._add_step_rows(self.session, version_id, definition)
             await self.session.commit()
             await self.session.refresh(workflow)
             record = self._to_domain(workflow)
@@ -446,7 +446,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
                 output_schema={},
             )
             self.session.add(version)
-            self._add_step_rows(self.session, version.id, definition)
+            await self._add_step_rows(self.session, version.id, definition)
             workflow.definition = definition
             await self.session.commit()
             return self._version_to_domain(version)
@@ -501,7 +501,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
         )
 
     @classmethod
-    def _add_step_rows(
+    async def _add_step_rows(
         cls,
         session: AsyncSession,
         version_id: str,
@@ -559,7 +559,12 @@ class PostgresWorkflowRepository(WorkflowRepository):
                         config_override={},
                     )
                 )
-        session.add_all(step_rows + dependency_rows + tool_rows)
+        session.add_all(step_rows)
+        # The relation rows have foreign keys to the step rows. Flush this
+        # level explicitly because these models do not use ORM relationships
+        # from which SQLAlchemy could infer the insert dependency ordering.
+        await session.flush()
+        session.add_all(dependency_rows + tool_rows)
 
     @staticmethod
     def _version_to_domain(version: WorkflowVersionModel) -> WorkflowVersionRecord:
