@@ -58,6 +58,29 @@ class TestToolLab(unittest.TestCase):
     def tearDown(self):
         clear_cache()
 
+    def test_python_and_external_side_effect_tools_are_disabled_by_default(self):
+        cases = [
+            (
+                "python_executor",
+                {"code": "print('should not execute')"},
+                "ENABLE_UNSANDBOXED_PYTHON_EXECUTION",
+            ),
+            (
+                "email_sender",
+                {"to": "person@example.test", "subject": "test", "body": "test"},
+                "ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS",
+            ),
+        ]
+
+        for tool_name, arguments, setting_name in cases:
+            with self.subTest(tool_name=tool_name):
+                with patch(f"app.execution.tools.tool_runner.settings.{setting_name}", False):
+                    result = run_tool(tool_name, arguments)
+
+                self.assertFalse(result.ok)
+                self.assertEqual(result.status, "blocked")
+                self.assertEqual(result.error.code, "tool_disabled_by_policy")
+
     def test_failed_tool_skips_the_full_dependent_chain(self):
         plan = [
             Task(id=1, node="news_crawler", status="failed", description="crawl"),

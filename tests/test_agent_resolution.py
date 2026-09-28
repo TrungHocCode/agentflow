@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from langchain_core.language_models import BaseChatModel
 
@@ -11,6 +11,7 @@ from app.execution.agents.resolver import (
     AgentProfile,
     AgentResolver,
 )
+from app.core.config import settings
 from app.execution.state import Task
 from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider
@@ -69,6 +70,19 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual([tool.name for tool in resolved.tools], ["web_search"])
+
+    async def test_python_executor_is_not_exposed_when_deployment_policy_disables_it(self) -> None:
+        with patch.object(settings, "ENABLE_UNSANDBOXED_PYTHON_EXECUTION", False):
+            resolved = await AgentResolver().resolve(
+                Task(
+                    id=1,
+                    node="report_agent",
+                    status="running",
+                    description="Write the research report",
+                )
+            )
+
+        self.assertNotIn("python_executor", {tool.name for tool in resolved.tools})
 
     async def test_plan_validation_rejects_tools_outside_the_agent_whitelist(self) -> None:
         resolver = AgentResolver()

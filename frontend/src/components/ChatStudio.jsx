@@ -152,8 +152,12 @@ export default function ChatStudio({
 
               <div 
                 style={{ 
-                  background: msg.sender === 'user' ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(30,41,59,0.7)',
-                  border: msg.sender === 'user' ? 'none' : '1px solid var(--glass-border)',
+                  background: msg.sender === 'user'
+                    ? 'linear-gradient(135deg, #6366f1, #8b5cf6)'
+                    : msg.isError ? 'rgba(127,29,29,0.22)' : 'rgba(30,41,59,0.7)',
+                  border: msg.sender === 'user'
+                    ? 'none'
+                    : msg.isError ? '1px solid rgba(248,113,113,0.42)' : '1px solid var(--glass-border)',
                   padding: '0.875rem 1.125rem',
                   borderRadius: msg.sender === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                   color: '#fff',
@@ -161,7 +165,9 @@ export default function ChatStudio({
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.25rem' }}>
-                  <span style={{ fontSize: '0.75rem', color: msg.sender === 'user' ? '#e0e7ff' : 'var(--accent-cyan)', fontWeight: '600' }}>
+                  <span style={{ fontSize: '0.75rem', color: msg.sender === 'user'
+                    ? '#e0e7ff'
+                    : msg.isError ? '#fca5a5' : 'var(--accent-cyan)', fontWeight: '600' }}>
                     {msg.sender === 'user' ? 'Bạn' : 'Trợ lý nghiên cứu'}
                   </span>
                   {msg.duration && (
@@ -184,6 +190,19 @@ export default function ChatStudio({
                       </span>
                     )}
                 </div>
+                {msg.isError && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    marginTop: '0.5rem',
+                    color: '#fca5a5',
+                    fontSize: '0.7rem'
+                  }}>
+                    <AlertCircle size={12} />
+                    {msg.errorId ? `Mã tham chiếu: ${msg.errorId}` : 'Phản hồi chưa hoàn tất'}
+                  </div>
+                )}
               </div>
 
               {msg.sender === 'user' && (

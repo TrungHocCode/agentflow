@@ -35,6 +35,23 @@ function withAuthHeaders(headers = {}, token = localStorage.getItem('agentflow_a
   };
 }
 
+function formatApiError(statusCode, body, fallback) {
+  let message = body || fallback;
+  try {
+    const payload = JSON.parse(body);
+    const error = payload?.error;
+    if (error && typeof error === 'object') {
+      message = error.message || error.detail || message;
+      if (error.error_id) message = `${message} (Mã tham chiếu: ${error.error_id})`;
+    } else if (typeof payload?.detail === 'string') {
+      message = payload.detail;
+    }
+  } catch {
+    // Preserve non-JSON legacy error bodies.
+  }
+  return new Error(`${statusCode}: ${message || fallback}`);
+}
+
 async function requestJson(
   url,
   options = {},
@@ -51,7 +68,7 @@ async function requestJson(
   }
   if (!res.ok) {
     const detail = await res.text();
-    throw new Error(`${res.status}: ${detail || res.statusText}`);
+    throw formatApiError(res.status, detail, res.statusText);
   }
   if (res.status === 204) return null;
   return res.json();
@@ -144,7 +161,7 @@ export async function downloadRunArtifact(runId, artifactId) {
   if (response.status === 401) expireSessionIfCurrent(token, requestGeneration);
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`${response.status}: ${detail || response.statusText}`);
+    throw formatApiError(response.status, detail, response.statusText);
   }
   return response.blob();
 }
@@ -260,7 +277,7 @@ function subscribeAuthenticatedSSE(url, onMessage, onError, extraHeaders = {}) {
       if (!response.ok) {
         if (response.status === 401) expireSessionIfCurrent(token, requestGeneration);
         const detail = await response.text();
-        throw new Error(`${response.status}: ${detail || response.statusText}`);
+        throw formatApiError(response.status, detail, response.statusText);
       }
       if (!response.body) throw new Error('The browser does not support streaming responses.');
 
