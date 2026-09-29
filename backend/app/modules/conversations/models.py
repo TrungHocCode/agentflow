@@ -17,6 +17,15 @@ ConversationStatus = Literal[
     "archived",
 ]
 ConversationMessageRole = Literal["user", "assistant", "system", "tool"]
+ConversationTurnStatus = Literal[
+    "queued",
+    "running",
+    "cancel_requested",
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+]
 
 
 class ConversationMessage(BaseModel):
@@ -42,6 +51,32 @@ class ConversationRecord(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class ConversationTurn(BaseModel):
+    """Durable lifecycle and outcome of one user planning request."""
+
+    id: str
+    conversation_id: str
+    user_id: str
+    user_message_id: str
+    assistant_message_id: str
+    input_fingerprint: str
+    status: ConversationTurnStatus = "queued"
+    outcome: Literal["answer", "clarify", "propose_plan"] | None = None
+    assistant_content: str = ""
+    plan: List[Task] = Field(default_factory=list)
+    error_code: str | None = None
+    error_category: str | None = None
+    error_id: str | None = None
+    error_message: str | None = None
+    retryable: bool = False
+    worker_id: str | None = None
+    last_event_sequence: int = 0
+    created_at: datetime
+    started_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class ConversationCreateRequest(BaseModel):
@@ -76,3 +111,25 @@ class ConversationTurnResponse(BaseModel):
     conversation: ConversationResponse
     user_message: ConversationMessage
     assistant_message: ConversationMessage | None = None
+
+
+class ConversationTurnSnapshot(BaseModel):
+    """Public, ownership-safe turn view used for restore and cancellation responses."""
+
+    id: str
+    conversation_id: str
+    user_message_id: str
+    assistant_message_id: str
+    status: ConversationTurnStatus
+    outcome: Literal["answer", "clarify", "propose_plan"] | None = None
+    assistant_content: str = ""
+    plan: List[Task] = Field(default_factory=list)
+    error_code: str | None = None
+    error_category: str | None = None
+    error_id: str | None = None
+    error_message: str | None = None
+    retryable: bool = False
+    last_event_sequence: int = 0
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None

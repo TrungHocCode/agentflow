@@ -75,12 +75,10 @@ async def get_workflow_service(
     return build_workflow_service(db)
 
 
-async def get_conversation_service(
-    db: AsyncSession = Depends(get_db),
-) -> ConversationService:
-    """Build the Conversation service for one request scope."""
+def get_conversation_service() -> ConversationService:
+    """Build a session-independent service; each repository operation owns its DB session."""
 
-    return build_conversation_service(db)
+    return build_conversation_service()
 
 
 async def get_persisted_run_service(

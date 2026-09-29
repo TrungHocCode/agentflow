@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+import uuid
 from datetime import datetime, timezone
 from test_support import use_test_adapters
 from typing import Any, AsyncIterator
@@ -239,6 +240,33 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(messages_response.status_code, 200)
         self.assertEqual(messages_response.json()[0]["role"], "user")
+
+    async def test_durable_turn_snapshot_and_cancel_endpoints(self) -> None:
+        from app.infrastructure.container import build_conversation_service
+
+        created = await self.client.post(
+            "/api/v1/conversations",
+            json={"title": "Durable turn API"},
+        )
+        conversation_id = created.json()["id"]
+        service = build_conversation_service()
+        accepted = await service.start_message(
+            conversation_id,
+            "Research API recovery",
+            turn_id=str(uuid.uuid4()),
+        )
+
+        snapshots = await self.client.get(f"/api/v1/conversations/{conversation_id}/turns")
+        self.assertEqual(snapshots.status_code, 200)
+        self.assertEqual(snapshots.json()[0]["status"], "queued")
+        self.assertNotIn("input_fingerprint", snapshots.json()[0])
+
+        cancelled = await self.client.post(
+            f"/api/v1/conversations/{conversation_id}/turns/{accepted['turn_id']}/cancel"
+        )
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.json()["status"], "cancelled")
+        self.assertNotIn("worker_id", cancelled.json())
 
     @patch("app.execution.llm.get_llm", return_value=_FakeLLM())
     async def test_delete_conversation_removes_owned_history(self, mock_get_llm: Any) -> None:

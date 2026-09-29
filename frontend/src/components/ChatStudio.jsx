@@ -29,6 +29,7 @@ export default function ChatStudio({
   onOpenResults,
   onViewRunDetails,
   onCancelRun,
+  onCancelTurn,
   onDeleteConversation,
   conversationId,
   isCancelling,
@@ -36,6 +37,7 @@ export default function ChatStudio({
   isRestoring,
   isProcessing,
   isStreaming,
+  activeTurnId,
   activePlan,
   runStatus,
   runId
@@ -176,6 +178,17 @@ export default function ChatStudio({
                       {msg.duration}s
                     </span>
                   )}
+                  {msg.isGenerating && activeTurnId && (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={onCancelTurn}
+                      disabled={isCancelling}
+                      style={{ padding: '0.2rem 0.4rem', color: 'var(--accent-rose)', fontSize: '0.7rem' }}
+                    >
+                      {isCancelling ? 'Đang hủy…' : 'Hủy'}
+                    </button>
+                  )}
                 </div>
                 <div style={{ fontSize: '0.875rem', lineHeight: 1.5 }}>
                   {msg.text
@@ -232,6 +245,17 @@ export default function ChatStudio({
                 <span className="typing-dot"></span>
                 <span className="typing-dot"></span>
               </div>
+              {activeTurnId && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={onCancelTurn}
+                  disabled={isCancelling}
+                  style={{ padding: '0.35rem 0.55rem', color: 'var(--accent-rose)', fontSize: '0.75rem' }}
+                >
+                  <XCircle size={14} /> {isCancelling ? 'Đang hủy…' : 'Hủy'}
+                </button>
+              )}
             </div>
           </div>
         )}

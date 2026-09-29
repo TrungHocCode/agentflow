@@ -14,9 +14,11 @@ import {
   getConversations,
   getRuns,
   getRunEvents,
+  getConversationTurns,
   createConversation,
   deleteConversation,
   cancelRun,
+  cancelConversationTurn,
   sendConversationMessage,
   getConversationMessages,
   subscribeConversationEvents,
@@ -64,8 +66,81 @@ const toChatMessages = (persistedMessages = []) => persistedMessages
   .map(message => ({
     sender: message.role === 'user' ? 'user' : 'supervisor',
     text: message.content,
-    duration: message.metadata?.duration
+    duration: message.metadata?.duration,
+    turnId: message.metadata?.turn_id,
+    isGenerating: ['queued', 'running', 'cancel_requested'].includes(message.metadata?.status),
+    isError: ['failed', 'interrupted'].includes(message.metadata?.status),
+    errorId: message.metadata?.error_id
   }));
+
+function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
+  const { setMessages, setActivePlan, setDraftPlan, setIsProcessing, setActiveTurnId } = setters;
+  const payload = eventData.payload || {};
+  const ensureAssistant = (messages, text = '') => messages.some(message => message.turnId === turnId)
+    ? messages
+    : [...messages, { sender: 'supervisor', text, turnId, isGenerating: true }];
+
+  if (['turn_accepted', 'planning_started'].includes(eventData.type)) {
+    const queued = eventData.type === 'turn_accepted';
+    setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
+      ? {
+        ...message,
+        text: queued ? 'Đã nhận yêu cầu, đang chờ worker xử lý…' : '',
+        isQueued: queued,
+        isGenerating: true
+      }
+      : message));
+    setIsProcessing(true);
+    setActiveTurnId(turnId);
+    return;
+  }
+  if (eventData.type === 'assistant_delta' && payload.content) {
+    setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
+      ? { ...message, text: `${message.text || ''}${payload.content}`, isGenerating: true }
+      : message));
+    return;
+  }
+  if (eventData.type === 'assistant_message' && payload.content !== undefined) {
+    setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
+      ? { ...message, text: payload.content, isGenerating: true }
+      : message));
+    return;
+  }
+  if (['workflow_draft', 'workflow_draft_updated'].includes(eventData.type)) {
+    const plan = payload.plan || [];
+    setActivePlan(plan);
+    setDraftPlan(plan);
+    return;
+  }
+
+  const failed = ['turn_failed', 'planning_failed'].includes(eventData.type);
+  const cancelled = eventData.type === 'turn_cancelled';
+  const interrupted = eventData.type === 'turn_interrupted';
+  const completed = ['turn_completed', 'planning_completed'].includes(eventData.type);
+  if (!failed && !cancelled && !interrupted && !completed) return;
+  if (failed || interrupted) {
+    const text = payload.message || 'Yêu cầu bị gián đoạn trước khi hoàn tất. Bạn có thể gửi lại để thử tiếp.';
+    setMessages(previous => ensureAssistant(previous, text).map(message => message.turnId === turnId
+      ? { ...message, text: message.text || text, isGenerating: false, isError: true, errorId: payload.error_id }
+      : message));
+    setActivePlan([]);
+    setDraftPlan([]);
+  } else if (cancelled) {
+    setMessages(previous => ensureAssistant(previous, 'Yêu cầu đã được hủy.').map(message => message.turnId === turnId
+      ? { ...message, text: message.text || 'Yêu cầu đã được hủy.', isGenerating: false }
+      : message));
+  } else {
+    setMessages(previous => previous.map(message => message.turnId === turnId
+      ? { ...message, isGenerating: false }
+      : message));
+  }
+  setIsProcessing(false);
+  setActiveTurnId(null);
+  if (streamRef.current) {
+    streamRef.current();
+    streamRef.current = null;
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('studio');
@@ -95,6 +170,7 @@ export default function App() {
   const [isRestoringConversation, setIsRestoringConversation] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isDeletingConversation, setIsDeletingConversation] = useState(false);
+  const [activeConversationTurnId, setActiveConversationTurnId] = useState(null);
   const [executionDuration, setExecutionDuration] = useState(null);
   const [authMessage, setAuthMessage] = useState('');
   const conversationStreamRef = useRef(null);
@@ -317,6 +393,9 @@ export default function App() {
         const persistedMessages = conversation
           ? await getConversationMessages(conversation.id)
           : [];
+        const persistedTurns = conversation
+          ? await getConversationTurns(conversation.id)
+          : [];
         if (cancelled) return;
 
         let runs = [];
@@ -398,11 +477,37 @@ export default function App() {
 
         let runToTrack = linkedRun;
         const runIsActive = linkedRun && ACTIVE_RUN_STATUSES.has(linkedRun.status);
+        const activeTurn = persistedTurns.find(turn => ['queued', 'running', 'cancel_requested'].includes(turn.status));
         if (linkedRun && TERMINAL_RUN_STATUSES.has(linkedRun.status)) {
           terminalRunIdsRef.current.add(linkedRun.run_id);
         }
+        setActiveConversationTurnId(activeTurn?.id || null);
         setIsStreaming(Boolean(runIsActive));
-        setIsProcessing(Boolean(runIsActive));
+        setIsProcessing(Boolean(runIsActive || activeTurn));
+        if (activeTurn && conversation && !cancelled) {
+          if (conversationStreamRef.current) conversationStreamRef.current();
+          conversationStreamRef.current = subscribeConversationEvents(
+            conversation.id,
+            activeTurn.id,
+            eventData => {
+              if (eventData.type === 'stream_ready') return;
+              applyConversationTurnEvent(
+                activeTurn.id,
+                eventData,
+                {
+                  setMessages,
+                  setActivePlan,
+                  setDraftPlan,
+                  setIsProcessing,
+                  setActiveTurnId: setActiveConversationTurnId
+                },
+                conversationStreamRef
+              );
+            },
+            error => console.warn('Conversation event stream is reconnecting:', error),
+            0
+          );
+        }
         if (runIsActive) {
           runStartedAtRef.current = Date.now();
           let lastEventId = null;
@@ -452,6 +557,10 @@ export default function App() {
       if (runStreamRef.current) {
         runStreamRef.current();
         runStreamRef.current = null;
+      }
+      if (conversationStreamRef.current) {
+        conversationStreamRef.current();
+        conversationStreamRef.current = null;
       }
     };
   }, [authUser, subscribeToRun]);
@@ -563,6 +672,7 @@ export default function App() {
     if (startsNewConversation) {
       setMessages([{ sender: 'user', text: textPrompt }]);
       setConversationId(null);
+      setActiveConversationTurnId(null);
       setConversationClosed(false);
       setCurrentRun(null);
       localStorage.removeItem(ACTIVE_RUN_KEY);
@@ -613,84 +723,18 @@ export default function App() {
               resolveStreamReady();
               return;
             }
-
-            const payload = eventData.payload || {};
-            if (eventData.type === 'planning_started') {
-              setMessages(prev => [...prev, {
-                sender: 'supervisor',
-                text: '',
-                turnId,
-                isGenerating: true
-              }]);
-            } else if (eventData.type === 'workflow_draft_updated') {
-              const plan = payload.plan || [];
-              setActivePlan(plan);
-              setDraftPlan(plan);
-            } else if (eventData.type === 'assistant_delta' && payload.content) {
-              setMessages(prev => {
-                const messageIndex = prev.findIndex(message => message.turnId === turnId);
-                if (messageIndex < 0) {
-                  return [...prev, {
-                    sender: 'supervisor',
-                    text: payload.content,
-                    turnId,
-                    isGenerating: true
-                  }];
-                }
-                return prev.map((message, index) => index === messageIndex
-                  ? {
-                    ...message,
-                    text: payload.replace ? payload.content : `${message.text}${payload.content}`,
-                    isGenerating: true
-                  }
-                  : message);
-              });
-            } else if (eventData.type === 'assistant_replace' && payload.content) {
-              setMessages(prev => prev.map(message => message.turnId === turnId
-                ? { ...message, text: payload.content, isGenerating: true }
-                : message));
-            } else if (eventData.type === 'planning_completed') {
-              setMessages(prev => prev.map(message => message.turnId === turnId
-                ? { ...message, isGenerating: false }
-                : message));
-              if (payload.outcome === 'propose_plan' || !payload.outcome) {
-                setMessages(prev => [...prev, {
-                  sender: 'supervisor',
-                  text: 'Quy trình đã sẵn sàng. Bạn có thể xem lại kế hoạch rồi chọn bắt đầu.'
-                }]);
-              }
-              setIsProcessing(false);
-              if (conversationStreamRef.current) conversationStreamRef.current();
-            } else if (eventData.type === 'planning_failed') {
-              const errorText = payload.message || 'Không thể hoàn tất yêu cầu lúc này. Vui lòng thử lại.';
-              if (payload.invalidate_draft) {
-                setActivePlan([]);
-                setDraftPlan([]);
-              }
-              setMessages(prev => {
-                const messageIndex = prev.findIndex(message => message.turnId === turnId);
-                if (messageIndex < 0) {
-                  return [...prev, {
-                    sender: 'supervisor',
-                    text: errorText,
-                    turnId,
-                    isError: true,
-                    errorId: payload.error_id
-                  }];
-                }
-                return prev.map((message, index) => index === messageIndex
-                  ? {
-                    ...message,
-                    text: errorText,
-                    isGenerating: false,
-                    isError: true,
-                    errorId: payload.error_id
-                  }
-                  : message);
-              });
-              setIsProcessing(false);
-              if (conversationStreamRef.current) conversationStreamRef.current();
-            }
+            applyConversationTurnEvent(
+              turnId,
+              eventData,
+              {
+                setMessages,
+                setActivePlan,
+                setDraftPlan,
+                setIsProcessing,
+                setActiveTurnId: setActiveConversationTurnId
+              },
+              conversationStreamRef
+            );
           },
           (error) => {
             if (!streamReadyReceived || !messageSubmitted) {
@@ -936,6 +980,22 @@ export default function App() {
     }
   };
 
+  const handleCancelConversationTurn = async () => {
+    if (!conversationId || !activeConversationTurnId) return;
+    setIsCancelling(true);
+    try {
+      await cancelConversationTurn(conversationId, activeConversationTurnId);
+    } catch (error) {
+      setMessages(previous => [...previous, {
+        sender: 'supervisor',
+        text: `Không thể hủy yêu cầu: ${error.message}`,
+        isError: true
+      }]);
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
   const handleDeleteConversation = async () => {
     if (!conversationId || isDeletingConversation || (isProcessing && !isStreaming)) return;
     const linkedRun = conversationRun;
@@ -948,9 +1008,14 @@ export default function App() {
     setIsDeletingConversation(true);
     try {
       await deleteConversation(conversationId);
+      if (conversationStreamRef.current) {
+        conversationStreamRef.current();
+        conversationStreamRef.current = null;
+      }
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       localStorage.removeItem(conversationRunStorageKey(conversationId));
       setConversationId(null);
+      setActiveConversationTurnId(null);
       setConversationClosed(false);
       setConversationRun(null);
       setDraftPlan([]);
@@ -1006,9 +1071,11 @@ export default function App() {
               onSendMessage={handleSendMessage}
               onApprovePlan={handleApprovePlan}
               onCancelRun={handleCancelRun}
+              onCancelTurn={handleCancelConversationTurn}
               onDeleteConversation={handleDeleteConversation}
               conversationId={conversationId}
               isCancelling={isCancelling}
+              activeTurnId={activeConversationTurnId}
               isDeletingConversation={isDeletingConversation}
               isProcessing={isProcessing}
               isStreaming={isStreaming}

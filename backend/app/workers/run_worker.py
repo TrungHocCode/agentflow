@@ -3,7 +3,8 @@
 import asyncio
 import logging
 
-from app.infrastructure.container import build_run_queue, build_run_service
+from app.infrastructure.container import build_conversation_service, build_run_queue, build_run_service
+from app.modules.conversations.service import ConversationService
 from app.modules.runs.queue import RunCommandQueue
 from app.modules.runs.service import RunService
 from app.core.config import settings, validate_runtime_settings
@@ -20,25 +21,47 @@ class RunWorker:
         self,
         service: RunService,
         command_queue: RunCommandQueue,
+        conversation_service: ConversationService | None = None,
     ) -> None:
         self.service = service
         self.command_queue = command_queue
+        self.conversation_service = conversation_service
+        self._prefer_conversation_turn = True
 
     async def process_next(self, timeout: int = 1) -> bool:
         """Process one command and return whether work was found."""
 
-        command = await self.command_queue.dequeue(timeout=timeout)
-        if command is None:
-            return False
-        with bind_context(
-            request_id=command.metadata.get("request_id"),
-            conversation_id=command.metadata.get("conversation_id"),
-            run_id=command.run_id,
-            command_id=command.command_id,
-        ):
-            logger.info("Executing queued workflow run")
-            await self.service.execute_queued_run(command.run_id)
-        return True
+        async def process_turn() -> bool:
+            if self.conversation_service is None:
+                return False
+            return await self.conversation_service.process_next_turn(
+                worker_id="agentflow-execution-worker"
+            )
+
+        async def process_run() -> bool:
+            command = await self.command_queue.dequeue(timeout=timeout)
+            if command is None:
+                return False
+            with bind_context(
+                request_id=command.metadata.get("request_id"),
+                conversation_id=command.metadata.get("conversation_id"),
+                run_id=command.run_id,
+                command_id=command.command_id,
+            ):
+                logger.info("Executing queued workflow run")
+                await self.service.execute_queued_run(command.run_id)
+            return True
+
+        if self._prefer_conversation_turn:
+            did_work = await process_turn()
+            self._prefer_conversation_turn = False
+            if did_work:
+                return True
+        did_work = await process_run()
+        self._prefer_conversation_turn = True
+        if did_work:
+            return True
+        return await process_turn()
 
     async def run_forever(self) -> None:
         """Run until the process receives cancellation."""
@@ -62,6 +85,7 @@ async def main() -> None:
     worker = RunWorker(
         service=build_run_service(),
         command_queue=build_run_queue(),
+        conversation_service=build_conversation_service(),
     )
     await worker.run_forever()
 

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from integration_tests.environment import require_integration_environment
@@ -19,13 +20,16 @@ from app.db.redis_client import close_redis_connection, get_redis  # noqa: E402
 from app.execution.state import Task  # noqa: E402
 from app.infrastructure.container import build_run_queue  # noqa: E402
 from app.infrastructure.postgres.models import FlowModel, RunModel  # noqa: E402
+from app.infrastructure.postgres.conversation_repository import PostgresConversationRepository  # noqa: E402
 from app.infrastructure.postgres.run_repository import PostgresRunRepository  # noqa: E402
 from app.infrastructure.postgres.workflow_repository import PostgresWorkflowRepository  # noqa: E402
 from app.infrastructure.redis.run_queue import RedisRunCommandQueue  # noqa: E402
 from app.main import app  # noqa: E402
 from app.modules.runs.models import RunDocument  # noqa: E402
+from app.modules.conversations.models import ConversationMessage, ConversationRecord, ConversationTurn  # noqa: E402
 from app.shared.commands import RunCommand  # noqa: E402
 from app.shared.events import ExecutionEvent  # noqa: E402
+from app.shared.errors import ConflictError  # noqa: E402
 
 
 def setUpModule() -> None:
@@ -74,11 +78,82 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                     "flows", "workflow_versions", "workflow_steps",
                     "workflow_step_dependencies", "workflow_step_tools",
                     "task_executions", "runs", "run_events", "results", "users",
+                    "conversation_turns", "conversation_turn_events",
                 }
                 <= set(tables)
             )
             self.assertEqual(await connection.scalar(text("SELECT version_num FROM alembic_version")),
-                             "0004_workflow_contracts")
+                             "0005_durable_conversation_turns")
+
+    async def test_conversation_turn_acceptance_is_idempotent_serialized_and_replayable(self) -> None:
+        repository = PostgresConversationRepository()
+        now = datetime.now(timezone.utc)
+        conversation = ConversationRecord(
+            id=str(uuid4()),
+            user_id=self.owner,
+            title="Conversation turn integration",
+            created_at=now,
+            updated_at=now,
+        )
+        await repository.create(conversation)
+        self.addAsyncCleanup(repository.delete, conversation.id, self.owner)
+
+        candidates = []
+        for request_text in ("first request", "competing request"):
+            turn_id = str(uuid4())
+            user_message = ConversationMessage(
+                id=str(uuid4()),
+                conversation_id=conversation.id,
+                role="user",
+                content=request_text,
+                metadata={"turn_id": turn_id},
+                created_at=now,
+            )
+            assistant_message = ConversationMessage(
+                id=str(uuid4()),
+                conversation_id=conversation.id,
+                role="assistant",
+                content="",
+                metadata={"turn_id": turn_id, "status": "queued"},
+                created_at=now + timedelta(microseconds=1),
+            )
+            turn = ConversationTurn(
+                id=turn_id,
+                conversation_id=conversation.id,
+                user_id=self.owner,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                input_fingerprint=("a" if request_text == "first request" else "b") * 64,
+                created_at=now,
+            )
+            candidates.append((turn, user_message, assistant_message))
+
+        async def accept(candidate):
+            turn, user_message, assistant_message = candidate
+            return await repository.accept_turn(
+                conversation,
+                turn,
+                user_message,
+                assistant_message,
+            )
+
+        outcomes = await asyncio.gather(*(accept(candidate) for candidate in candidates), return_exceptions=True)
+        accepted = [item for item in outcomes if isinstance(item, ConversationTurn)]
+        conflicts = [item for item in outcomes if isinstance(item, ConflictError)]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(conflicts), 1)
+        winner_index = next(index for index, candidate in enumerate(candidates) if candidate[0].id == accepted[0].id)
+        turn, user_message, assistant_message = candidates[winner_index]
+
+        retry = await repository.accept_turn(conversation, turn, user_message, assistant_message)
+        self.assertEqual(retry.id, turn.id)
+        self.assertEqual(len(await repository.list_messages(conversation.id, limit=10)), 2)
+        self.assertIsNone(await repository.get_turn(conversation.id, turn.id, "another-owner"))
+        claimed = await repository.claim_next_turn("integration-worker")
+        self.assertEqual(claimed.status, "running")
+        events = await repository.list_turn_events(conversation.id, turn.id)
+        self.assertEqual([event.sequence for event in events], [1, 2])
+        self.assertEqual([event.type for event in events], ["turn_accepted", "planning_started"])
 
     async def test_concurrent_claim_has_one_winner_and_owner_filter_is_enforced(self) -> None:
         outcomes = await asyncio.gather(*(self.repository.claim(self.run_id) for _ in range(4)))

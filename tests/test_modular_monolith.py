@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -17,7 +18,8 @@ from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.service import CatalogService
-from app.modules.conversations.models import ConversationMessage, ConversationRecord
+from app.modules.conversations.events import ConversationEvent
+from app.modules.conversations.models import ConversationMessage, ConversationRecord, ConversationTurn
 from app.modules.conversations.service import ConversationService
 from app.modules.runs.models import RunDocument
 from app.modules.runs.service import RunService
@@ -763,6 +765,8 @@ class FakeConversationRepository:
     def __init__(self) -> None:
         self.conversations: Dict[str, ConversationRecord] = {}
         self.messages: Dict[str, List[ConversationMessage]] = {}
+        self.turns: Dict[str, ConversationTurn] = {}
+        self.turn_events: Dict[str, List[ConversationEvent]] = {}
 
     async def create(self, conversation: ConversationRecord) -> ConversationRecord:
         self.conversations[conversation.id] = conversation
@@ -781,6 +785,10 @@ class FakeConversationRepository:
             return False
         self.conversations.pop(conversation_id, None)
         self.messages.pop(conversation_id, None)
+        for turn_id, turn in list(self.turns.items()):
+            if turn.conversation_id == conversation_id:
+                self.turns.pop(turn_id, None)
+                self.turn_events.pop(turn_id, None)
         return True
 
     async def save(self, conversation: ConversationRecord) -> ConversationRecord:
@@ -797,6 +805,109 @@ class FakeConversationRepository:
         limit: int = 200,
     ) -> List[ConversationMessage]:
         return self.messages.get(conversation_id, [])[:limit]
+
+    async def accept_turn(self, conversation, turn, user_message, assistant_message):
+        existing = self.turns.get(turn.id)
+        if existing:
+            if existing.input_fingerprint == turn.input_fingerprint and existing.user_id == turn.user_id:
+                return existing
+            from app.shared.errors import ConflictError
+            raise ConflictError("Turn identifier was reused for a different request.")
+        if any(item.conversation_id == turn.conversation_id and item.status in {"queued", "running", "cancel_requested"}
+               for item in self.turns.values()):
+            from app.shared.errors import ConflictError
+            raise ConflictError("Conversation already has an active turn.")
+        conversation.draft_plan = []
+        conversation.metadata.pop("supervisor_decision", None)
+        conversation.metadata.pop("last_turn", None)
+        conversation.updated_at = turn.created_at
+        self.conversations[conversation.id] = conversation
+        self.messages.setdefault(conversation.id, []).extend([user_message, assistant_message])
+        turn.last_event_sequence = 1
+        self.turns[turn.id] = turn
+        self.turn_events[turn.id] = [ConversationEvent(
+            conversation_id=turn.conversation_id,
+            turn_id=turn.id,
+            sequence=1,
+            type="turn_accepted",
+            payload={"user_message_id": turn.user_message_id, "assistant_message_id": turn.assistant_message_id},
+        )]
+        return turn
+
+    async def get_turn(self, conversation_id, turn_id, user_id):
+        turn = self.turns.get(turn_id)
+        return turn if turn and turn.conversation_id == conversation_id and turn.user_id == user_id else None
+
+    async def list_turns(self, conversation_id, user_id, limit=50):
+        return [turn for turn in self.turns.values()
+                if turn.conversation_id == conversation_id and turn.user_id == user_id][:limit]
+
+    async def claim_next_turn(self, worker_id):
+        turn = next((item for item in self.turns.values() if item.status == "queued"), None)
+        if turn is None:
+            return None
+        turn.status = "running"
+        turn.worker_id = worker_id
+        turn.started_at = datetime.now(timezone.utc)
+        turn.heartbeat_at = turn.started_at
+        await self.append_turn_event(turn.id, "planning_started", {"status": "running"})
+        return turn
+
+    async def heartbeat_turn(self, turn_id, worker_id):
+        turn = self.turns.get(turn_id)
+        if not turn or turn.worker_id != worker_id or turn.status != "running":
+            return False
+        turn.heartbeat_at = datetime.now(timezone.utc)
+        return True
+
+    async def save_turn(self, turn):
+        self.turns[turn.id] = turn
+        return turn
+
+    async def save_message(self, message):
+        messages = self.messages.setdefault(message.conversation_id, [])
+        for index, existing in enumerate(messages):
+            if existing.id == message.id:
+                messages[index] = message
+                return message
+        messages.append(message)
+        return message
+
+    async def finalize_turn(self, turn, conversation, assistant_message, events):
+        self.turns[turn.id] = turn
+        self.conversations[conversation.id] = conversation
+        await self.save_message(assistant_message)
+        written = []
+        for event_type, payload in events:
+            written.append(await self.append_turn_event(turn.id, event_type, payload))
+        return written
+
+    async def request_turn_cancel(self, conversation_id, turn_id, user_id):
+        turn = await self.get_turn(conversation_id, turn_id, user_id)
+        if turn and turn.status in {"queued", "running"}:
+            turn.status = "cancel_requested"
+            await self.append_turn_event(turn.id, "turn_cancel_requested", {"status": turn.status})
+        return turn
+
+    async def append_turn_event(self, turn_id, event_type, payload):
+        turn = self.turns[turn_id]
+        turn.last_event_sequence += 1
+        event = ConversationEvent(
+            conversation_id=turn.conversation_id,
+            turn_id=turn_id,
+            sequence=turn.last_event_sequence,
+            type=event_type,
+            payload=payload,
+        )
+        self.turn_events.setdefault(turn_id, []).append(event)
+        return event
+
+    async def list_turn_events(self, conversation_id, turn_id, after_sequence=0, limit=500):
+        return [event for event in self.turn_events.get(turn_id, [])
+                if event.conversation_id == conversation_id and event.sequence > after_sequence][:limit]
+
+    async def recover_stale_turns(self, stale_before, queue_expired_before):
+        return []
 
 
 class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
@@ -876,6 +987,7 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(accepted["status"], "accepted")
+        self.assertTrue(await service.process_next_turn(worker_id="test-worker"))
         events = []
         async for frame in service.stream_events(
             conversation.id,
@@ -884,11 +996,11 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             events.append(frame)
 
         self.assertIn("planning_started", "".join(events))
-        self.assertIn("workflow_draft_updated", "".join(events))
-        self.assertIn("planning_completed", "".join(events))
+        self.assertIn("workflow_draft", "".join(events))
+        self.assertIn("turn_completed", "".join(events))
         self.assertIn('"type": "stream_ready"', "".join(events))
         self.assertIn('"outcome": "propose_plan"', "".join(events))
-        self.assertIn('"content": "I drafted "', "".join(events))
+        self.assertIn('"content": "I drafted a workflow for review."', "".join(events))
         self.assertTrue(execution_port.initial_state["metadata"]["use_llm"])
         self.assertEqual(
             execution_port.initial_state["metadata"]["inference_purpose"],
@@ -896,6 +1008,92 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         )
         persisted_conversation = await service.get_conversation(conversation.id)
         self.assertEqual(len(persisted_conversation.metadata["chat_ttft_samples"]), 1)
+
+    async def test_turn_submission_is_idempotent_and_conversation_serialized(self) -> None:
+        from app.shared.errors import ConflictError
+
+        repository = FakeConversationRepository()
+        service = ConversationService(repository, FakeExecutionPort())
+        conversation = await service.create_conversation(title="Idempotency")
+        turn_id = "same-request-id"
+        first = await service.start_message(conversation.id, "Research local LLMs", turn_id=turn_id)
+        retry = await service.start_message(conversation.id, "Research local LLMs", turn_id=turn_id)
+
+        self.assertEqual(first["user_message_id"], retry["user_message_id"])
+        self.assertEqual(first["assistant_message_id"], retry["assistant_message_id"])
+        self.assertEqual(len(await service.list_messages(conversation.id)), 2)
+        with self.assertRaises(ConflictError):
+            await service.start_message(conversation.id, "A second concurrent request")
+
+    async def test_new_turn_clears_previous_draft_before_worker_can_claim_it(self) -> None:
+        repository = FakeConversationRepository()
+        service = ConversationService(repository, FakeExecutionPort())
+        conversation = await service.create_conversation(title="No stale draft")
+        conversation.draft_plan = [make_task(8)]
+        conversation.metadata["supervisor_decision"] = "propose_plan"
+        await repository.save(conversation)
+
+        await service.start_message(conversation.id, "Research a different topic")
+        refreshed = await service.get_conversation(conversation.id)
+
+        self.assertEqual(refreshed.draft_plan, [])
+        self.assertNotIn("supervisor_decision", refreshed.metadata)
+
+    async def test_cancelling_queued_turn_is_terminal_and_replayable(self) -> None:
+        repository = FakeConversationRepository()
+        service = ConversationService(repository, FakeExecutionPort())
+        conversation = await service.create_conversation(title="Cancel queued")
+        accepted = await service.start_message(conversation.id, "Research something")
+
+        turn = await service.cancel_turn(conversation.id, accepted["turn_id"])
+        events = await repository.list_turn_events(conversation.id, turn.id)
+
+        self.assertEqual(turn.status, "cancelled")
+        self.assertEqual(events[-1].type, "turn_cancelled")
+        self.assertEqual((await service.list_messages(conversation.id))[-1].content, "Yêu cầu đã được hủy.")
+
+    async def test_cancelling_running_turn_interrupts_model_task_and_records_terminal_event(self) -> None:
+        entered_model = asyncio.Event()
+
+        class WaitingExecutionPort(FakeExecutionPort):
+            async def create_plan(self, run_id, initial_state, on_assistant_token=None):
+                entered_model.set()
+                await asyncio.Event().wait()
+
+        repository = FakeConversationRepository()
+        service = ConversationService(repository, WaitingExecutionPort())
+        conversation = await service.create_conversation(title="Cancel active")
+        accepted = await service.start_message(conversation.id, "Research something")
+
+        with patch.object(settings, "CONVERSATION_TURN_POLL_SECONDS", 0.01):
+            worker_task = asyncio.create_task(service.process_next_turn(worker_id="test-worker"))
+            await asyncio.wait_for(entered_model.wait(), timeout=1)
+            await service.cancel_turn(conversation.id, accepted["turn_id"])
+            await asyncio.wait_for(worker_task, timeout=1)
+
+        turn = await repository.get_turn(conversation.id, accepted["turn_id"], "default_user")
+        events = await repository.list_turn_events(conversation.id, turn.id)
+        self.assertEqual(turn.status, "cancelled")
+        self.assertEqual(events[-1].type, "turn_cancelled")
+
+    async def test_sse_replay_cursor_skips_already_received_sequences(self) -> None:
+        service = ConversationService(FakeConversationRepository(), FakeExecutionPort())
+        conversation = await service.create_conversation(title="Replay cursor")
+        accepted = await service.start_message(conversation.id, "Research local LLMs")
+        await service.process_next_turn(worker_id="test-worker")
+
+        frames = [
+            frame
+            async for frame in service.stream_events(
+                conversation.id,
+                turn_id=accepted["turn_id"],
+                after_sequence=3,
+            )
+        ]
+        self.assertNotIn("id: 1\n", "".join(frames))
+        event_frames = [frame for frame in frames if '"type": "stream_ready"' not in frame]
+        self.assertTrue(all(int(frame.splitlines()[0].removeprefix("id: ")) > 3 for frame in event_frames))
+        self.assertEqual(frames[-1].splitlines()[0], "id: 6")
 
     async def test_ready_sse_subscriber_receives_first_streamed_assistant_chunk(self) -> None:
         from app.infrastructure.redis.conversation_event_publisher import (
@@ -919,10 +1117,59 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             "Research local models",
             turn_id=turn_id,
         )
+        await service.process_next_turn(worker_id="test-worker")
         frames = [frame async for frame in event_stream]
 
-        self.assertIn('"content": "I drafted "', "".join(frames))
-        self.assertIn('"content": "a workflow for review."', "".join(frames))
+        self.assertIn('"content": "I drafted a workflow for review."', "".join(frames))
+
+    async def test_sse_without_fanout_still_signals_ready_before_turn_is_accepted(self) -> None:
+        service = ConversationService(FakeConversationRepository(), FakeExecutionPort())
+        conversation = await service.create_conversation(title="Database-only event stream")
+        turn_id = "database-only-turn"
+        event_stream = service.stream_events(conversation.id, turn_id=turn_id)
+
+        ready_frame = await anext(event_stream)
+        self.assertIn('"type": "stream_ready"', ready_frame)
+        accepted = await service.start_message(
+            conversation.id,
+            "Research local models",
+            turn_id=turn_id,
+        )
+        await service.process_next_turn(worker_id="test-worker")
+        frames = [frame async for frame in event_stream]
+
+        self.assertEqual(accepted["turn_id"], turn_id)
+        self.assertIn('"type": "turn_completed"', "".join(frames))
+
+    async def test_sse_falls_back_to_durable_polling_when_fanout_fails(self) -> None:
+        class BrokenPublisher:
+            async def publish(self, event):
+                del event
+
+            async def _broken_subscription(self):
+                raise ConnectionError("Redis is unavailable")
+                yield
+
+            def subscribe(self, conversation_id, turn_id=None):
+                del conversation_id, turn_id
+                return self._broken_subscription()
+
+        service = ConversationService(
+            FakeConversationRepository(),
+            FakeExecutionPort(),
+            event_publisher=BrokenPublisher(),
+        )
+        conversation = await service.create_conversation(title="Redis outage")
+        turn_id = "redis-outage-turn"
+        event_stream = service.stream_events(conversation.id, turn_id=turn_id)
+
+        ready_frame = await anext(event_stream)
+        self.assertIn('"type": "stream_ready"', ready_frame)
+        await service.start_message(conversation.id, "Research local models", turn_id=turn_id)
+        await service.process_next_turn(worker_id="test-worker")
+        frames = [frame async for frame in event_stream]
+
+        self.assertIn('"type": "turn_completed"', "".join(frames))
 
     async def test_clarification_is_saved_and_the_next_message_continues_the_same_turn(self) -> None:
         class ClarifyingExecutionPort(FakeExecutionPort):
@@ -1012,6 +1259,7 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             conversation_id=conversation.id,
             content="Research something",
         )
+        await service.process_next_turn(worker_id="test-worker")
 
         events = [
             frame
@@ -1019,8 +1267,8 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
         ]
         event_text = "".join(events)
 
-        self.assertIn("planning_failed", event_text)
-        self.assertNotIn("planning_completed", event_text)
+        self.assertIn("turn_failed", event_text)
+        self.assertNotIn("turn_completed", event_text)
         persisted = await service.get_conversation(conversation.id)
         self.assertEqual(persisted.draft_plan, [])
         self.assertNotIn("supervisor_decision", persisted.metadata)
@@ -1032,7 +1280,7 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             for line in frame.splitlines()
             if line.startswith("data: ")
         ]
-        failure_event = next(event for event in event_payloads if event["type"] == "planning_failed")
+        failure_event = next(event for event in event_payloads if event["type"] == "turn_failed")
         self.assertEqual(failure_event["payload"]["error_id"], "planner-error-1")
 
 
