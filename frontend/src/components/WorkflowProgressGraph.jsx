@@ -74,11 +74,11 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
       <div className="workflow-progress__summary">
         <span className="workflow-progress__step-count">
           {isRunStarted
-            ? `${finishedCount} / ${tasks.length} bước đã kết thúc`
-            : `${tasks.length} bước trong kế hoạch`}
+            ? `${finishedCount} / ${tasks.length} steps finished`
+            : `${tasks.length} steps in this plan`}
         </span>
         {stages.some(stage => stage.nodes.length > 1) && (
-          <span className="workflow-progress__parallel-hint">Các node cùng hàng có thể chạy song song</span>
+          <span className="workflow-progress__parallel-hint">Tasks in the same stage can run in parallel</span>
         )}
       </div>
 
@@ -86,8 +86,8 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
         <div
           className="workflow-progress__track"
           role="progressbar"
-          aria-label="Tiến độ workflow"
-          aria-valuetext={`${finishedCount} trên ${tasks.length} bước đã kết thúc`}
+          aria-label="Workflow progress"
+          aria-valuetext={`${finishedCount} of ${tasks.length} steps finished`}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={progress}
@@ -108,10 +108,10 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
             <div
               className="workflow-progress__stage"
               role="group"
-              aria-label={`Giai đoạn ${stageIndex + 1}`}
+              aria-label={`Stage ${stageIndex + 1}`}
             >
               {stages.length > 1 && (
-                <span className="workflow-progress__stage-label">Giai đoạn {stageIndex + 1}</span>
+                <span className="workflow-progress__stage-label">Stage {stageIndex + 1}</span>
               )}
               <div className="workflow-progress__nodes">
                 {stage.nodes.map(({ task, index }) => {
@@ -139,13 +139,13 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
                         <TaskStatusBadge status={status} />
                       </div>
                       <p className="workflow-node__description">
-                        {task?.description || `Bước ${index + 1}`}
+                        {task?.description || `Step ${index + 1}`}
                       </p>
                       <div className="workflow-node__meta">
                         <span><Bot size={13} aria-hidden="true" /> {agentName}</span>
                         {dependencies.length > 0 && (
                           <span className="workflow-node__dependencies">
-                            Sau bước {dependencyNumbers.join(', ')}
+                            After step {dependencyNumbers.join(', ')}
                           </span>
                         )}
                       </div>

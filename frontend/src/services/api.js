@@ -42,7 +42,11 @@ function formatApiError(statusCode, body, fallback) {
     const error = payload?.error;
     if (error && typeof error === 'object') {
       message = error.message || error.detail || message;
-      if (error.error_id) message = `${message} (Mã tham chiếu: ${error.error_id})`;
+      const diagnostics = [
+        error.error_id ? `Error ID: ${error.error_id}` : null,
+        error.request_id ? `Request ID: ${error.request_id}` : null
+      ].filter(Boolean);
+      if (diagnostics.length > 0) message = `${message} (${diagnostics.join(' · ')})`;
     } else if (typeof payload?.detail === 'string') {
       message = payload.detail;
     }

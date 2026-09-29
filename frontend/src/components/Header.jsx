@@ -15,7 +15,7 @@ export default function Header({ user, onLogout }) {
         </div>
         <div>
           <div className="brand-name">AgentFlow</div>
-          <p className="brand-caption">Không gian nghiên cứu thông minh</p>
+          <p className="brand-caption">Research, organized</p>
         </div>
       </div>
 
@@ -25,9 +25,9 @@ export default function Header({ user, onLogout }) {
           <span className="account-name" title={user.display_name || user.email}>
             {user.display_name || user.email}
           </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onLogout} title="Đăng xuất">
+          <Button type="button" variant="ghost" size="sm" onClick={onLogout} title="Sign out">
             <LogOut data-icon="inline-start" />
-            Đăng xuất
+            Sign out
           </Button>
         </div>
       )}

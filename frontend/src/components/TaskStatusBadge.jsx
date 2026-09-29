@@ -3,17 +3,17 @@ import { Badge } from './ui/badge';
 import { Spinner } from './ui/spinner';
 
 const TASK_STATUS = {
-  pending: { label: 'Chờ đến lượt', tone: 'pending', variant: 'outline', Icon: Circle },
-  queued: { label: 'Đang chờ', tone: 'pending', variant: 'outline', Icon: Circle },
-  running: { label: 'Đang chạy', tone: 'running', variant: 'secondary', Icon: Spinner },
-  done: { label: 'Hoàn tất', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
-  success: { label: 'Hoàn tất', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
-  completed: { label: 'Hoàn tất', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
-  partial: { label: 'Hoàn tất một phần', tone: 'partial', variant: 'outline', Icon: AlertCircle },
-  failed: { label: 'Thất bại', tone: 'failed', variant: 'destructive', Icon: AlertCircle },
-  skipped: { label: 'Đã bỏ qua', tone: 'skipped', variant: 'ghost', Icon: SkipForward },
-  cancelled: { label: 'Đã hủy', tone: 'skipped', variant: 'ghost', Icon: SkipForward },
-  interrupted: { label: 'Bị gián đoạn', tone: 'partial', variant: 'outline', Icon: AlertCircle }
+  pending: { label: 'Pending', tone: 'pending', variant: 'outline', Icon: Circle },
+  queued: { label: 'Queued', tone: 'pending', variant: 'outline', Icon: Circle },
+  running: { label: 'Running', tone: 'running', variant: 'secondary', Icon: Spinner },
+  done: { label: 'Completed', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
+  success: { label: 'Completed', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
+  completed: { label: 'Completed', tone: 'done', variant: 'secondary', Icon: CheckCircle2 },
+  partial: { label: 'Partially complete', tone: 'partial', variant: 'outline', Icon: AlertCircle },
+  failed: { label: 'Failed', tone: 'failed', variant: 'destructive', Icon: AlertCircle },
+  skipped: { label: 'Skipped', tone: 'skipped', variant: 'ghost', Icon: SkipForward },
+  cancelled: { label: 'Cancelled', tone: 'skipped', variant: 'ghost', Icon: SkipForward },
+  interrupted: { label: 'Interrupted', tone: 'partial', variant: 'outline', Icon: AlertCircle }
 };
 
 export default function TaskStatusBadge({ status }) {
@@ -25,7 +25,7 @@ export default function TaskStatusBadge({ status }) {
     <Badge
       variant={details.variant}
       className={`task-status task-status--${details.tone}`}
-      aria-label={`Trạng thái: ${details.label}`}
+      aria-label={`Status: ${details.label}`}
       title={details.label}
     >
       <Icon data-icon="inline-start" />

@@ -30,6 +30,7 @@ import {
   logout as logoutUser
 } from './services/api';
 
+// Keep Vietnamese phrases as accepted user input; they are not rendered as UI copy.
 const APPROVAL_COMMANDS = new Set([
   'ok',
   'đồng ý',
@@ -85,7 +86,7 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
     setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
       ? {
         ...message,
-        text: queued ? 'Đã nhận yêu cầu, đang chờ worker xử lý…' : '',
+        text: queued ? 'Request received. Waiting for an available worker…' : '',
         isQueued: queued,
         isGenerating: true
       }
@@ -119,15 +120,15 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
   const completed = ['turn_completed', 'planning_completed'].includes(eventData.type);
   if (!failed && !cancelled && !interrupted && !completed) return;
   if (failed || interrupted) {
-    const text = payload.message || 'Yêu cầu bị gián đoạn trước khi hoàn tất. Bạn có thể gửi lại để thử tiếp.';
+    const text = payload.message || 'The request was interrupted before it finished. You can try again.';
     setMessages(previous => ensureAssistant(previous, text).map(message => message.turnId === turnId
       ? { ...message, text: message.text || text, isGenerating: false, isError: true, errorId: payload.error_id }
       : message));
     setActivePlan([]);
     setDraftPlan([]);
   } else if (cancelled) {
-    setMessages(previous => ensureAssistant(previous, 'Yêu cầu đã được hủy.').map(message => message.turnId === turnId
-      ? { ...message, text: message.text || 'Yêu cầu đã được hủy.', isGenerating: false }
+    setMessages(previous => ensureAssistant(previous, 'Request cancelled.').map(message => message.turnId === turnId
+      ? { ...message, text: message.text || 'Request cancelled.', isGenerating: false }
       : message));
   } else {
     setMessages(previous => previous.map(message => message.turnId === turnId
@@ -629,7 +630,7 @@ export default function App() {
         runStreamRef.current = null;
       }
       setAuthUser(null);
-      setAuthMessage('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.');
+      setAuthMessage('Your session has expired. Please sign in again to continue.');
       setConversationId(null);
       setConversationClosed(false);
       setCurrentRun(null);
@@ -689,7 +690,7 @@ export default function App() {
     const isApprovalMessage = isApprovalCommand(textPrompt);
 
     if (!startsNewConversation && draftPlan.length > 0 && isApprovalMessage) {
-      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt. Bạn có thể theo dõi tiến độ ngay trong hội thoại và mở kết quả sau khi quy trình hoàn tất.', duration: '0.1' }]);
+      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Plan approved. Track progress in this conversation and open the results when the workflow is complete.', duration: '0.1' }]);
       await handleApprovePlan();
       return;
     }
@@ -747,7 +748,7 @@ export default function App() {
             setMessages(prev => prev.map(message => message.turnId === turnId
               ? {
                 ...message,
-                text: 'Kết nối theo dõi bị gián đoạn. Hãy tải lại hội thoại để xem trạng thái mới nhất.',
+                text: 'The progress connection was interrupted. Reload the conversation to see the latest status.',
                 isGenerating: false,
                 isError: true
               }
@@ -775,16 +776,16 @@ export default function App() {
           setMessages(prev => [...prev, {
             sender: 'supervisor',
             text: latestAssistantMessage || (decision === 'propose_plan'
-              ? `Tôi đã chuẩn bị kế hoạch gồm ${plan.length} bước. Bạn có thể xem lại rồi chọn bắt đầu.`
+              ? `I prepared a ${plan.length}-step plan. Review it, then choose Start when you are ready.`
               : decision === 'answer'
-                ? 'Tôi đã trả lời yêu cầu của bạn.'
-                : 'Tôi đã ghi nhận yêu cầu. Bạn hãy làm rõ thêm chi tiết nhé!'),
+                ? 'I have answered your request.'
+                : 'I have noted your request. Please provide a little more detail.'),
             duration: ((Date.now() - sendStartTime) / 1000).toFixed(2)
           }]);
         }
       } else {
         const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-        const errorText = 'Không thể kết nối backend. Hãy kiểm tra backend rồi thử lại.';
+        const errorText = 'Unable to connect to the backend. Check that it is running, then try again.';
         setMessages(prev => {
           const messageIndex = prev.findIndex(message => message.turnId === turnId);
           if (messageIndex < 0) {
@@ -809,7 +810,7 @@ export default function App() {
       conversationStreamRef.current = null;
       console.error('Error starting run:', err);
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-      const errorText = `Có lỗi kết nối: ${err.message}`;
+      const errorText = `Connection error: ${err.message}`;
       setMessages(prev => {
         const messageIndex = prev.findIndex(message => message.turnId === turnId);
         if (messageIndex < 0) {
@@ -965,14 +966,14 @@ export default function App() {
       if (conversationId) {
         setMessages(previous => [...previous, {
           sender: 'supervisor',
-          text: 'Đã yêu cầu dừng workflow. Nếu một bước đang xử lý, hệ thống có thể cần hoàn tất bước đó trước khi dừng hẳn.'
+          text: 'A stop request was sent. If a step is already processing, it may need to finish before the workflow stops.'
         }]);
       }
     } catch (error) {
       if (conversationId) {
         setMessages(previous => [...previous, {
           sender: 'supervisor',
-          text: `Không thể hủy workflow: ${error.message}`
+          text: `Unable to cancel the workflow: ${error.message}`
         }]);
       }
     } finally {
@@ -988,7 +989,7 @@ export default function App() {
     } catch (error) {
       setMessages(previous => [...previous, {
         sender: 'supervisor',
-        text: `Không thể hủy yêu cầu: ${error.message}`,
+        text: `Unable to cancel the request: ${error.message}`,
         isError: true
       }]);
     } finally {
@@ -1001,8 +1002,8 @@ export default function App() {
     const linkedRun = conversationRun;
     const linkedRunIsActive = Boolean(linkedRun && ACTIVE_RUN_STATUSES.has(linkedRun.status));
     const warning = linkedRunIsActive
-          ? 'Hội thoại sẽ bị xóa vĩnh viễn. Quy trình đang chạy sẽ không bị hủy và vẫn có thể theo dõi trong Lịch sử chạy. Tiếp tục?'
-      : 'Xóa vĩnh viễn hội thoại này và các tin nhắn của nó?';
+          ? 'This conversation will be permanently deleted. The active workflow will not be cancelled and can still be tracked in Run history. Continue?'
+      : 'Permanently delete this conversation and its messages?';
     if (!window.confirm(warning)) return;
 
     setIsDeletingConversation(true);
@@ -1043,7 +1044,7 @@ export default function App() {
     } catch (error) {
       setMessages(previous => [...previous, {
         sender: 'supervisor',
-        text: `Không thể xóa hội thoại: ${error.message}`
+        text: `Unable to delete the conversation: ${error.message}`
       }]);
     } finally {
       setIsDeletingConversation(false);
