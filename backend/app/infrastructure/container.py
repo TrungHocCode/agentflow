@@ -87,7 +87,7 @@ def build_workflow_service(session: AsyncSession) -> WorkflowService:
     )
 
 
-def build_auth_service(session: AsyncSession | None = None) -> IdentityService:
+def build_auth_service(session: AsyncSession) -> IdentityService:
     """Compose the identity service."""
 
     return IdentityService(

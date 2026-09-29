@@ -29,7 +29,10 @@ from app.modules.system.ports import RateLimiter
 from app.shared.errors import AuthenticationError
 
 
-async def get_current_user_id(authorization: str | None = Header(None)) -> str:
+async def get_current_user_id(
+    authorization: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> str:
     """Resolve the authenticated user, retaining a test-only compatibility user."""
 
     if os.getenv("TESTING", "").lower() == "true":
@@ -39,7 +42,7 @@ async def get_current_user_id(authorization: str | None = Header(None)) -> str:
     try:
         # Recheck account activity on each authenticated request so disabling an
         # account takes effect before the access token naturally expires.
-        user = await build_auth_service().current_user(authorization.split(" ", 1)[1].strip())
+        user = await build_auth_service(db).current_user(authorization.split(" ", 1)[1].strip())
         return user.id
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token.") from exc
