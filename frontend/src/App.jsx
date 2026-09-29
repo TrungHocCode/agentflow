@@ -1051,7 +1051,7 @@ export default function App() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
+    <div className="app-shell">
       {/* Top Header */}
       <Header 
         user={authUser}
@@ -1059,12 +1059,12 @@ export default function App() {
       />
 
       {/* Main Layout Body */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div className="workspace-layout">
         {/* Left Navigation Sidebar */}
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
         {/* Dynamic Center View Tab */}
-        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+        <main className="workspace-main">
           {activeTab === 'studio' && (
             <ChatStudio 
               messages={messages}
