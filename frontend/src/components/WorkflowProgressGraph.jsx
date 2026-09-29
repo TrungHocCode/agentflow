@@ -16,6 +16,12 @@ function getDependencies(task) {
     : [];
 }
 
+function displayAgentName(identifier) {
+  return String(identifier || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+}
+
 function groupTasksByStage(tasks) {
   const taskIds = new Set(tasks.map(getTaskId));
   const remaining = tasks.map((task, index) => ({ task, index, id: getTaskId(task, index) }));
@@ -118,7 +124,9 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
                   }[status] || status;
                   const dependencies = getDependencies(task);
                   const dependencyNumbers = dependencies.map(id => displayNumberById.get(id) ?? id);
-                  const agentName = task?.node && task.node !== 'worker' ? task.node : 'Research agent';
+                  const agentName = task?.node && task.node !== 'worker'
+                    ? displayAgentName(task.node)
+                    : 'Research agent';
 
                   return (
                     <article

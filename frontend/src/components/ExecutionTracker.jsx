@@ -1,7 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Clock, Activity, FileText, Timer, Download, XCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, Clock3, Download, FileText, Timer, XCircle } from 'lucide-react';
 import StructuredText from './StructuredText';
 import TaskStatusBadge from './TaskStatusBadge';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Spinner } from './ui/spinner';
 
 const STATUS_LABELS = {
   pending: 'Chờ duyệt',
@@ -16,6 +20,11 @@ const STATUS_LABELS = {
   abandoned: 'Đã dừng'
 };
 
+function resultText(result) {
+  if (typeof result?.result === 'object') return JSON.stringify(result.result, null, 2);
+  return String(result?.result ?? (typeof result === 'object' ? JSON.stringify(result, null, 2) : result));
+}
+
 export default function ExecutionTracker({
   currentRun,
   results,
@@ -27,133 +36,126 @@ export default function ExecutionTracker({
   isCancelling
 }) {
   const [liveSeconds, setLiveSeconds] = useState(0);
+  const canCancel = ['queued', 'running'].includes(currentRun?.status);
+  const finishedCount = (plan || []).filter(task => ['done', 'success', 'completed', 'partial', 'failed', 'skipped', 'cancelled', 'interrupted'].includes(String(task?.status || '').toLowerCase())).length;
+  const statusTone = ['failed', 'interrupted'].includes(currentRun?.status)
+    ? 'failed'
+    : currentRun?.status === 'completed' ? 'done'
+      : ['queued', 'running'].includes(currentRun?.status) ? 'running' : 'pending';
 
   useEffect(() => {
-    let timer;
-    if (isStreaming) {
+    if (!isStreaming) {
       setLiveSeconds(0);
-      const start = Date.now();
-      timer = setInterval(() => {
-        setLiveSeconds(((Date.now() - start) / 1000).toFixed(1));
-      }, 100);
+      return undefined;
     }
-    return () => clearInterval(timer);
+    const start = Date.now();
+    const timer = window.setInterval(() => setLiveSeconds(((Date.now() - start) / 1000).toFixed(1)), 250);
+    return () => window.clearInterval(timer);
   }, [isStreaming]);
 
-  const canCancel = ['queued', 'running'].includes(currentRun?.status);
-
   return (
-    <div style={{ flex: 1, padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem', overflowY: 'auto' }}>
-      {/* Header Banner */}
-      <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ padding: '0.5rem', borderRadius: '8px', background: isStreaming ? 'rgba(6,182,212,0.15)' : 'rgba(16,185,129,0.15)', border: isStreaming ? '1px solid rgba(6,182,212,0.3)' : '1px solid rgba(16,185,129,0.3)' }}>
-            <Activity style={{ width: '22px', height: '22px', color: isStreaming ? 'var(--accent-cyan)' : 'var(--accent-emerald)' }} />
-          </div>
-          <div>
-            <h2 style={{ fontSize: '1.125rem', color: '#fff' }}>Tiến độ quy trình</h2>
-            <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-              {currentRun ? STATUS_LABELS[currentRun.status] || 'Đang cập nhật' : 'Chưa có lượt chạy'}
-            </p>
-          </div>
+    <section className="page-frame" aria-labelledby="runs-title">
+      <div className="page-heading">
+        <div className="page-heading__copy">
+          <p className="page-eyebrow">THEO DÕI NGHIÊN CỨU</p>
+          <h1 id="runs-title" className="page-title">Tiến độ quy trình</h1>
+          <p className="page-description">
+            {currentRun ? STATUS_LABELS[currentRun.status] || 'Đang cập nhật trạng thái' : 'Chưa có lượt chạy nào được chọn.'}
+          </p>
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div className="run-heading-actions">
+          {currentRun && (
+            <Badge variant={statusTone === 'failed' ? 'destructive' : 'secondary'} className={`run-status run-status--${statusTone}`}>
+              {isStreaming && <Spinner data-icon="inline-start" />}
+              {STATUS_LABELS[currentRun.status] || 'Đang cập nhật'}
+            </Badge>
+          )}
           {isStreaming ? (
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '0.375rem 0.75rem', borderRadius: '20px', background: 'rgba(6,182,212,0.15)', border: '1px solid rgba(6,182,212,0.4)', color: 'var(--accent-cyan)', fontSize: '0.8125rem', fontWeight: '600' }}>
-              <Timer style={{ width: '14px', height: '14px' }} className="spin-slow" />
-              Đang chạy: {liveSeconds}s
-            </span>
-          ) : (
-            (executionDuration || currentRun?.execution_time_ms > 0) && (
-              <span style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '0.375rem 0.75rem', borderRadius: '20px', background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.4)', color: 'var(--accent-emerald)', fontSize: '0.8125rem', fontWeight: '600' }}>
-                <Clock style={{ width: '14px', height: '14px' }} />
-                Thời gian: {executionDuration || (currentRun.execution_time_ms / 1000).toFixed(2)}s
-              </span>
-            )
-          )}
-
+            <Badge variant="outline" className="run-time-badge"><Timer data-icon="inline-start" />{liveSeconds}s</Badge>
+          ) : (executionDuration || currentRun?.execution_time_ms > 0) ? (
+            <Badge variant="outline" className="run-time-badge">
+              <Clock3 data-icon="inline-start" />{executionDuration || (currentRun.execution_time_ms / 1000).toFixed(2)}s
+            </Badge>
+          ) : null}
           {canCancel && (
-            <button
-              className="btn-secondary"
-              onClick={onCancelRun}
-              disabled={isCancelling}
-              style={{ color: 'var(--accent-rose)', gap: '0.4rem' }}
-            >
-              <XCircle size={15} /> {isCancelling ? 'Đang hủy…' : 'Hủy quy trình'}
-            </button>
+            <Button type="button" variant="destructive" size="sm" onClick={onCancelRun} disabled={isCancelling}>
+              <XCircle data-icon="inline-start" />{isCancelling ? 'Đang hủy…' : 'Hủy quy trình'}
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="execution-tracker-grid" style={{ flex: 1 }}>
-        {/* Workflow steps */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="glass-panel" style={{ padding: '1.25rem' }}>
-            <h3 style={{ fontSize: '0.9375rem', color: '#fff', marginBottom: '0.875rem' }}>Các bước</h3>
-            {(!plan || plan.length === 0) ? (
-              <p style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>Chưa có bước nào trong quy trình.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {plan.map((t, idx) => (
-                  <div key={t?.id || idx} className="glass-card execution-task-row">
-                    <span className={`execution-task-number${t?.status === 'running' ? ' execution-task-number--running' : ''}`}>
-                      {idx + 1}
-                    </span>
-                    <span className="execution-task-description">
-                      {t?.description || `Bước ${idx + 1}`}
-                    </span>
-                    <TaskStatusBadge status={t?.status} />
+      {!currentRun ? (
+        <Card className="surface-card empty-state">
+          <span className="empty-state__icon" aria-hidden="true"><Activity /></span>
+          <CardTitle className="empty-state__title">Chưa có lượt chạy để hiển thị</CardTitle>
+          <CardDescription className="empty-state__description">
+            Khi bạn duyệt và bắt đầu một kế hoạch, tiến độ từng bước và kết quả sẽ xuất hiện tại đây.
+          </CardDescription>
+        </Card>
+      ) : (
+        <div className="execution-tracker-grid run-view-grid">
+          <Card className="surface-card run-card">
+            <CardHeader>
+              <CardTitle>Các bước thực hiện</CardTitle>
+              <CardDescription>
+                {plan?.length ? `${finishedCount} / ${plan.length} bước đã kết thúc` : 'Chưa có thông tin bước thực hiện.'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="run-task-list">
+              {(!plan || plan.length === 0) ? (
+                <p className="run-empty-hint">Các bước sẽ hiển thị khi backend gửi kế hoạch chạy.</p>
+              ) : plan.map((task, index) => (
+                <article key={task?.id || index} className="run-task-card">
+                  <span className={`execution-task-number${task?.status === 'running' ? ' execution-task-number--running' : ''}`}>
+                    {index + 1}
+                  </span>
+                  <div className="run-task-card__content">
+                    <p className="execution-task-description">{task?.description || `Bước ${index + 1}`}</p>
+                    {task?.node && task.node !== 'worker' && <span className="run-task-agent">{task.node}</span>}
                   </div>
-                ))}
+                  <TaskStatusBadge status={task?.status} />
+                </article>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card className="surface-card run-card run-results-card">
+            <CardHeader className="run-results-card__header">
+              <div>
+                <CardTitle>Kết quả theo bước</CardTitle>
+                <CardDescription>Đầu ra được lưu lại từ từng agent.</CardDescription>
               </div>
-            )}
-          </div>
-
-        </div>
-
-        {/* Right Column: Execution Output Artifacts Viewer */}
-        <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
-            <FileText style={{ width: '20px', height: '20px', color: 'var(--accent-violet)' }} />
-            <h3 style={{ flex: 1, fontSize: '1rem', color: '#fff' }}>Kết quả theo bước</h3>
-            {currentRun?.run_id && (
-              <button className="btn-secondary" onClick={onOpenResults} style={{ gap: '0.4rem' }}>
-                <Download size={15} /> Mở báo cáo / tải kết quả
-              </button>
-            )}
-          </div>
-
-          {(!results || results.length === 0) ? (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: 'var(--text-muted)' }}>
-              <FileText style={{ width: '40px', height: '40px', marginBottom: '0.75rem', opacity: 0.5 }} />
-              <p style={{ fontSize: '0.875rem' }}>Kết quả sẽ xuất hiện tại đây khi các bước hoàn tất.</p>
-            </div>
-          ) : (
-            results.map((res, i) => {
-              const resultText = typeof res?.result === 'object'
-                ? JSON.stringify(res.result, null, 2)
-                : String(res?.result ?? (typeof res === 'object' ? JSON.stringify(res, null, 2) : String(res)));
-
-              return (
-                <div key={i} className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: '0.875rem', fontWeight: '700', color: 'var(--accent-cyan)' }}>
-                      Bước {res?.task_id || i + 1}
-                    </span>
-                    <TaskStatusBadge status={res?.status || 'done'} />
-                  </div>
-                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{res?.description || ''}</p>
-                  <div style={{ background: 'rgba(15,23,42,0.45)', padding: '0.75rem', borderRadius: '6px', fontSize: '0.8125rem', color: '#e2e8f0', maxHeight: '300px', overflowY: 'auto' }}>
-                    <StructuredText text={resultText} />
-                  </div>
+              {currentRun.run_id && (
+                <Button type="button" variant="outline" size="sm" onClick={onOpenResults}>
+                  <Download data-icon="inline-start" />Mở báo cáo
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent className="run-results-list">
+              {(!results || results.length === 0) ? (
+                <div className="run-results-empty">
+                  <FileText aria-hidden="true" />
+                  <p>{isStreaming ? 'Kết quả sẽ xuất hiện khi các bước hoàn tất.' : 'Lượt chạy này chưa có đầu ra được lưu.'}</p>
                 </div>
-              );
-            })
-          )}
+              ) : results.map((result, index) => (
+                <article key={result?.task_id || index} className="run-output-card">
+                  <header className="run-output-card__header">
+                    <div>
+                      <p className="run-output-card__step">Bước {result?.task_id || index + 1}</p>
+                      {result?.description && <p className="run-output-card__description">{result.description}</p>}
+                    </div>
+                    <TaskStatusBadge status={result?.status || 'done'} />
+                  </header>
+                  <div className="run-output-card__content">
+                    <StructuredText text={resultText(result)} />
+                  </div>
+                </article>
+              ))}
+            </CardContent>
+          </Card>
         </div>
-
-      </div>
-    </div>
+      )}
+    </section>
   );
 }
