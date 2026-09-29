@@ -319,6 +319,9 @@ class PostgresConversationRepository(ConversationRepository):
                 await session.flush()
                 turn.last_event_sequence = 1
                 session.add(self._turn_to_orm(turn))
+                # Flush the parent row before inserting an event that references it.
+                # SQLAlchemy does not guarantee this ordering without an ORM relationship.
+                await session.flush()
                 session.add(
                     ConversationTurnEventModel(
                         event_id=str(uuid.uuid4()),
