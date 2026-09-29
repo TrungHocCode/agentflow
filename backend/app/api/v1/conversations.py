@@ -1,9 +1,9 @@
 """Conversation HTTP endpoints for the Build Phase."""
 
 import os
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.dependencies import get_conversation_service, get_current_user_id, get_rate_limiter
@@ -13,6 +13,7 @@ from app.modules.conversations.models import (
     ConversationMessage,
     ConversationMessageRequest,
     ConversationResponse,
+    ConversationTurnSnapshot,
 )
 from app.modules.conversations.service import ConversationService
 from app.modules.system.ports import RateLimiter
@@ -96,6 +97,36 @@ async def list_conversation_messages(
     return await service.list_messages(conversation_id, limit=limit)
 
 
+@router.get("/{conversation_id}/turns", response_model=List[ConversationTurnSnapshot])
+async def list_conversation_turns(
+    conversation_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    service: ConversationService = Depends(get_conversation_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    conversation = await service.get_conversation(conversation_id, user_id=user_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+    turns = await service.list_turns(conversation_id, user_id=user_id, limit=limit)
+    return [ConversationTurnSnapshot.model_validate(turn.model_dump()) for turn in turns]
+
+
+@router.post(
+    "/{conversation_id}/turns/{turn_id}/cancel",
+    response_model=ConversationTurnSnapshot,
+)
+async def cancel_conversation_turn(
+    conversation_id: str,
+    turn_id: str,
+    service: ConversationService = Depends(get_conversation_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    turn = await service.cancel_turn(conversation_id, turn_id, user_id=user_id)
+    if turn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation turn not found.")
+    return ConversationTurnSnapshot.model_validate(turn.model_dump())
+
+
 @router.post("/{conversation_id}/messages", response_model=None)
 async def send_conversation_message(
     conversation_id: str,
@@ -140,7 +171,9 @@ async def send_conversation_message(
 @router.get("/{conversation_id}/events")
 async def stream_conversation_events(
     conversation_id: str,
-    turn_id: Optional[str] = Query(None),
+    turn_id: str = Query(...),
+    after_sequence: int = Query(0, ge=0),
+    last_event_id: str | None = Header(None, alias="Last-Event-ID"),
     service: ConversationService = Depends(get_conversation_service),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -150,8 +183,20 @@ async def stream_conversation_events(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Conversation with ID '{conversation_id}' not found.",
         )
+    try:
+        cursor = max(after_sequence, int(last_event_id)) if last_event_id else after_sequence
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Last-Event-ID must be a non-negative event sequence.",
+        ) from exc
     return StreamingResponse(
-        service.stream_events(conversation_id, turn_id=turn_id),
+        service.stream_events(
+            conversation_id,
+            turn_id=turn_id,
+            after_sequence=cursor,
+            user_id=user_id,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )

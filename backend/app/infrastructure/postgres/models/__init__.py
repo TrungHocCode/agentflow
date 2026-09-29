@@ -7,6 +7,8 @@ from app.infrastructure.postgres.models.catalog import (
 from app.infrastructure.postgres.models.conversation import (
     ConversationMessageModel,
     ConversationModel,
+    ConversationTurnEventModel,
+    ConversationTurnModel,
 )
 from app.infrastructure.postgres.models.flow import FlowModel
 from app.infrastructure.postgres.models.run import RunEventModel, RunModel
@@ -29,6 +31,8 @@ __all__ = [
     "ToolCatalogModel",
     "ConversationMessageModel",
     "ConversationModel",
+    "ConversationTurnModel",
+    "ConversationTurnEventModel",
     "FlowModel",
     "RunEventModel",
     "RunModel",

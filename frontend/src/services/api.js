@@ -217,15 +217,36 @@ export async function deleteConversation(conversationId) {
 }
 
 export async function sendConversationMessage(conversationId, content, turnId = null) {
-  return requestJson(`${API_BASE}/conversations/${conversationId}/messages`, {
+  const url = `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/messages`;
+  const options = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content, ...(turnId ? { turn_id: turnId } : {}) })
-  });
+  };
+  try {
+    return await requestJson(url, options);
+  } catch (error) {
+    // Reuse the same client turn ID: PostgreSQL makes this retry idempotent if
+    // the server committed the turn but the HTTP response was lost.
+    if (!turnId || /^\d{3}:/.test(error.message || '')) throw error;
+    await new Promise(resolve => window.setTimeout(resolve, 200));
+    return requestJson(url, options);
+  }
 }
 
 export async function getConversationMessages(conversationId) {
   return requestJson(`${API_BASE}/conversations/${conversationId}/messages`);
+}
+
+export async function getConversationTurns(conversationId) {
+  return requestJson(`${API_BASE}/conversations/${encodeURIComponent(conversationId)}/turns`);
+}
+
+export async function cancelConversationTurn(conversationId, turnId) {
+  return requestJson(
+    `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/cancel`,
+    { method: 'POST' }
+  );
 }
 
 export async function getRunEvents(runId, afterEventId = null, limit = 1000) {
@@ -268,52 +289,72 @@ export async function approveRun(runId, planRevision) {
 function subscribeAuthenticatedSSE(url, onMessage, onError, extraHeaders = {}) {
   const controller = new window.AbortController();
   let closed = false;
+  let connectedOnce = false;
+  let lastEventId = extraHeaders['Last-Event-ID'] || null;
 
   const consume = async () => {
-    const requestGeneration = authSessionGeneration;
-    const token = localStorage.getItem('agentflow_access_token');
-    try {
-      const response = await fetch(url, {
-        headers: withAuthHeaders({ Accept: 'text/event-stream', ...extraHeaders }, token),
-        cache: 'no-store',
-        signal: controller.signal
-      });
+    let retryDelay = 500;
+    while (!closed) {
+      const requestGeneration = authSessionGeneration;
+      const token = localStorage.getItem('agentflow_access_token');
+      try {
+        const headers = { Accept: 'text/event-stream', ...extraHeaders };
+        if (lastEventId) headers['Last-Event-ID'] = lastEventId;
+        const response = await fetch(url, {
+          headers: withAuthHeaders(headers, token),
+          cache: 'no-store',
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        if (response.status === 401) expireSessionIfCurrent(token, requestGeneration);
-        const detail = await response.text();
-        throw formatApiError(response.status, detail, response.statusText);
+        if (!response.ok) {
+          if (response.status === 401) expireSessionIfCurrent(token, requestGeneration);
+          const detail = await response.text();
+          const error = formatApiError(response.status, detail, response.statusText);
+          error.status = response.status;
+          throw error;
+        }
+        if (!response.body) throw new Error('The browser does not support streaming responses.');
+        connectedOnce = true;
+        retryDelay = 500;
+
+        const reader = response.body.getReader();
+        const decoder = new window.TextDecoder();
+        let buffer = '';
+
+        const handleFrame = (frame) => {
+          const lines = frame.split(/\r?\n/);
+          const eventId = lines.find(line => line.startsWith('id:'));
+          if (eventId) lastEventId = eventId.slice(3).trim();
+          const data = lines
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).replace(/^ /, ''))
+            .join('\n');
+          if (!data) return;
+          if (onMessage) onMessage(JSON.parse(data));
+        };
+
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() || '';
+          frames.forEach(handleFrame);
+        }
+        buffer += decoder.decode();
+        if (buffer.trim()) handleFrame(buffer);
+        if (closed) break;
+        throw new Error('SSE connection closed; reconnecting.');
+      } catch (error) {
+        if (closed || error.name === 'AbortError') break;
+        const permanent = Number.isInteger(error.status) && error.status >= 400 && error.status < 500;
+        if (!connectedOnce || permanent) {
+          if (onError) onError(error);
+          if (permanent) break;
+        }
+        await new Promise(resolve => window.setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, 10000);
       }
-      if (!response.body) throw new Error('The browser does not support streaming responses.');
-
-      const reader = response.body.getReader();
-      const decoder = new window.TextDecoder();
-      let buffer = '';
-
-      const handleFrame = (frame) => {
-        const data = frame
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).replace(/^ /, ''))
-          .join('\n');
-        if (!data) return;
-        if (onMessage) onMessage(JSON.parse(data));
-      };
-
-      while (!closed) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split(/\r?\n\r?\n/);
-        buffer = frames.pop() || '';
-        frames.forEach(handleFrame);
-      }
-
-      buffer += decoder.decode();
-      if (buffer.trim()) handleFrame(buffer);
-      if (!closed && onError) onError(new Error('SSE connection closed before it was unsubscribed.'));
-    } catch (error) {
-      if (!closed && error.name !== 'AbortError' && onError) onError(error);
     }
   };
 
@@ -334,7 +375,7 @@ export function subscribeRunSSEStream(runId, onMessage, onError, lastEventId = n
   );
 }
 
-export function subscribeConversationEvents(conversationId, turnId, onMessage, onError) {
-  const url = `${API_BASE}/conversations/${conversationId}/events?turn_id=${encodeURIComponent(turnId)}`;
-  return subscribeAuthenticatedSSE(url, onMessage, onError);
+export function subscribeConversationEvents(conversationId, turnId, onMessage, onError, afterSequence = 0) {
+  const url = `${API_BASE}/conversations/${encodeURIComponent(conversationId)}/events?turn_id=${encodeURIComponent(turnId)}&after_sequence=${afterSequence}`;
+  return subscribeAuthenticatedSSE(url, onMessage, onError, afterSequence ? { 'Last-Event-ID': String(afterSequence) } : {});
 }

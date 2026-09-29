@@ -13,6 +13,8 @@ class ConversationEvent(BaseModel):
     turn_id: str
     type: str
     payload: Dict[str, Any] = Field(default_factory=dict)
+    sequence: int = 0
+    schema_version: int = 1
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
