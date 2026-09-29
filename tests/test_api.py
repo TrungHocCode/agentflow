@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from app.main import app, http_error_handler
 from app.api.dependencies import get_run_query_service, get_workflow_service
+from app.db.postgres_client import get_db
 from app.execution.model_router import InferencePurpose
 from app.execution.state import SupervisorOutput, Task
 from app.core.config import settings
@@ -110,6 +111,61 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error"]["code"], "persistence_unavailable")
+
+    async def test_auth_dependency_uses_request_scoped_database_session(self) -> None:
+        session = object()
+
+        async def override_get_db() -> AsyncIterator[object]:
+            yield session
+
+        class FakeAuthService:
+            async def current_user(self, _token: str) -> UserRecord:
+                now = datetime.now(timezone.utc)
+                return UserRecord(
+                    id="api-user",
+                    email="api-user@example.com",
+                    display_name="API User",
+                    created_at=now,
+                    updated_at=now,
+                )
+
+        class FakeRunService:
+            async def list_runs(
+                self,
+                flow_id: str | None = None,
+                limit: int = 50,
+                user_id: str | None = None,
+            ) -> list[object]:
+                return []
+
+        previous_db_override = app.dependency_overrides.get(get_db)
+        previous_run_override = app.dependency_overrides.get(get_run_query_service)
+        app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_run_query_service] = FakeRunService
+        token = create_access_token("api-user", settings.AUTH_SIGNING_SECRET, 300)
+
+        try:
+            with patch.dict(os.environ, {"TESTING": "false"}), patch(
+                "app.api.dependencies.build_auth_service",
+                return_value=FakeAuthService(),
+            ) as build_service:
+                response = await self.client.get(
+                    "/api/v1/runs",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), [])
+            build_service.assert_called_once_with(session)
+        finally:
+            if previous_db_override is None:
+                app.dependency_overrides.pop(get_db, None)
+            else:
+                app.dependency_overrides[get_db] = previous_db_override
+            if previous_run_override is None:
+                app.dependency_overrides.pop(get_run_query_service, None)
+            else:
+                app.dependency_overrides[get_run_query_service] = previous_run_override
 
     async def test_http_5xx_does_not_expose_internal_detail(self):
         request = Request({
