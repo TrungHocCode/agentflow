@@ -26,7 +26,7 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
         : await login(email, password);
       onAuthenticated(user);
     } catch (requestError) {
-      setError(requestError.message || 'Không thể xác thực tài khoản. Vui lòng thử lại.');
+      setError(requestError.message || 'Unable to authenticate your account. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -45,29 +45,29 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
             <div className="brand-mark" aria-hidden="true"><Sparkles /></div>
             <div className="brand-name">AgentFlow</div>
           </div>
-          <p className="page-eyebrow">TRỢ LÝ NGHIÊN CỨU CỦA BẠN</p>
-          <h1>Biến câu hỏi lớn thành nghiên cứu rõ ràng.</h1>
+          <p className="page-eyebrow">YOUR RESEARCH ASSISTANT</p>
+          <h1>Turn complex questions into clear research.</h1>
           <p className="auth-story__description">
-            Tổ chức việc tìm nguồn, đối chiếu thông tin và tạo báo cáo trong một quy trình bạn có thể theo dõi.
+            Find sources, compare evidence, and create reports in a workflow you can follow.
           </p>
-          <div className="auth-story__steps" aria-label="Quy trình nghiên cứu">
-            <span><i>01</i> Tìm nguồn phù hợp</span>
-            <span><i>02</i> Tổng hợp có cấu trúc</span>
-            <span><i>03</i> Nhận báo cáo dễ dùng</span>
+          <div className="auth-story__steps" aria-label="Research workflow">
+            <span><i>01</i> Find relevant sources</span>
+            <span><i>02</i> Synthesize the evidence</span>
+            <span><i>03</i> Get a useful report</span>
           </div>
         </section>
 
         <Card className="auth-card">
           <CardHeader className="auth-card__header">
             <div className="auth-mark" aria-hidden="true"><KeyRound /></div>
-            <p className="page-eyebrow">KHÔNG GIAN CÁ NHÂN</p>
+            <p className="page-eyebrow">YOUR WORKSPACE</p>
             <CardTitle className="auth-card__title">
-              {isRegistering ? 'Tạo tài khoản' : 'Chào mừng trở lại'}
+              {isRegistering ? 'Create your account' : 'Welcome back'}
             </CardTitle>
             <CardDescription className="auth-copy">
               {isRegistering
-                ? 'Tạo tài khoản để lưu các cuộc nghiên cứu và kết quả của bạn.'
-                : 'Đăng nhập để tiếp tục với các cuộc nghiên cứu và quy trình đã lưu.'}
+                ? 'Create an account to save your research conversations and results.'
+                : 'Sign in to continue with your saved research and workflows.'}
             </CardDescription>
           </CardHeader>
 
@@ -76,13 +76,13 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
               <FieldGroup>
                 {isRegistering && (
                   <Field>
-                    <FieldLabel htmlFor="display-name">Tên hiển thị</FieldLabel>
+                    <FieldLabel htmlFor="display-name">Display name</FieldLabel>
                     <Input
                       id="display-name"
                       autoComplete="name"
                       value={displayName}
                       onChange={event => setDisplayName(event.target.value)}
-                      placeholder="Tên của bạn"
+                      placeholder="Your name"
                       required
                     />
                   </Field>
@@ -100,14 +100,14 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="password">Mật khẩu</FieldLabel>
+                  <FieldLabel htmlFor="password">Password</FieldLabel>
                   <Input
                     id="password"
                     type="password"
                     autoComplete={isRegistering ? 'new-password' : 'current-password'}
                     value={password}
                     onChange={event => setPassword(event.target.value)}
-                    placeholder={isRegistering ? 'Ít nhất 8 ký tự' : 'Nhập mật khẩu'}
+                    placeholder={isRegistering ? 'At least 8 characters' : 'Enter your password'}
                     minLength={isRegistering ? 8 : 1}
                     required
                   />
@@ -117,22 +117,22 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
               {error && (
                 <Alert variant="destructive" role="alert" className="auth-alert">
                   <AlertCircle />
-                  <AlertTitle>Không thể tiếp tục</AlertTitle>
+                  <AlertTitle>Unable to continue</AlertTitle>
                   <AlertDescription>{error}</AlertDescription>
                 </Alert>
               )}
 
               <Button type="submit" size="lg" className="auth-submit" disabled={submitting}>
                 {submitting ? <Spinner data-icon="inline-start" /> : (isRegistering ? <UserPlus data-icon="inline-start" /> : <LogIn data-icon="inline-start" />)}
-                {submitting ? 'Đang xử lý…' : (isRegistering ? 'Tạo tài khoản' : 'Đăng nhập')}
+                {submitting ? 'Please wait…' : (isRegistering ? 'Create account' : 'Sign in')}
                 {!submitting && <ArrowRight data-icon="inline-end" />}
               </Button>
             </form>
 
             <div className="auth-mode-switch">
-              <span>{isRegistering ? 'Bạn đã có tài khoản?' : 'Lần đầu sử dụng AgentFlow?'}</span>
+              <span>{isRegistering ? 'Already have an account?' : 'New to AgentFlow?'}</span>
               <Button type="button" variant="link" onClick={switchMode}>
-                {isRegistering ? 'Đăng nhập' : 'Tạo tài khoản'}
+                {isRegistering ? 'Sign in' : 'Create an account'}
               </Button>
             </div>
           </CardContent>

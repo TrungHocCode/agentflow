@@ -38,17 +38,17 @@ export default function CatalogBrowser({ tools, agents }) {
     <section className="page-frame" aria-labelledby="catalog-title">
       <div className="page-heading">
         <div className="page-heading__copy">
-          <p className="page-eyebrow">NĂNG LỰC NGHIÊN CỨU</p>
-          <h1 id="catalog-title" className="page-title">Công cụ & trợ lý</h1>
-          <p className="page-description">Các khả năng mà agent có thể dùng để tìm kiếm, phân tích và tạo đầu ra.</p>
+          <p className="page-eyebrow">RESEARCH CAPABILITIES</p>
+          <h1 id="catalog-title" className="page-title">Tools & agents</h1>
+          <p className="page-description">Capabilities agents can use to find sources, analyze evidence, and create outputs.</p>
         </div>
       </div>
 
       <Card className="surface-card">
         <CardHeader className="catalog-toolbar">
           <div>
-            <CardTitle>Danh mục năng lực</CardTitle>
-            <CardDescription>{tools.length} công cụ · {agents.length} trợ lý</CardDescription>
+            <CardTitle>Capability catalog</CardTitle>
+            <CardDescription>{tools.length} tools · {agents.length} agents</CardDescription>
           </div>
           <InputGroup className="catalog-search">
             <InputGroupAddon align="inline-start">
@@ -56,8 +56,8 @@ export default function CatalogBrowser({ tools, agents }) {
             </InputGroupAddon>
             <InputGroupInput
               type="search"
-              aria-label="Tìm công cụ hoặc trợ lý"
-              placeholder="Tìm theo tên hoặc mô tả…"
+              aria-label="Search tools or agents"
+              placeholder="Search by name or description…"
               value={searchTerm}
               onChange={event => setSearchTerm(event.target.value)}
             />
@@ -65,14 +65,14 @@ export default function CatalogBrowser({ tools, agents }) {
         </CardHeader>
         <CardContent>
           <Tabs defaultValue="tools">
-            <TabsList aria-label="Loại năng lực">
-              <TabsTrigger value="tools">Công cụ <span className="catalog-tab-count">{tools.length}</span></TabsTrigger>
-              <TabsTrigger value="agents">Trợ lý <span className="catalog-tab-count">{agents.length}</span></TabsTrigger>
+            <TabsList aria-label="Capability type">
+              <TabsTrigger value="tools">Tools <span className="catalog-tab-count">{tools.length}</span></TabsTrigger>
+              <TabsTrigger value="agents">Agents <span className="catalog-tab-count">{agents.length}</span></TabsTrigger>
             </TabsList>
 
             <TabsContent value="tools" className="catalog-tab-content">
               {filteredTools.length === 0 ? (
-                <p className="catalog-empty">Không tìm thấy công cụ phù hợp.</p>
+                <p className="catalog-empty">No matching tools found.</p>
               ) : (
                 <div className="catalog-grid">
                   {filteredTools.map((tool) => {
@@ -87,12 +87,12 @@ export default function CatalogBrowser({ tools, agents }) {
                               <CardTitle className="catalog-item__title" title={tool.name}>{displayName(tool.name)}</CardTitle>
                             </div>
                             <Badge variant={isAvailable ? 'secondary' : 'destructive'} className={isAvailable ? 'run-status run-status--done' : undefined} title={tool.unavailable_reason || undefined}>
-                              {isAvailable ? 'Sẵn sàng' : 'Tạm tắt'}
+                              {isAvailable ? 'Available' : 'Unavailable'}
                             </Badge>
                           </div>
                         </CardHeader>
                         <CardContent className="flex flex-1 flex-col gap-2">
-                          <CardDescription className="catalog-item__description">{tool.description || 'Chưa có mô tả.'}</CardDescription>
+                          <CardDescription className="catalog-item__description">{tool.description || 'No description available.'}</CardDescription>
                           {!isAvailable && tool.unavailable_reason && (
                             <p className="catalog-unavailable">{tool.unavailable_reason}</p>
                           )}
@@ -106,7 +106,7 @@ export default function CatalogBrowser({ tools, agents }) {
 
             <TabsContent value="agents" className="catalog-tab-content">
               {filteredAgents.length === 0 ? (
-                <p className="catalog-empty">Không tìm thấy trợ lý phù hợp.</p>
+                <p className="catalog-empty">No matching agents found.</p>
               ) : (
                 <div className="catalog-grid">
                   {filteredAgents.map((agent) => {
@@ -120,17 +120,17 @@ export default function CatalogBrowser({ tools, agents }) {
                               <span className="catalog-item__icon" aria-hidden="true"><Layers3 /></span>
                               <CardTitle className="catalog-item__title" title={agent.name}>{displayName(agent.name)}</CardTitle>
                             </div>
-                            <Badge variant="secondary" className="run-status run-status--done">Sẵn sàng</Badge>
+                            <Badge variant="secondary" className="run-status run-status--done">Available</Badge>
                           </div>
-                          <CardDescription>{availableToolNames.length} công cụ được cấp quyền</CardDescription>
+                          <CardDescription>{availableToolNames.length} authorized tools</CardDescription>
                         </CardHeader>
                         <CardContent className="catalog-tool-list">
                           {availableToolNames.map((toolName) => (
                             <Badge key={toolName} variant="outline" className="catalog-tool-chip">{toolName}</Badge>
                           ))}
                           {blockedToolNames.map((toolName) => (
-                            <Badge key={`blocked-${toolName}`} variant="destructive" title="Bị tắt theo chính sách triển khai">
-                              {toolName} · tạm tắt
+                            <Badge key={`blocked-${toolName}`} variant="destructive" title="Disabled by deployment policy">
+                              {toolName} · unavailable
                             </Badge>
                           ))}
                         </CardContent>
