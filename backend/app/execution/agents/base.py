@@ -142,7 +142,7 @@ class SupervisorAgent(BaseAgent):
         if plan and any(kw in last_user_msg for kw in approval_keywords):
             return {
                 "mode": "executing",
-                "messages": [AIMessage(content="Đã nhận xác nhận từ bạn! Hệ thống đang chuyển sang chế độ thực thi các task...")],
+                "messages": [AIMessage(content="Approval received. Switching to workflow execution...")],
                 "logs": ["[SupervisorAgent] User approved plan. Switching mode to 'executing'."]
             }
 

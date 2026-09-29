@@ -42,7 +42,7 @@ function formatApiError(statusCode, body, fallback) {
     const error = payload?.error;
     if (error && typeof error === 'object') {
       message = error.message || error.detail || message;
-      if (error.error_id) message = `${message} (Mã tham chiếu: ${error.error_id})`;
+      if (error.error_id) message = `${message} (Reference ID: ${error.error_id})`;
     } else if (typeof payload?.detail === 'string') {
       message = payload.detail;
     }

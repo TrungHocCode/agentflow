@@ -38,7 +38,7 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-        self.assertIn("chưa thể tạo phản hồi hợp lệ", result["messages"][0].lower())
+        self.assertIn("could not create a valid response", result["messages"][0].lower())
         self.assertTrue(result["metadata"]["planning_failed"])
         self.assertEqual(result["metadata"]["planning_error_code"], "supervisor_planning_failed")
         self.assertTrue(result["metadata"]["planning_error_id"])

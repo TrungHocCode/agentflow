@@ -1050,7 +1050,7 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(turn.status, "cancelled")
         self.assertEqual(events[-1].type, "turn_cancelled")
-        self.assertEqual((await service.list_messages(conversation.id))[-1].content, "Yêu cầu đã được hủy.")
+        self.assertEqual((await service.list_messages(conversation.id))[-1].content, "Request cancelled.")
 
     async def test_cancelling_running_turn_interrupts_model_task_and_records_terminal_event(self) -> None:
         entered_model = asyncio.Event()

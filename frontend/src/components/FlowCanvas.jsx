@@ -15,19 +15,19 @@ export default function FlowCanvas({ plan }) {
     <section className="page-frame" aria-labelledby="flow-title">
       <div className="page-heading">
         <div className="page-heading__copy">
-          <p className="page-eyebrow">CẤU TRÚC THỰC THI</p>
-          <h1 id="flow-title" className="page-title">Sơ đồ quy trình</h1>
-          <p className="page-description">Xem cách các bước phụ thuộc nhau và bước nào có thể thực hiện song song.</p>
+          <p className="page-eyebrow">EXECUTION STRUCTURE</p>
+          <h1 id="flow-title" className="page-title">Workflow diagram</h1>
+          <p className="page-description">See step dependencies and which tasks can run in parallel.</p>
         </div>
-        {plan?.length > 0 && <Badge variant="secondary">{plan.length} bước</Badge>}
+        {plan?.length > 0 && <Badge variant="secondary">{plan.length} steps</Badge>}
       </div>
 
       {!plan?.length ? (
         <Card className="surface-card empty-state">
           <span className="empty-state__icon" aria-hidden="true"><GitMerge /></span>
-          <CardTitle className="empty-state__title">Chưa có sơ đồ quy trình</CardTitle>
+          <CardTitle className="empty-state__title">No workflow diagram yet</CardTitle>
           <CardDescription className="empty-state__description">
-            Hãy bắt đầu bằng cách mô tả yêu cầu nghiên cứu trong cuộc trò chuyện. Kế hoạch sau đó sẽ xuất hiện ở đây.
+            Describe your research request in the chat to create a plan. It will appear here when ready.
           </CardDescription>
         </Card>
       ) : (
@@ -35,10 +35,10 @@ export default function FlowCanvas({ plan }) {
           <CardHeader>
             <div className="flex items-center gap-2">
               <Sparkles className="text-primary" />
-              <CardTitle>{runStatus ? 'Tiến độ các bước' : 'Kế hoạch hiện tại'}</CardTitle>
+              <CardTitle>{runStatus ? 'Step progress' : 'Current plan'}</CardTitle>
             </div>
             <CardDescription>
-              Các node trên cùng một giai đoạn không phụ thuộc lẫn nhau và có thể chạy song song.
+              Steps in the same stage have no dependencies on each other and can run in parallel.
             </CardDescription>
           </CardHeader>
           <CardContent>

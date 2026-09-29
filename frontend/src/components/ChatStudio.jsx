@@ -28,19 +28,19 @@ import { Message, MessageAvatar, MessageContent, MessageFooter, MessageGroup, Me
 import { Spinner } from './ui/spinner';
 
 const RUN_STATUS = {
-  queued: { label: 'Đang chờ', tone: 'pending' },
-  running: { label: 'Đang thực hiện', tone: 'running' },
-  completed: { label: 'Hoàn tất', tone: 'done' },
-  failed: { label: 'Có lỗi', tone: 'failed' },
-  interrupted: { label: 'Bị gián đoạn', tone: 'partial' },
-  cancelled: { label: 'Đã hủy', tone: 'skipped' },
-  abandoned: { label: 'Đã dừng', tone: 'skipped' }
+  queued: { label: 'Queued', tone: 'pending' },
+  running: { label: 'Running', tone: 'running' },
+  completed: { label: 'Completed', tone: 'done' },
+  failed: { label: 'Failed', tone: 'failed' },
+  interrupted: { label: 'Interrupted', tone: 'partial' },
+  cancelled: { label: 'Cancelled', tone: 'skipped' },
+  abandoned: { label: 'Stopped', tone: 'skipped' }
 };
 
 const PROMPT_SUGGESTIONS = [
-  'Tìm các tin nổi bật trên Hacker News, tóm tắt và tạo báo cáo Markdown.',
-  'So sánh các mô hình LLM theo benchmark, ưu tiên nguồn chính thức.',
-  'Nghiên cứu một chủ đề công nghệ và trình bày phát hiện bằng bảng, biểu đồ.'
+  'Find the top stories on Hacker News, summarize them, and create a Markdown report.',
+  'Compare LLM benchmarks, prioritizing official sources.',
+  'Research a technology topic and present the findings in a table and chart.'
 ];
 
 function groupMessages(messages) {
@@ -116,8 +116,8 @@ export default function ChatStudio({
       <div className="studio-heading">
         <div className="page-heading__copy">
           <p className="page-eyebrow">RESEARCH STUDIO</p>
-          <h1 id="studio-title" className="page-title">Nghiên cứu bắt đầu từ câu hỏi của bạn</h1>
-          <p className="page-description">Mô tả điều bạn muốn tìm hiểu. AgentFlow sẽ đề xuất các bước để bạn xem lại trước khi chạy.</p>
+          <h1 id="studio-title" className="page-title">Start with a research question</h1>
+          <p className="page-description">Describe what you want to learn. AgentFlow will suggest a plan for you to review before it runs.</p>
         </div>
         {conversationId && (
           <Button
@@ -126,10 +126,10 @@ export default function ChatStudio({
             size="sm"
             onClick={onDeleteConversation}
             disabled={isDeletingConversation || isRestoring || (isProcessing && !isStreaming)}
-            title={isRestoring ? 'Đang khôi phục hội thoại' : 'Xóa hội thoại'}
+            title={isRestoring ? 'Restoring conversation' : 'Delete conversation'}
           >
             <Trash2 data-icon="inline-start" />
-            <span className="delete-conversation-label">{isDeletingConversation ? 'Đang xóa…' : 'Xóa hội thoại'}</span>
+            <span className="delete-conversation-label">{isDeletingConversation ? 'Deleting…' : 'Delete conversation'}</span>
           </Button>
         )}
       </div>
@@ -139,8 +139,8 @@ export default function ChatStudio({
           <div className="chat-workspace__identity">
             <div className="chat-assistant-mark" aria-hidden="true"><Sparkles /></div>
             <div>
-              <p className="chat-workspace__title">Trợ lý nghiên cứu</p>
-              <p className="chat-workspace__subtitle">Tìm kiếm · tổng hợp · báo cáo</p>
+              <p className="chat-workspace__title">Research assistant</p>
+              <p className="chat-workspace__subtitle">Discover · synthesize · report</p>
             </div>
           </div>
           {status && (
@@ -151,20 +151,20 @@ export default function ChatStudio({
           )}
         </header>
 
-        <div className="chat-thread" role="log" aria-label="Hội thoại nghiên cứu" aria-live="polite" aria-busy={isProcessing}>
+        <div className="chat-thread" role="log" aria-label="Research conversation" aria-live="polite" aria-busy={isProcessing}>
           {isRestoring && messages.length === 0 ? (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
-              <MarkerContent>Đang khôi phục hội thoại và kiểm tra tiến độ…</MarkerContent>
+              <MarkerContent>Restoring conversation and checking progress…</MarkerContent>
             </Marker>
           ) : messages.length === 0 ? (
             <div className="chat-empty">
               <div className="chat-empty__mark" aria-hidden="true"><MessageSquareText /></div>
-              <h2>Hôm nay bạn muốn khám phá điều gì?</h2>
+              <h2>What would you like to explore today?</h2>
               <p>
-                Bắt đầu bằng một câu hỏi hoặc mục tiêu nghiên cứu. Bạn sẽ xem được kế hoạch trước khi cho phép các agent thực hiện.
+                Start with a question or research goal. You can review the plan before agents begin.
               </p>
-              <div className="prompt-suggestions" aria-label="Gợi ý câu hỏi">
+              <div className="prompt-suggestions" aria-label="Suggested prompts">
                 {PROMPT_SUGGESTIONS.map((suggestion) => (
                   <Button
                     key={suggestion}
@@ -195,7 +195,7 @@ export default function ChatStudio({
                       </MessageAvatar>
                       <MessageContent>
                         <MessageHeader className="chat-message__header">
-                          <span>{isUser ? 'Bạn' : 'Trợ lý nghiên cứu'}</span>
+                          <span>{isUser ? 'You' : 'Research assistant'}</span>
                           {message.isGenerating && activeTurnId && (
                             <Button
                               type="button"
@@ -204,7 +204,7 @@ export default function ChatStudio({
                               onClick={onCancelTurn}
                               disabled={isCancelling}
                             >
-                              <XCircle data-icon="inline-start" />{isCancelling ? 'Đang hủy…' : 'Hủy'}
+                              <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel'}
                             </Button>
                           )}
                         </MessageHeader>
@@ -222,19 +222,19 @@ export default function ChatStudio({
                             ) : message.isGenerating ? (
                               <Marker role="status" className="chat-status-row">
                                 <MarkerIcon><Spinner /></MarkerIcon>
-                                <MarkerContent>Đang chuẩn bị phản hồi…</MarkerContent>
+                                <MarkerContent>Preparing a response…</MarkerContent>
                               </Marker>
                             ) : null}
                             {isError && (
                               <p className="chat-error-reference">
-                                <AlertCircle />{message.errorId ? `Mã tham chiếu: ${message.errorId}` : 'Phản hồi chưa hoàn tất'}
+                                <AlertCircle />{message.errorId ? `Reference ID: ${message.errorId}` : 'Response did not complete'}
                               </p>
                             )}
                           </BubbleContent>
                         </Bubble>
                         {message.duration && (
                           <MessageFooter className="chat-message__meta">
-                            <Clock3 aria-hidden="true" />Thời gian phản hồi: {message.duration}s
+                            <Clock3 aria-hidden="true" />Response time: {message.duration}s
                           </MessageFooter>
                         )}
                       </MessageContent>
@@ -249,11 +249,11 @@ export default function ChatStudio({
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
               <MarkerContent>
-                {isRestoring ? 'Đang khôi phục quy trình' : 'Đang phân tích yêu cầu'} · {liveThinkingSeconds}s
+                {isRestoring ? 'Restoring workflow' : 'Analyzing request'} · {liveThinkingSeconds}s
               </MarkerContent>
               {activeTurnId && (
                 <Button type="button" variant="ghost" size="sm" onClick={onCancelTurn} disabled={isCancelling}>
-                  <XCircle data-icon="inline-start" />{isCancelling ? 'Đang hủy…' : 'Hủy'}
+                  <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel'}
                 </Button>
               )}
             </Marker>
@@ -262,7 +262,7 @@ export default function ChatStudio({
           {isStreaming && !runStatus && (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
-              <MarkerContent>Đang thực hiện các bước nghiên cứu · {liveThinkingSeconds}s</MarkerContent>
+              <MarkerContent>Running research steps · {liveThinkingSeconds}s</MarkerContent>
             </Marker>
           )}
 
@@ -272,14 +272,14 @@ export default function ChatStudio({
                 <div className="chat-plan-heading">
                   <span className="chat-plan-heading__icon" aria-hidden="true"><GitMerge /></span>
                   <div>
-                    <CardTitle>{runStatus ? 'Quy trình nghiên cứu' : 'Kế hoạch đề xuất'}</CardTitle>
+                    <CardTitle>{runStatus ? 'Research workflow' : 'Proposed plan'}</CardTitle>
                     <CardDescription>
-                      {runStatus ? 'Theo dõi tiến độ của từng bước ngay tại đây.' : 'Xem lại các bước trước khi bắt đầu.'}
+                      {runStatus ? 'Track each step as it runs.' : 'Review the steps before starting.'}
                     </CardDescription>
                   </div>
                 </div>
                 <Badge variant={status?.tone === 'failed' ? 'destructive' : 'secondary'} className={status ? `run-status run-status--${status.tone}` : 'run-status run-status--pending'}>
-                  {status?.label || 'Chờ bạn duyệt'}
+                  {status?.label || 'Awaiting your approval'}
                 </Badge>
               </CardHeader>
 
@@ -289,11 +289,11 @@ export default function ChatStudio({
                   <Attachment state="done" size="sm" className="chat-attachment">
                     <AttachmentMedia><FileText /></AttachmentMedia>
                     <AttachmentContent>
-                      <AttachmentTitle>Kết quả nghiên cứu đã sẵn sàng</AttachmentTitle>
-                      <AttachmentDescription>Mở báo cáo và tải các tệp đầu ra</AttachmentDescription>
+                      <AttachmentTitle>Research results are ready</AttachmentTitle>
+                      <AttachmentDescription>Open the report and download the output files</AttachmentDescription>
                     </AttachmentContent>
                     <AttachmentActions>
-                      <AttachmentAction type="button" aria-label="Mở kết quả nghiên cứu" title="Mở kết quả" onClick={onOpenResults}>
+                      <AttachmentAction type="button" aria-label="Open research results" title="Open results" onClick={onOpenResults}>
                         <ArrowUpRight />
                       </AttachmentAction>
                     </AttachmentActions>
@@ -304,21 +304,21 @@ export default function ChatStudio({
               <CardFooter className="chat-plan-actions">
                 {!runStatus ? (
                   <Button type="button" onClick={onApprovePlan} disabled={isProcessing}>
-                    <Play data-icon="inline-start" />Duyệt và bắt đầu
+                    <Play data-icon="inline-start" />Approve and start
                   </Button>
                 ) : (
                   <>
                     <Button type="button" variant="outline" onClick={onOpenResults}>
-                      <FileText data-icon="inline-start" />{runStatus === 'completed' ? 'Mở kết quả và tải tệp' : 'Xem kết quả'}
+                      <FileText data-icon="inline-start" />{runStatus === 'completed' ? 'Open results and download files' : 'View results'}
                     </Button>
                     {runId && (
                       <Button type="button" variant="outline" onClick={onViewRunDetails}>
-                        <ArrowDownRight data-icon="inline-start" />Xem tiến độ chi tiết
+                        <ArrowDownRight data-icon="inline-start" />View detailed progress
                       </Button>
                     )}
                     {['queued', 'running'].includes(runStatus) && (
                       <Button type="button" variant="destructive" onClick={onCancelRun} disabled={isCancelling}>
-                        <XCircle data-icon="inline-start" />{isCancelling ? 'Đang hủy…' : 'Hủy quy trình'}
+                        <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel workflow'}
                       </Button>
                     )}
                   </>
@@ -334,15 +334,15 @@ export default function ChatStudio({
               value={inputPrompt}
               onChange={event => setInputPrompt(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="Bạn muốn tìm hiểu hoặc tổng hợp điều gì?"
-              aria-label="Yêu cầu nghiên cứu"
+              placeholder="What would you like to research or synthesize?"
+              aria-label="Research request"
               disabled={isProcessing || isRestoring}
               rows={2}
             />
             <InputGroupAddon align="block-end" className="chat-composer__footer">
-              <span className="chat-composer__hint">Enter để gửi · Shift + Enter để xuống dòng</span>
+              <span className="chat-composer__hint">Enter to send · Shift + Enter for a new line</span>
               <Button type="submit" size="sm" disabled={isProcessing || isRestoring || !inputPrompt.trim()}>
-                <ArrowRight data-icon="inline-start" />Gửi yêu cầu
+                <ArrowRight data-icon="inline-start" />Send request
               </Button>
             </InputGroupAddon>
           </InputGroup>
