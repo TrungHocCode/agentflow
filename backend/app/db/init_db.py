@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
 from app.db.postgres_client import engine, AsyncSessionLocal
+from app.execution.tools.base import ToolRegistry
+from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.models import AgentCatalogModel, ToolCatalogModel
 
 
@@ -38,54 +40,16 @@ async def init_tables() -> None:
 
 
 async def seed_defaults() -> None:
+    autodiscover_tools()
     async with AsyncSessionLocal() as session:
         # Add missing defaults individually so existing, partially seeded catalogs evolve safely.
         default_tools = [
             ToolCatalogModel(
-                name="web_search",
-                description="Search the web and return ranked, cited results",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="web_search_batch",
-                description="Search complementary queries concurrently and deduplicate cited results",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="news_crawler",
-                description="Extract readable article or listing content from a URL",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="news_crawler_batch",
-                description="Crawl selected source URLs concurrently with per-source extraction status",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="file_reader",
-                description="Read sandboxed workspace files",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="python_executor",
-                description="Execute sandboxed Python scripts",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="database_query",
-                description="Execute SQL database queries",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="http_request",
-                description="Make HTTP GET/POST requests",
-                config_schema={},
-            ),
-            ToolCatalogModel(
-                name="email_sender",
-                description="Send outbound email notifications",
-                config_schema={},
-            ),
+                name=tool.name,
+                description=tool.description,
+                config_schema=tool.get_input_schema().model_json_schema(),
+            )
+            for tool in ToolRegistry.get_all_tools()
         ]
         tool_rows_result = await session.execute(select(ToolCatalogModel))
         existing_tool_names = {tool.name for tool in tool_rows_result.scalars().all()}
@@ -152,7 +116,7 @@ async def seed_defaults() -> None:
                     "You turn structured research data into accurate and readable "
                     "chart specifications."
                 ),
-                tool_names=["python_executor", "file_reader", "file_writer"],
+                tool_names=["chart_generator", "file_reader", "file_writer"],
             ),
         ]
         existing_agents_result = await session.execute(select(AgentCatalogModel))

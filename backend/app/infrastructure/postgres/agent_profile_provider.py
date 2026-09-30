@@ -19,4 +19,7 @@ class PostgresAgentProfileProvider(AgentProfileProvider):
             system_prompt=definition.system_prompt,
             tool_names=definition.tool_names,
             runtime_name="worker",
+            catalog_tool_names=[
+                tool.name for tool in await self.repository.list_tools(active_only=True) if tool.is_available
+            ],
         )

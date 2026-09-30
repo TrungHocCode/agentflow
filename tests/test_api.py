@@ -19,6 +19,7 @@ from app.main import app, http_error_handler
 from app.api.dependencies import get_run_query_service, get_workflow_service
 from app.db.postgres_client import get_db
 from app.execution.model_router import InferencePurpose
+from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
 from app.execution.state import SupervisorOutput, Task
 from app.core.config import settings
 from app.modules.identity.security import create_access_token
@@ -55,7 +56,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         # API unit tests must not resolve agent profiles from a running user database.
         self.enterContext(patch(
             "app.infrastructure.postgres.agent_profile_provider.PostgresAgentProfileProvider.get_agent",
-            new=AsyncMock(return_value=None),
+            new=AsyncMock(side_effect=lambda identifier: DEFAULT_AGENT_PROFILES.get(identifier)),
         ))
         self.transport = httpx.ASGITransport(app=app)
         self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test", follow_redirects=True)
