@@ -18,6 +18,11 @@ from app.db.init_db import init_tables, seed_defaults  # noqa: E402
 from app.db.postgres_client import AsyncSessionLocal, engine  # noqa: E402
 from app.db.redis_client import close_redis_connection, get_redis  # noqa: E402
 from app.execution.state import Task  # noqa: E402
+from app.execution.agents.resolver import AgentResolver  # noqa: E402
+from app.execution.tools.base import ToolRegistry  # noqa: E402
+from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider  # noqa: E402
+from app.infrastructure.postgres.catalog_repository import PostgresCatalogRepository  # noqa: E402
+from app.modules.workflows.validator import validate_workflow_references  # noqa: E402
 from app.infrastructure.container import build_run_queue  # noqa: E402
 from app.infrastructure.postgres.models import FlowModel, RunModel  # noqa: E402
 from app.infrastructure.postgres.conversation_repository import PostgresConversationRepository  # noqa: E402
@@ -41,6 +46,30 @@ def setUpModule() -> None:
 
 
 class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
+    async def test_seeded_catalog_accepts_the_same_plan_as_runtime_validation(self) -> None:
+        async with AsyncSessionLocal() as session:
+            catalog = PostgresCatalogRepository(session)
+            tools_before = {tool.name: tool.id for tool in await catalog.list_tools()}
+            self.assertEqual(set(tools_before), set(ToolRegistry.list_tools()))
+        await seed_defaults()
+        async with AsyncSessionLocal() as session:
+            catalog = PostgresCatalogRepository(session)
+            self.assertEqual(tools_before, {tool.name: tool.id for tool in await catalog.list_tools()})
+            tasks = [
+                Task(id=1, node="source_researcher", status="pending", description="Find official sources",
+                     tool_names=["web_search"]),
+                Task(id=2, node="synthesis_agent", status="pending", description="Synthesize findings",
+                     dependencies=[1], tool_names=["text_summarizer"]),
+                Task(id=3, node="report_agent", status="pending", description="Write report",
+                     dependencies=[2], tool_names=["markdown_report_generator", "file_writer"]),
+            ]
+            resolver = AgentResolver(provider=PostgresAgentProfileProvider(catalog))
+            await resolver.validate_plan(tasks)
+            definition = await validate_workflow_references(
+                {"tasks": [task.model_dump() for task in tasks]}, catalog)
+            self.assertEqual(len(definition["steps"]), 3)
+            self.assertTrue(all(step["tool_ids"] for step in definition["steps"]))
+
     async def asyncSetUp(self) -> None:
         require_integration_environment()
         self.repository = PostgresRunRepository()
