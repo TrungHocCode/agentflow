@@ -8,6 +8,8 @@ import ExecutionTracker from './components/ExecutionTracker';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
 import SystemDialog from './components/SystemDialog';
+import { Toaster } from './components/ui/toast';
+import { notify, notifyRunFinished } from './lib/notifications';
 
 import { 
   getCatalogTools, 
@@ -111,6 +113,8 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
     const plan = payload.plan || [];
     setActivePlan(plan);
     setDraftPlan(plan);
+    if (plan.length > 0) notify({ id: `plan:${turnId}`, type: 'success', title: 'Your plan is ready',
+      description: `Review the ${plan.length} steps in the conversation before starting.` });
     return;
   }
 
@@ -126,7 +130,9 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
       : message));
     setActivePlan([]);
     setDraftPlan([]);
+    notify({ id: `turn:${turnId}`, type: 'error', title: 'Could not complete the request', description: text });
   } else if (cancelled) {
+    notify({ id: `turn:${turnId}`, title: 'Request cancelled' });
     setMessages(previous => ensureAssistant(previous, 'Request cancelled.').map(message => message.turnId === turnId
       ? { ...message, text: message.text || 'Request cancelled.', isGenerating: false }
       : message));
@@ -228,7 +234,14 @@ export default function App() {
     }
 
     if (!terminalStatus) return;
+    const alreadyNotified = terminalRunIdsRef.current.has(runId);
     terminalRunIdsRef.current.add(runId);
+    if (!alreadyNotified) notifyRunFinished(runId, terminalStatus, () => {
+      if (terminalStatus === 'completed') {
+        setResultsSource('tracker');
+        setIsResultsOpen(true);
+      } else setActiveTab('runs');
+    });
 
     if (eventData.plan?.length) {
       setActivePlan(eventData.plan);
@@ -745,6 +758,8 @@ export default function App() {
               return;
             }
             console.warn('Conversation progress connection interrupted:', error);
+            notify({ id: `connection:${turnId}`, type: 'warning', title: 'Progress connection interrupted',
+              description: 'Reload the conversation to reconnect. The backend may still be processing your request.' });
             setIsProcessing(false);
             setMessages(prev => prev.map(message => message.turnId === turnId
               ? {
@@ -812,6 +827,7 @@ export default function App() {
       console.error('Error starting run:', err);
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
       const errorText = `Connection error: ${err.message}`;
+      notify({ id: `turn:${turnId}`, type: 'error', title: 'Could not send the request', description: err.message });
       setMessages(prev => {
         const messageIndex = prev.findIndex(message => message.turnId === turnId);
         if (messageIndex < 0) {
@@ -902,6 +918,7 @@ export default function App() {
 
       } catch (err) {
         console.error("Approve run error:", err);
+        notify({ type: 'error', title: 'Could not start the workflow', description: err.message });
         const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
         setExecutionDuration(totalSec);
         setIsStreaming(false);
@@ -971,9 +988,8 @@ export default function App() {
         }]);
       }
     } catch (error) {
-      setSystemDialog({
-        kind: 'notice',
-        tone: 'error',
+      notify({
+        type: 'error',
         title: 'Could not stop the workflow',
         description: error.message || 'Please try again.'
       });
@@ -988,9 +1004,8 @@ export default function App() {
     try {
       await cancelConversationTurn(conversationId, activeConversationTurnId);
     } catch (error) {
-      setSystemDialog({
-        kind: 'notice',
-        tone: 'error',
+      notify({
+        type: 'error',
         title: 'Could not stop the request',
         description: error.message || 'Please try again.'
       });
@@ -1036,6 +1051,8 @@ export default function App() {
       }
       setIsProcessing(false);
       setSystemDialog(null);
+      notify({ type: 'success', title: 'Conversation deleted',
+        description: linkedRunIsActive ? 'The workflow is still running in Run history.' : undefined });
       if (!linkedRunIsActive && runStreamRef.current) {
         runStreamRef.current();
         runStreamRef.current = null;
@@ -1044,9 +1061,9 @@ export default function App() {
       setSystemDialog(previous => previous ? {
         ...previous,
         error: error.message || 'Please try again.'
-      } : {
-        kind: 'notice',
-        tone: 'error',
+      } : null);
+      notify({
+        type: 'error',
         title: 'Could not delete the conversation',
         description: error.message || 'Please try again.'
       });
@@ -1152,6 +1169,7 @@ export default function App() {
         onClose={() => setSystemDialog(null)}
         onConfirm={handleDeleteConversation}
       />
+      <Toaster limit={3} />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useStickToBottom } from 'use-stick-to-bottom';
 import {
   AlertCircle,
   ArrowDownRight,
+  ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Bot,
@@ -83,6 +85,16 @@ export default function ChatStudio({
   const hasStreamingAssistantMessage = messages.some(message => message.isGenerating);
   const messageGroups = useMemo(() => groupMessages(messages), [messages]);
   const status = RUN_STATUS[runStatus];
+  const { scrollRef, contentRef, scrollToBottom, isAtBottom } = useStickToBottom({
+    initial: 'instant',
+    resize: 'instant'
+  });
+  const lastUserMessageIndex = messages.findLastIndex(message => message.sender === 'user');
+
+  // Sending a new request resumes following; assistant updates alone respect a reader scrolling up.
+  useEffect(() => {
+    if (lastUserMessageIndex >= 0) void scrollToBottom({ animation: 'instant', wait: true });
+  }, [lastUserMessageIndex, scrollToBottom]);
 
   useEffect(() => {
     if (!isProcessing) {
@@ -102,6 +114,7 @@ export default function ChatStudio({
     if (!inputPrompt.trim() || isProcessing || isRestoring) return;
     onSendMessage(inputPrompt.trim());
     setInputPrompt('');
+    void scrollToBottom({ animation: 'instant', wait: true });
   };
 
   const handleComposerKeyDown = (event) => {
@@ -151,7 +164,9 @@ export default function ChatStudio({
           )}
         </header>
 
-        <div className="chat-thread" role="log" aria-label="Research conversation" aria-live="polite" aria-busy={isProcessing}>
+        <div className="chat-scroll-frame">
+        <div ref={scrollRef} className="chat-thread" role="log" aria-label="Research conversation" aria-live="polite" aria-busy={isProcessing}>
+        <div ref={contentRef} className="chat-thread-content">
           {isRestoring && messages.length === 0 ? (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
@@ -326,6 +341,14 @@ export default function ChatStudio({
               </CardFooter>
             </Card>
           )}
+        </div>
+        </div>
+        {!isAtBottom && messages.length > 0 && (
+          <Button type="button" variant="secondary" size="sm" className="chat-jump-latest"
+            onClick={() => scrollToBottom({ animation: 'instant' })}>
+            <ArrowDown data-icon="inline-start" />Jump to latest
+          </Button>
+        )}
         </div>
 
         <form onSubmit={handleSubmit} className="chat-composer">

@@ -1,4 +1,5 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
+import { forwardRef } from "react"
 import { cva } from "class-variance-authority";
 import { cn } from "cn"
 
@@ -39,19 +40,20 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
+const Button = forwardRef(function Button({
   className,
   variant = "default",
   size = "default",
   ...props
-}) {
+}, ref) {
   return (
     <ButtonPrimitive
+      ref={ref}
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
   )
-}
+})
 
 export { Button, buttonVariants }
