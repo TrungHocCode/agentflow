@@ -155,6 +155,70 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.sequence for event in events], [1, 2])
         self.assertEqual([event.type for event in events], ["turn_accepted", "planning_started"])
 
+    async def test_finalizing_turn_keeps_sequences_written_during_streaming(self) -> None:
+        repository = PostgresConversationRepository()
+        now = datetime.now(timezone.utc)
+        conversation = ConversationRecord(
+            id=str(uuid4()),
+            user_id=self.owner,
+            title="Streaming turn integration",
+            created_at=now,
+            updated_at=now,
+        )
+        await repository.create(conversation)
+        self.addAsyncCleanup(repository.delete, conversation.id, self.owner)
+
+        turn_id = str(uuid4())
+        user_message = ConversationMessage(
+            id=str(uuid4()), conversation_id=conversation.id, role="user",
+            content="Summarize this", metadata={"turn_id": turn_id}, created_at=now,
+        )
+        assistant_message = ConversationMessage(
+            id=str(uuid4()), conversation_id=conversation.id, role="assistant",
+            content="", metadata={"turn_id": turn_id, "status": "queued"},
+            created_at=now + timedelta(microseconds=1),
+        )
+        turn = ConversationTurn(
+            id=turn_id, conversation_id=conversation.id, user_id=self.owner,
+            user_message_id=user_message.id, assistant_message_id=assistant_message.id,
+            input_fingerprint="a" * 64, created_at=now,
+        )
+        await repository.accept_turn(conversation, turn, user_message, assistant_message)
+        claimed = await repository.claim_next_turn("integration-worker")
+        self.assertEqual(claimed.id, turn_id)
+        self.assertEqual(claimed.last_event_sequence, 2)
+
+        await repository.append_turn_event(turn_id, "assistant_delta", {"content": "First "})
+        await repository.append_turn_event(turn_id, "assistant_delta", {"content": "answer"})
+        self.assertEqual(claimed.last_event_sequence, 2)
+        await repository.save_turn(claimed.model_copy(deep=True))
+        self.assertEqual(
+            (await repository.get_turn(conversation.id, turn_id, self.owner)).last_event_sequence,
+            4,
+        )
+
+        claimed.status = "completed"
+        claimed.outcome = "answer"
+        claimed.assistant_content = "First answer"
+        claimed.completed_at = datetime.now(timezone.utc)
+        assistant_message.content = claimed.assistant_content
+        assistant_message.metadata = {"turn_id": turn_id, "status": "completed"}
+        written = await repository.finalize_turn(
+            claimed, conversation, assistant_message,
+            [
+                ("assistant_message", {"content": claimed.assistant_content}),
+                ("turn_completed", {"status": "completed", "outcome": "answer"}),
+            ],
+        )
+
+        events = await repository.list_turn_events(conversation.id, turn_id)
+        self.assertEqual([event.sequence for event in events], [1, 2, 3, 4, 5, 6])
+        self.assertEqual([event.sequence for event in written], [5, 6])
+        self.assertEqual(claimed.last_event_sequence, 6)
+        persisted = await repository.get_turn(conversation.id, turn_id, self.owner)
+        self.assertEqual(persisted.status, "completed")
+        self.assertEqual(persisted.last_event_sequence, 6)
+
     async def test_concurrent_claim_has_one_winner_and_owner_filter_is_enforced(self) -> None:
         outcomes = await asyncio.gather(*(self.repository.claim(self.run_id) for _ in range(4)))
         self.assertEqual(sum(item is not None for item in outcomes), 1)

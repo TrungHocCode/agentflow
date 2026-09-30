@@ -490,8 +490,10 @@ class PostgresConversationRepository(ConversationRepository):
                 if record is None:
                     raise ConflictError("Conversation turn no longer exists.")
                 for key, value in self._turn_orm_values(turn).items():
-                    setattr(record, key, value)
+                    if key != "last_event_sequence":
+                        setattr(record, key, value)
                 await session.commit()
+                turn.last_event_sequence = record.last_event_sequence
 
             await self._with_session(operation)
             return turn
@@ -534,7 +536,9 @@ class PostgresConversationRepository(ConversationRepository):
                 if turn_record is None or conversation_record is None or message_record is None:
                     raise ConflictError("Conversation turn state is incomplete and cannot be finalized.")
                 for key, value in self._turn_orm_values(turn).items():
-                    setattr(turn_record, key, value)
+                    # Progress events advance this counter after the worker claims the turn.
+                    if key != "last_event_sequence":
+                        setattr(turn_record, key, value)
                 for key, value in self._orm_values(conversation).items():
                     setattr(conversation_record, key, value)
                 message_record.content = assistant_message.content
