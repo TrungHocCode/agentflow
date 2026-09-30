@@ -778,7 +778,7 @@ class PostgresConversationRepository(ConversationRepository):
                     None,
                 )
                 if assistant:
-                    assistant.content = turn.error_message or "Yêu cầu đã được hủy."
+                    assistant.content = turn.error_message or "Request cancelled."
                     assistant.metadata = {
                         **assistant.metadata,
                         "turn_id": turn.id,
@@ -843,7 +843,7 @@ class PostgresConversationRepository(ConversationRepository):
                     )
                     assistant = await session.get(ConversationMessageModel, record.assistant_message_id)
                     if assistant:
-                        assistant.content = record.error_message or "Yêu cầu đã được hủy."
+                        assistant.content = record.error_message or "Request cancelled."
                         assistant.message_metadata = {
                             **(assistant.message_metadata or {}),
                             "turn_id": record.id,

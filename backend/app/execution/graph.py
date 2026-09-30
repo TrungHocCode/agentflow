@@ -94,7 +94,7 @@ async def supervisor_node(
         return {
             "mode": "conversation",
             "plan": {"__replace__": True, "tasks": []},
-            "messages": ["Không thể lập kế hoạch vì dịch vụ LLM chưa được bật."],
+            "messages": ["Planning is unavailable because the LLM service is not enabled."],
             "logs": ["[SupervisorNode Error] LLM planning is required in normal operation."],
             "metadata": {
                 **metadata,
@@ -163,7 +163,7 @@ async def supervisor_node(
                 "mode": "conversation",
                 "plan": {"__replace__": True, "tasks": []},
                 "messages": [
-                    "Tôi chưa thể tạo phản hồi hợp lệ. Vui lòng thử lại hoặc làm rõ yêu cầu."
+                    "I could not create a valid response. Please try again or clarify your request."
                 ],
                 "logs": [
                     f"[SupervisorNode Error] Structured planning failed ({type(exc).__name__})."
@@ -212,7 +212,7 @@ async def supervisor_node(
         return {
             "mode": "conversation",
             "plan": [t1, t2, t3],
-            "messages": ["Supervisor: Tôi đã lập xong kế hoạch 3 bước. Bạn có đồng ý thực thi không?"],
+            "messages": ["Supervisor: I prepared a three-step plan. Would you like to run it?"],
             "metadata": {**metadata, "supervisor_decision": "propose_plan"},
             "logs": ["[SupervisorNode] Created initial plan proposal. Awaiting user confirmation."]
         }
@@ -531,7 +531,7 @@ async def _execute_worker_node(
                     report_tool,
                     {
                         "title": "AgentFlow Comprehensive Intelligence Report",
-                        "summary": f"Báo cáo tổng hợp tự động cho quy trình: {current_task.description}",
+                        "summary": f"Automatically generated research report for workflow: {current_task.description}",
                         "sections": sections,
                         "filename": "intelligence_report.md",
                     },

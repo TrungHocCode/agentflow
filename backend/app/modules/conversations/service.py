@@ -511,21 +511,24 @@ class ConversationService:
         )
         if isinstance(exc, TimeoutError):
             error_code, category = "conversation_turn_timeout", "timeout"
-            safe_message, retryable = "Yêu cầu mất quá nhiều thời gian và đã dừng. Vui lòng thử lại.", True
+            safe_message, retryable = "The request took too long and was stopped. Please try again.", True
         elif planner_metadata.get("planning_failed"):
             error_code = planner_metadata.get("planning_error_code", "planning_failed")
             category = planner_metadata.get("planning_error_category", "model")
-            safe_message, retryable = "Không thể tạo phản hồi hợp lệ lúc này. Vui lòng thử lại.", category != "configuration"
+            safe_message, retryable = (
+                "Could not generate a valid response right now. Please try again.",
+                category != "configuration",
+            )
         elif isinstance(exc, PersistenceError):
             error_code, category = exc.code, exc.category
-            safe_message, retryable = "Không thể lưu trạng thái hội thoại. Vui lòng thử lại sau.", True
+            safe_message, retryable = "Could not save the conversation state. Please try again later.", True
         elif isinstance(exc, (ConnectionError, OSError)):
             error_code, category = "llm_unavailable", "dependency"
-            safe_message, retryable = "Mô hình hiện không phản hồi được. Vui lòng thử lại sau.", True
+            safe_message, retryable = "The model is not responding right now. Please try again later.", True
         else:
             error_code = exc.code if isinstance(exc, ApplicationError) else "planning_failed"
             category = exc.category if isinstance(exc, ApplicationError) else "model"
-            safe_message = "Không thể tạo kế hoạch hoặc câu trả lời hợp lệ. Vui lòng thử lại."
+            safe_message = "Could not create a valid plan or response. Please try again."
             retryable = isinstance(exc, ApplicationError) and exc.retryable
         logger.error(
             "Conversation turn failed",
@@ -606,7 +609,7 @@ class ConversationService:
         now = datetime.now(timezone.utc)
         turn.status = "cancelled"
         turn.completed_at = now
-        turn.assistant_content = "Yêu cầu đã được hủy."
+        turn.assistant_content = "Request cancelled."
         conversation.status = "waiting_for_user"
         conversation.updated_at = now
         conversation.metadata["last_turn"] = {

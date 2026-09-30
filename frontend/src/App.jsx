@@ -7,6 +7,9 @@ import CatalogBrowser from './components/CatalogBrowser';
 import ExecutionTracker from './components/ExecutionTracker';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
+import SystemDialog from './components/SystemDialog';
+import { Toaster } from './components/ui/toast';
+import { notify, notifyRunFinished } from './lib/notifications';
 
 import { 
   getCatalogTools, 
@@ -85,7 +88,7 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
     setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
       ? {
         ...message,
-        text: queued ? 'Đã nhận yêu cầu, đang chờ worker xử lý…' : '',
+        text: queued ? 'Request received. Waiting for a worker…' : '',
         isQueued: queued,
         isGenerating: true
       }
@@ -110,6 +113,8 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
     const plan = payload.plan || [];
     setActivePlan(plan);
     setDraftPlan(plan);
+    if (plan.length > 0) notify({ id: `plan:${turnId}`, type: 'success', title: 'Your plan is ready',
+      description: `Review the ${plan.length} steps in the conversation before starting.` });
     return;
   }
 
@@ -119,15 +124,17 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
   const completed = ['turn_completed', 'planning_completed'].includes(eventData.type);
   if (!failed && !cancelled && !interrupted && !completed) return;
   if (failed || interrupted) {
-    const text = payload.message || 'Yêu cầu bị gián đoạn trước khi hoàn tất. Bạn có thể gửi lại để thử tiếp.';
+    const text = payload.message || 'The request was interrupted before completion. Submit it again to retry.';
     setMessages(previous => ensureAssistant(previous, text).map(message => message.turnId === turnId
       ? { ...message, text: message.text || text, isGenerating: false, isError: true, errorId: payload.error_id }
       : message));
     setActivePlan([]);
     setDraftPlan([]);
+    notify({ id: `turn:${turnId}`, type: 'error', title: 'Could not complete the request', description: text });
   } else if (cancelled) {
-    setMessages(previous => ensureAssistant(previous, 'Yêu cầu đã được hủy.').map(message => message.turnId === turnId
-      ? { ...message, text: message.text || 'Yêu cầu đã được hủy.', isGenerating: false }
+    notify({ id: `turn:${turnId}`, title: 'Request cancelled' });
+    setMessages(previous => ensureAssistant(previous, 'Request cancelled.').map(message => message.turnId === turnId
+      ? { ...message, text: message.text || 'Request cancelled.', isGenerating: false }
       : message));
   } else {
     setMessages(previous => previous.map(message => message.turnId === turnId
@@ -173,6 +180,7 @@ export default function App() {
   const [activeConversationTurnId, setActiveConversationTurnId] = useState(null);
   const [executionDuration, setExecutionDuration] = useState(null);
   const [authMessage, setAuthMessage] = useState('');
+  const [systemDialog, setSystemDialog] = useState(null);
   const conversationStreamRef = useRef(null);
   const conversationRunIdRef = useRef(null);
   const runStreamRef = useRef(null);
@@ -226,7 +234,14 @@ export default function App() {
     }
 
     if (!terminalStatus) return;
+    const alreadyNotified = terminalRunIdsRef.current.has(runId);
     terminalRunIdsRef.current.add(runId);
+    if (!alreadyNotified) notifyRunFinished(runId, terminalStatus, () => {
+      if (terminalStatus === 'completed') {
+        setResultsSource('tracker');
+        setIsResultsOpen(true);
+      } else setActiveTab('runs');
+    });
 
     if (eventData.plan?.length) {
       setActivePlan(eventData.plan);
@@ -629,7 +644,7 @@ export default function App() {
         runStreamRef.current = null;
       }
       setAuthUser(null);
-      setAuthMessage('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại để tiếp tục.');
+      setAuthMessage('Your session has expired. Please sign in again to continue.');
       setConversationId(null);
       setConversationClosed(false);
       setCurrentRun(null);
@@ -689,7 +704,7 @@ export default function App() {
     const isApprovalMessage = isApprovalCommand(textPrompt);
 
     if (!startsNewConversation && draftPlan.length > 0 && isApprovalMessage) {
-      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Kế hoạch đã được duyệt. Bạn có thể theo dõi tiến độ ngay trong hội thoại và mở kết quả sau khi quy trình hoàn tất.', duration: '0.1' }]);
+      setMessages(prev => [...prev, { sender: 'supervisor', text: 'Plan approved. Track progress in this conversation and open the results when the workflow finishes.', duration: '0.1' }]);
       await handleApprovePlan();
       return;
     }
@@ -743,11 +758,13 @@ export default function App() {
               return;
             }
             console.warn('Conversation progress connection interrupted:', error);
+            notify({ id: `connection:${turnId}`, type: 'warning', title: 'Progress connection interrupted',
+              description: 'Reload the conversation to reconnect. The backend may still be processing your request.' });
             setIsProcessing(false);
             setMessages(prev => prev.map(message => message.turnId === turnId
               ? {
                 ...message,
-                text: 'Kết nối theo dõi bị gián đoạn. Hãy tải lại hội thoại để xem trạng thái mới nhất.',
+                text: 'The progress connection was interrupted. Reload the conversation to see the latest status.',
                 isGenerating: false,
                 isError: true
               }
@@ -775,16 +792,16 @@ export default function App() {
           setMessages(prev => [...prev, {
             sender: 'supervisor',
             text: latestAssistantMessage || (decision === 'propose_plan'
-              ? `Tôi đã chuẩn bị kế hoạch gồm ${plan.length} bước. Bạn có thể xem lại rồi chọn bắt đầu.`
+              ? `I prepared a ${plan.length}-step plan. Review it and choose when to start.`
               : decision === 'answer'
-                ? 'Tôi đã trả lời yêu cầu của bạn.'
-                : 'Tôi đã ghi nhận yêu cầu. Bạn hãy làm rõ thêm chi tiết nhé!'),
+                ? 'I have answered your request.'
+                : 'I have noted your request. Please provide more details.'),
             duration: ((Date.now() - sendStartTime) / 1000).toFixed(2)
           }]);
         }
       } else {
         const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-        const errorText = 'Không thể kết nối backend. Hãy kiểm tra backend rồi thử lại.';
+        const errorText = 'Could not connect to the backend. Check that it is running, then try again.';
         setMessages(prev => {
           const messageIndex = prev.findIndex(message => message.turnId === turnId);
           if (messageIndex < 0) {
@@ -809,7 +826,8 @@ export default function App() {
       conversationStreamRef.current = null;
       console.error('Error starting run:', err);
       const durationSec = ((Date.now() - sendStartTime) / 1000).toFixed(2);
-      const errorText = `Có lỗi kết nối: ${err.message}`;
+      const errorText = `Connection error: ${err.message}`;
+      notify({ id: `turn:${turnId}`, type: 'error', title: 'Could not send the request', description: err.message });
       setMessages(prev => {
         const messageIndex = prev.findIndex(message => message.turnId === turnId);
         if (messageIndex < 0) {
@@ -900,6 +918,7 @@ export default function App() {
 
       } catch (err) {
         console.error("Approve run error:", err);
+        notify({ type: 'error', title: 'Could not start the workflow', description: err.message });
         const totalSec = ((Date.now() - execStartTime) / 1000).toFixed(2);
         setExecutionDuration(totalSec);
         setIsStreaming(false);
@@ -965,16 +984,15 @@ export default function App() {
       if (conversationId) {
         setMessages(previous => [...previous, {
           sender: 'supervisor',
-          text: 'Đã yêu cầu dừng workflow. Nếu một bước đang xử lý, hệ thống có thể cần hoàn tất bước đó trước khi dừng hẳn.'
+          text: 'Workflow cancellation requested. A step already in progress may need to finish before it stops.'
         }]);
       }
     } catch (error) {
-      if (conversationId) {
-        setMessages(previous => [...previous, {
-          sender: 'supervisor',
-          text: `Không thể hủy workflow: ${error.message}`
-        }]);
-      }
+      notify({
+        type: 'error',
+        title: 'Could not stop the workflow',
+        description: error.message || 'Please try again.'
+      });
     } finally {
       setIsCancelling(false);
     }
@@ -986,11 +1004,11 @@ export default function App() {
     try {
       await cancelConversationTurn(conversationId, activeConversationTurnId);
     } catch (error) {
-      setMessages(previous => [...previous, {
-        sender: 'supervisor',
-        text: `Không thể hủy yêu cầu: ${error.message}`,
-        isError: true
-      }]);
+      notify({
+        type: 'error',
+        title: 'Could not stop the request',
+        description: error.message || 'Please try again.'
+      });
     } finally {
       setIsCancelling(false);
     }
@@ -1000,10 +1018,6 @@ export default function App() {
     if (!conversationId || isDeletingConversation || (isProcessing && !isStreaming)) return;
     const linkedRun = conversationRun;
     const linkedRunIsActive = Boolean(linkedRun && ACTIVE_RUN_STATUSES.has(linkedRun.status));
-    const warning = linkedRunIsActive
-          ? 'Hội thoại sẽ bị xóa vĩnh viễn. Quy trình đang chạy sẽ không bị hủy và vẫn có thể theo dõi trong Lịch sử chạy. Tiếp tục?'
-      : 'Xóa vĩnh viễn hội thoại này và các tin nhắn của nó?';
-    if (!window.confirm(warning)) return;
 
     setIsDeletingConversation(true);
     try {
@@ -1036,18 +1050,40 @@ export default function App() {
         setExecutionDuration(null);
       }
       setIsProcessing(false);
+      setSystemDialog(null);
+      notify({ type: 'success', title: 'Conversation deleted',
+        description: linkedRunIsActive ? 'The workflow is still running in Run history.' : undefined });
       if (!linkedRunIsActive && runStreamRef.current) {
         runStreamRef.current();
         runStreamRef.current = null;
       }
     } catch (error) {
-      setMessages(previous => [...previous, {
-        sender: 'supervisor',
-        text: `Không thể xóa hội thoại: ${error.message}`
-      }]);
+      setSystemDialog(previous => previous ? {
+        ...previous,
+        error: error.message || 'Please try again.'
+      } : null);
+      notify({
+        type: 'error',
+        title: 'Could not delete the conversation',
+        description: error.message || 'Please try again.'
+      });
     } finally {
       setIsDeletingConversation(false);
     }
+  };
+
+  const requestDeleteConversation = () => {
+    if (!conversationId || isDeletingConversation || (isProcessing && !isStreaming)) return;
+    const linkedRunIsActive = Boolean(conversationRun && ACTIVE_RUN_STATUSES.has(conversationRun.status));
+    setSystemDialog({
+      kind: 'confirm',
+      tone: 'danger',
+      title: 'Delete this conversation?',
+      description: linkedRunIsActive
+        ? 'The conversation and its messages will be permanently deleted. The workflow will keep running and remain available in Run history.'
+        : 'This will permanently delete the conversation and its messages.',
+      confirmLabel: 'Delete conversation'
+    });
   };
 
   return (
@@ -1072,7 +1108,7 @@ export default function App() {
               onApprovePlan={handleApprovePlan}
               onCancelRun={handleCancelRun}
               onCancelTurn={handleCancelConversationTurn}
-              onDeleteConversation={handleDeleteConversation}
+              onDeleteConversation={requestDeleteConversation}
               conversationId={conversationId}
               isCancelling={isCancelling}
               activeTurnId={activeConversationTurnId}
@@ -1127,6 +1163,13 @@ export default function App() {
           setActiveTab('runs');
         }}
       />
+      <SystemDialog
+        dialog={systemDialog}
+        busy={isDeletingConversation}
+        onClose={() => setSystemDialog(null)}
+        onConfirm={handleDeleteConversation}
+      />
+      <Toaster limit={3} />
     </div>
   );
 }
