@@ -69,6 +69,21 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
             await close_redis_connection()
             await engine.dispose()
 
+    async def test_evidence_round_trip_preserves_timezone(self) -> None:
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+        from app.modules.results.models import EvidenceRecord
+
+        repository = PostgresResearchRepository()
+        now = datetime.now(timezone.utc)
+        evidence = EvidenceRecord(run_id=self.run_id, source_url="https://example.com/research", collected_at=now)
+        await repository.save_evidence(evidence)
+        records = await repository.list_evidence(self.run_id)
+        self.assertEqual(len(records), 1)
+        self.assertIsNotNone(records[0].collected_at.tzinfo)
+        self.assertEqual(records[0].collected_at, now)
+        await repository.save_evidence(evidence)
+        self.assertEqual(len(await repository.list_evidence(self.run_id)), 1)
+
     async def test_migrations_are_repeatable_and_create_required_tables(self) -> None:
         await init_tables()
         async with engine.connect() as connection:
