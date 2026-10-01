@@ -290,7 +290,7 @@ class SupervisorAgent(BaseAgent):
                 "explicit user approval is required."
             ]
         if response.decision in {"clarify", "propose_plan"}:
-            updates["plan"] = response.plan
+            updates["plan"] = [task.to_runtime_task() for task in response.plan]
 
         # Merge existing metadata (e.g. use_llm and inference purpose) with model metadata.
         existing_metadata = state.get("metadata") or {}
