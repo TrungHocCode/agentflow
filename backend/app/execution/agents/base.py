@@ -66,6 +66,13 @@ def _run_input_context(state: State) -> str:
     return "\n".join(lines)
 
 
+def _research_question(state: State, task: Task) -> str:
+    """Pass the user's research request, not task-routing instructions or the run-input wrapper."""
+    input_data = (state.get("metadata") or {}).get("input_data") or {}
+    prompt = input_data.get("user_prompt") if isinstance(input_data, dict) else None
+    return str(prompt).strip() if prompt and str(prompt).strip() else task.description
+
+
 def _state_model_name(state: State, llm: BaseChatModel | None = None) -> str | None:
     actual_model = getattr(llm, "model", None)
     if isinstance(actual_model, str) and actual_model:
@@ -685,10 +692,10 @@ class WorkerAgent(BaseAgent):
                                 normalized_tool_result.metadata.model_copy(update={"discovery_id": discovery_id})})
                         if processor is not None and tool_name in {"news_crawler", "news_crawler_batch"}:
                             observation = await processor.process(
-                                normalized_tool_result, current_task.description + _run_input_context(state))
+                                normalized_tool_result, _research_question(state, current_task))
                         elif processor is not None and tool_name == "http_request":
                             observation = await processor.process_http(
-                                normalized_tool_result, current_task.description + _run_input_context(state),
+                                normalized_tool_result, _research_question(state, current_task),
                                 method=str(tool_args.get("method") or "GET"))
                         wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
 

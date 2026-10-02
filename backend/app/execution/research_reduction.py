@@ -2,7 +2,6 @@
 
 import json
 import logging
-import re
 from time import perf_counter
 from uuid import uuid4
 
@@ -13,6 +12,7 @@ from app.core.config import settings
 from app.execution.context_budget import guard_context
 from app.execution.research_contracts import EvidenceClaim, SynthesisResult
 from app.execution.research_evidence import EvidenceStore
+from app.execution.research_validation import supported_numbers
 from app.shared.llm_call_metrics import LLMCallObserver
 
 
@@ -86,9 +86,12 @@ class EvidenceReducer:
                     for finding in result.findings:
                         if not set(finding.evidence_ids).issubset(group_ids & known_ids):
                             raise ValueError("Synthesis returned evidence IDs outside its supplied group.")
-                        source_numbers = set(re.findall(r"\d+(?:[.,]\d+)*", " ".join(
-                            original[identity].excerpt for identity in finding.evidence_ids)))
-                        if not set(re.findall(r"\d+(?:[.,]\d+)*", finding.text)).issubset(source_numbers):
+                        supporting = [original[identity] for identity in finding.evidence_ids]
+                        finding_text = finding.text
+                        for claim in supporting:
+                            if claim.subject:
+                                finding_text = finding_text.replace(claim.subject, "")
+                        if not supported_numbers(finding_text, " ".join(claim.excerpt for claim in supporting)):
                             raise ValueError("Synthesis introduced a number absent from its supporting excerpts.")
                     if not result.findings:
                         raise ValueError("Synthesis produced no source-backed findings.")
