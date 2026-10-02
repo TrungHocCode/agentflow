@@ -6,13 +6,16 @@ from app.execution.agents.resolver import AgentResolver
 from app.execution.graph import build_execution_graph, get_graph_config
 from app.execution.ports import AssistantTokenCallback, ExecutionPort
 from app.execution.state import State
+from app.execution.research_evidence import EvidenceStore
 
 
 class LangGraphExecutionAdapter(ExecutionPort):
     """Current in-process LangGraph adapter behind the execution port."""
 
-    def __init__(self, agent_resolver: AgentResolver | None = None) -> None:
+    def __init__(self, agent_resolver: AgentResolver | None = None,
+                 evidence_store: EvidenceStore | None = None) -> None:
         self.agent_resolver = agent_resolver or AgentResolver()
+        self.evidence_store = evidence_store
 
     async def create_plan(
         self,
@@ -49,7 +52,8 @@ class LangGraphExecutionAdapter(ExecutionPort):
         run_id: str,
         initial_state: State,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        graph = build_execution_graph(agent_resolver=self.agent_resolver)
+        graph = build_execution_graph(agent_resolver=self.agent_resolver, evidence_store=self.evidence_store)
+        initial_state = {**initial_state, "metadata": {**(initial_state.get("metadata") or {}), "run_id": run_id}}
         async for chunk in graph.astream(
             initial_state,
             config=get_graph_config(run_id),
