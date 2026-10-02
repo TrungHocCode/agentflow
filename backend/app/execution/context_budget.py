@@ -63,6 +63,9 @@ def guard_context(messages: list[BaseMessage], tools: list[BaseTool]) -> int:
 def project_tool_result(result: ToolResult, max_chars: int = 5000) -> str:
     """Return bounded JSON without cutting serialized JSON or duplicating search candidates."""
     payload: dict[str, Any] = {"ok": result.ok, "status": result.status}
+    reference = (result.metadata.model_extra or {}).get("discovery_id")
+    if isinstance(reference, str):
+        payload["discovery_id"] = reference
     if result.error:
         payload["error"] = result.error.model_dump()
     if result.source:
@@ -79,6 +82,9 @@ def project_tool_result(result: ToolResult, max_chars: int = 5000) -> str:
                                if key in record})
         payload["data"] = {"candidates": candidates[:8], "total_candidates": len(candidates),
                            "discovery_only": True}
+    elif isinstance(data, dict) and any(key in data for key in ("file_path", "svg_path", "spec_path")):
+        payload["data"] = {key: value for key, value in data.items()
+                           if key in {"file_path", "svg_path", "spec_path", "relative_path", "size_bytes", "title"}}
     else:
         payload["data"] = data
     serialized = json.dumps(payload, ensure_ascii=False, default=str)
@@ -86,6 +92,7 @@ def project_tool_result(result: ToolResult, max_chars: int = 5000) -> str:
         return serialized
     # Explicit preview, never pretend a truncated tool body is complete evidence.
     return json.dumps({"ok": result.ok, "status": result.status, "projection_partial": True,
+                       "discovery_id": reference,
                        "original_chars": len(serialized), "preview": serialized[:max_chars // 3],
                        "warning": "Only a bounded preview is shown; do not infer complete source coverage."},
                       ensure_ascii=False)

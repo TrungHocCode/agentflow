@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from app.execution.research_contracts import ResearchResult, SourceDocument
+from app.execution.tools.contracts import ToolResult
 from app.modules.results.models import EvidenceRecord, ResultRecord
 from app.modules.results.ports import ResearchDataRepository
 from app.modules.runs.ports import RunRepository
@@ -16,6 +17,15 @@ class DurableEvidenceStore:
         self.repository = repository
         self.root = Path(root).resolve()
         self.run_repository = run_repository
+
+    async def save_discovery(self, run_id: str, task_id: str, result: ToolResult) -> str:
+        await self.check_active(run_id)
+        identity = str(uuid5(NAMESPACE_URL, f"{run_id}:discovery:{task_id}:" + hashlib.sha256(
+            result.to_json().encode()).hexdigest()))
+        await self.repository.save_result(ResultRecord(id=identity, run_id=run_id, task_id=task_id,
+            result_type="raw_data", content=result.model_dump(mode="json"),
+            metadata={"kind": "source_discovery", "discovery_only": True}))
+        return identity
 
     async def check_active(self, run_id: str) -> None:
         run = await self.run_repository.get(run_id)

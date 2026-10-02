@@ -594,18 +594,19 @@ async def worker_node(
     if evidence_store is not None:
         options["evidence_store"] = evidence_store
     worker_execution = _execute_worker_node(state, **options)
-    if current_task is None or current_task.timeout_seconds is None:
+    if current_task is None:
         return await worker_execution
+    timeout_seconds = current_task.timeout_seconds or settings.MAX_TASK_TIMEOUT_SECONDS
     try:
         return await asyncio.wait_for(
             worker_execution,
-            timeout=max(float(current_task.timeout_seconds), 0.1),
+            timeout=max(float(timeout_seconds), 0.1),
         )
     except asyncio.TimeoutError:
         failed_task = current_task.model_copy(
             update={
                 "status": "failed",
-                "error": f"Task exceeded timeout of {current_task.timeout_seconds} seconds.",
+                "error": f"Task exceeded timeout of {timeout_seconds} seconds.",
             }
         )
         return {
