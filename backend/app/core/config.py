@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field, model_validator
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
@@ -23,6 +24,16 @@ class Settings(BaseSettings):
     LLM_CHAT_MODEL: str = "qwen3:0.6b"
     LLM_PLANNER_MODEL: str = "qwen3:8b"
     LLM_WORKER_MODEL: str = "qwen3:8b"
+    # Explicit context policy; estimates are conservative, not provider token counts.
+    LLM_CONTEXT_TOKENS: int = Field(default=8192, ge=2048)
+    LLM_OUTPUT_TOKENS: int = Field(default=1024, ge=128)
+    LLM_CONTEXT_MARGIN_TOKENS: int = Field(default=1024, ge=128)
+    RESEARCH_MAP_OUTPUT_TOKENS: int = Field(default=768, ge=128)
+    RESEARCH_MAX_CHUNKS: int = Field(default=32, ge=1, le=256)
+    RESEARCH_MAX_DOCUMENTS: int = Field(default=8, ge=1, le=64)
+    RESEARCH_CHUNK_CHARS: int = Field(default=3000, ge=128, le=16000)
+    RESEARCH_MAX_REDUCE_CALLS: int = Field(default=32, ge=1, le=256)
+    RESEARCH_MAX_REDUCE_DEPTH: int = Field(default=4, ge=1, le=8)
     ARTIFACT_ROOT: str = "workspace_data"
     MAX_RUN_DURATION: int = 3600
     MAX_TASK_CONCURRENCY: int = 1
@@ -51,6 +62,14 @@ class Settings(BaseSettings):
     # the operator explicitly accepts that risk for this deployment.
     ENABLE_UNSANDBOXED_PYTHON_EXECUTION: bool = False
     ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS: bool = False
+
+    @model_validator(mode="after")
+    def validate_context_policy(self) -> "Settings":
+        if self.LLM_OUTPUT_TOKENS + self.LLM_CONTEXT_MARGIN_TOKENS >= self.LLM_CONTEXT_TOKENS:
+            raise ValueError("Output reservation and safety margin must leave a usable input context.")
+        if self.RESEARCH_MAP_OUTPUT_TOKENS > self.LLM_OUTPUT_TOKENS:
+            raise ValueError("Map output must fit inside the reserved LLM output budget.")
+        return self
 
     class Config:
         env_file = ".env"

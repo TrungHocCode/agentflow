@@ -337,12 +337,10 @@ def _crawl_listing_articles(
                 if is_article or not article_result.ok
                 else "not_article"
             ),
-            "text": article_text[:8000] if is_article else "",
+            "text": article_text if is_article else "",
             "metadata": article_data.get("metadata") or {},
             "source": source,
         }
-        if len(article_text) > 8000 and is_article:
-            record["text_truncated"] = True
         if article_result.error:
             record["warning"] = article_result.error.message
             record["error"] = article_result.error.model_dump()
@@ -469,7 +467,7 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
         {
             "content_type": "article",
             "title": title or "Untitled article",
-            "text": body[:30000],
+            "text": body,
             "markdown": markdown[:40000],
             "paragraphs": paragraphs[:20],
             "items": [],

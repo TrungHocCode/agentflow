@@ -14,6 +14,10 @@ from app.core.config import settings
 from app.execution.model_router import model_name_for
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
+from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
+from app.execution.research_evidence import EvidenceProcessor, EvidenceStore
+from app.execution.research_contracts import ResearchResult
+from app.execution.research_reduction import EvidenceReducer
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
 from app.shared.llm_call_metrics import LLMCallObserver
 from app.shared.observability import bind_context
@@ -318,10 +322,14 @@ class WorkerAgent(BaseAgent):
     """
     MINIMUM_USABLE_SOURCE_RATIO = 0.5
 
+    evidence_store: EvidenceStore | None = None
+
     async def execute(self, state: State) -> Dict[str, Any]:
         current_task = state.get("current_task")
         if not current_task:
             raise ValueError(f"Worker '{self.name}' executed but 'current_task' is missing in state.")
+        if self.name == "synthesis_agent" and self.evidence_store is not None:
+            return await self._synthesize(state, current_task)
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
         task_started_at = datetime.now(timezone.utc) if timing_enabled else None
         task_started = perf_counter() if timing_enabled else None
@@ -337,6 +345,8 @@ class WorkerAgent(BaseAgent):
 
         # Build context from previous results
         results = state.get("result_storage") or []
+        results = [result for result in results if str(result.get("task_id")) in
+                   {str(task_id) for task_id in current_task.dependencies}]
         if results:
             results_str = "\n".join([
                 f"- Task {res.get('task_id', '?')} (Node: {res.get('node', '?')}) "
@@ -346,6 +356,15 @@ class WorkerAgent(BaseAgent):
             ])
         else:
             results_str = "No execution results from other agents yet."
+
+        citation_urls: set[str] = set()
+        for result in results:
+            content = result.get("result")
+            if isinstance(content, dict):
+                citation_urls.update(value for value in (content.get("sources") or {}).values()
+                                     if isinstance(value, str))
+                citation_urls.update(claim["source_url"] for claim in content.get("claims", [])
+                                     if isinstance(claim, dict) and isinstance(claim.get("source_url"), str))
 
         context_results = (
             f"\n--- Outputs of Previous Tasks (Available Inputs) ---\n"
@@ -367,6 +386,12 @@ class WorkerAgent(BaseAgent):
         worker_error_id: str | None = None
         execution_timings: List[ExecutionTiming] = []
         llm_call_metrics: list[dict[str, Any]] = []
+        metadata = state.get("metadata") or {}
+        processor = (
+            EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(current_task.id))
+            if self.evidence_store is not None and self.name == "source_researcher" and metadata.get("run_id")
+            else None
+        )
 
         try:
             if self.tools:
@@ -380,6 +405,15 @@ class WorkerAgent(BaseAgent):
 
             while iteration < max_iterations:
                 iteration += 1
+                if self.evidence_store is not None and metadata.get("run_id"):
+                    await self.evidence_store.check_active(metadata["run_id"])
+                estimated_input = guard_context(messages, self.tools)
+                logger.info("Worker context budget checked", extra={
+                    "estimated_input_tokens": estimated_input,
+                    "token_counting_method": "utf8/2_heuristic",
+                    "context_tokens": settings.LLM_CONTEXT_TOKENS,
+                    "output_reservation": settings.LLM_OUTPUT_TOKENS,
+                })
                 logs.append(f"[{self.name}] Iteration {iteration}: Invoking LLM.")
                 llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
                 llm_started = perf_counter() if timing_enabled else None
@@ -505,6 +539,11 @@ class WorkerAgent(BaseAgent):
                         tool_wall_started = perf_counter()
 
                         if tool_name in tool_map:
+                            if self.name == "report_agent" and self.evidence_store is not None:
+                                supplied_urls = {url.rstrip(".,;:!?)]}") for url in _URL_PATTERN.findall(
+                                    json.dumps(tool_args, ensure_ascii=False))}
+                                if not citation_urls or not supplied_urls.issubset(citation_urls):
+                                    raise ValueError("Report citations must refer to collected source evidence.")
                             tool_obj = tool_map[tool_name]
                             logs.append(f"[{self.name}] Executing tool '{tool_name}'.")
                             tool_started_at = datetime.now(timezone.utc) if timing_enabled else None
@@ -638,7 +677,16 @@ class WorkerAgent(BaseAgent):
                             tool_outcomes[call_key] = outcome
 
                         # Prompt injection defense: wrap tool output in XML tags
-                        wrapped_output = f"<tool_output>\n{str(tool_result)}\n</tool_output>"
+                        observation = normalized_tool_result
+                        if processor is not None and tool_name in {"web_search", "web_search_batch"}:
+                            discovery_id = await self.evidence_store.save_discovery(
+                                metadata["run_id"], str(current_task.id), normalized_tool_result)
+                            observation = normalized_tool_result.model_copy(update={"metadata":
+                                normalized_tool_result.metadata.model_copy(update={"discovery_id": discovery_id})})
+                        if processor is not None and tool_name in {"news_crawler", "news_crawler_batch"}:
+                            observation = await processor.process(
+                                normalized_tool_result, current_task.description + _run_input_context(state))
+                        wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
@@ -698,7 +746,12 @@ class WorkerAgent(BaseAgent):
 
         except Exception as e:
             status = "failed"
-            error_msg = f"Worker execution failed ({type(e).__name__})."
+            context_error = isinstance(e, ContextBudgetExceeded) or "exceed_context_size_error" in str(e)
+            error_code = "context_budget_exceeded" if context_error else "worker_execution_failed"
+            error_msg = (
+                "Research input exceeded the model context budget. No oversized request was retried."
+                if context_error else f"Worker execution failed ({type(e).__name__})."
+            )
             error_id = worker_error_id or str(uuid.uuid4())
             logs.append(f"[{self.name}] Execution failed ({type(e).__name__}).")
             logger.error(
@@ -707,19 +760,35 @@ class WorkerAgent(BaseAgent):
                 extra={
                     "task_execution_id": str(current_task.id),
                     "error_id": error_id,
-                    "error_code": "worker_execution_failed",
+                    "error_code": error_code,
                 },
             )
             worker_error_metadata = {
                 **(state.get("metadata") or {}),
                 "last_error": {
                     "error_id": error_id,
-                    "code": "worker_execution_failed",
+                    "code": error_code,
                     "category": "execution",
-                    "retryable": True,
+                    "retryable": not context_error,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
+
+        if processor is not None:
+            llm_call_metrics.extend(processor.metrics)
+            for metric in processor.metrics:
+                execution_timings.append(ExecutionTiming(operation="llm", phase="execute",
+                    name="evidence_mapper", agent_name=self.name, task_id=current_task.id,
+                    call_id=metric["call_id"], duration_ms=metric["request_latency_ms"], status=metric["status"],
+                    model=metric.get("model"), started_at=metric["started_at"], completed_at=metric["completed_at"]))
+            final_result = processor.bundle.model_dump(mode="json")
+            if status != "failed":
+                if not processor.bundle.claims:
+                    status = "failed"
+                    error_msg = "No validated source-backed evidence was collected; search results alone are insufficient."
+                elif processor.bundle.status != "complete":
+                    status = "partial"
+                    error_msg = "Evidence extraction is partial; inspect chunk coverage and warnings."
 
         # Update state
         new_result = {
@@ -760,6 +829,60 @@ class WorkerAgent(BaseAgent):
                 ).model_dump(mode="json")
             ]
         return updates
+
+    async def _synthesize(self, state: State, task: Task) -> Dict[str, Any]:
+        """Synthesis is reconciliation over typed evidence, not another generic summarizer loop."""
+        started = perf_counter()
+        started_at = datetime.now(timezone.utc)
+        metadata = state.get("metadata") or {}
+        reducer = EvidenceReducer(self.llm, self.evidence_store, metadata.get("run_id", ""), task.id)
+        error = None
+        status = "done"
+        result: dict[str, Any] = {}
+        try:
+            inputs = [item for item in state.get("result_storage", [])
+                      if str(item.get("task_id")) in {str(identity) for identity in task.dependencies}]
+            bundles = [ResearchResult.model_validate(item["result"]) for item in inputs]
+            claims = {claim.evidence_id: claim for bundle in bundles for claim in bundle.claims}
+            reduced = await reducer.reduce(list(claims.values()), task.description)
+            used_ids = {identity for finding in reduced.findings for identity in finding.evidence_ids}
+            result = {**reduced.model_dump(), "sources": {
+                identity: claims[identity].source_url for identity in sorted(used_ids)},
+                "input_claim_count": len(claims),
+                "limitations": list(dict.fromkeys(reduced.limitations + [warning for bundle in bundles
+                    for warning in bundle.warnings] + [f"Missing field: {field}" for bundle in bundles
+                    for field in bundle.missing_fields])),
+            }
+            if any(bundle.status != "complete" for bundle in bundles):
+                status = "partial"
+            result["status"] = status
+        except Exception as exc:
+            status = "failed"
+            error = "Could not reconcile source evidence; no unsupported synthesis was substituted."
+            logger.exception("Evidence synthesis failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
+        updated = task.model_copy(update={"status": status, "error": error})
+        output = {"current_task": updated, "plan": [updated], "logs": [
+            f"[synthesis_agent] Reconciliation {status}; {reducer.calls} bounded LLM calls."],
+            "result_storage": [{"task_id": task.id, "node": self.name, "result": result,
+                                "status": status, "error": error}],
+        }
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            output["llm_call_metrics"] = reducer.metrics
+            output["execution_timings"] = [ExecutionTiming(operation="llm", phase="execute",
+                name="evidence_reducer", agent_name=self.name, task_id=task.id,
+                call_id=metric["call_id"], duration_ms=metric["request_latency_ms"], status=metric["status"],
+                model=metric.get("model"), started_at=metric["started_at"], completed_at=metric["completed_at"]
+            ).model_dump(mode="json") for metric in reducer.metrics]
+            output["task_execution_metrics"] = [TaskExecutionMetric(task_id=task.id, node=self.name, status=status,
+                duration_ms=round((perf_counter() - started) * 1000, 3), started_at=started_at,
+                completed_at=datetime.now(timezone.utc)).model_dump(mode="json")]
+        if status == "failed":
+            output["metadata"] = {**metadata, "last_error": {"error_id": str(uuid.uuid4()),
+                "code": "evidence_synthesis_failed", "category": "execution", "retryable": False,
+                "occurred_at": datetime.now(timezone.utc).isoformat()}}
+        logger.info("Evidence synthesis finished", extra={"duration_ms": round((perf_counter() - started) * 1000, 3),
+                                                          "status": status, "task_id": task.id})
+        return output
 
     @classmethod
     def _tool_outcome_coverage(cls, outcomes: Iterable[Dict[str, Any]]) -> tuple[int, int]:

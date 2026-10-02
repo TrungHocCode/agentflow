@@ -1399,7 +1399,12 @@ class RunService:
             await self.research_repository.save_result(result)
 
             serialized = json.dumps(content, ensure_ascii=False, default=str)
-            for source_url in sorted(set(re.findall(r"https?://[^\s<>\"']+", serialized))):
+            # Typed evidence is already persisted per chunk with exact source excerpts.
+            typed_evidence = isinstance(content, dict) and content.get("schema_version") == "1" and (
+                "claims" in content or "findings" in content
+            )
+            source_urls = [] if typed_evidence else sorted(set(re.findall(r"https?://[^\s<>\"']+", serialized)))
+            for source_url in source_urls:
                 evidence_id = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_URL,
