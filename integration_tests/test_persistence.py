@@ -3,6 +3,8 @@
 import asyncio
 import os
 import unittest
+import tempfile
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -41,6 +43,35 @@ def setUpModule() -> None:
 
 
 class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
+    async def test_raw_sources_and_claims_persist_with_exact_provenance(self) -> None:
+        from app.execution.research_contracts import EvidenceClaim, ResearchResult, SourceDocument
+        from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+
+        repository = PostgresResearchRepository()
+        self.assertFalse(repository.use_memory)
+        excerpt = "Model Alpha scored 62.2%."
+        document = SourceDocument(document_id="fixture-doc", run_id=self.run_id, task_id="1",
+            source_url="https://fixture.invalid/paper", content_hash="fixture-hash", text=excerpt)
+        claim = EvidenceClaim(evidence_id="fixture-claim", document_id=document.document_id, chunk_id="fixture-chunk",
+            source_url=document.source_url, claim=excerpt, excerpt=excerpt, value_text="62.2", unit="%",
+            start_offset=0, end_offset=len(excerpt))
+        with tempfile.TemporaryDirectory() as root:
+            store = DurableEvidenceStore(repository, root, self.repository)
+            await store.save_document(document)
+            await store.save_bundle(self.run_id, "1", ResearchResult(claims=[claim], status="complete"))
+            await store.save_bundle(self.run_id, "1", ResearchResult(claims=[claim], status="complete"))
+            saved_claims = await repository.list_evidence(self.run_id)
+            self.assertEqual(len(saved_claims), 1)
+            self.assertEqual(saved_claims[0].excerpt, excerpt)
+            self.assertEqual(saved_claims[0].metadata["value_text"], "62.2")
+            self.assertIsNotNone(saved_claims[0].collected_at.tzinfo)
+            records = await repository.list_results(self.run_id)
+            source = next(record for record in records if record.metadata.get("kind") == "source_document")
+            self.assertEqual((Path(root) / source.content["storage_uri"]).read_text(encoding="utf-8"), excerpt)
+            self.assertNotIn("text", source.content)
+            self.assertIsNone(await self.repository.get(self.run_id, "another-owner"))
+
     async def asyncSetUp(self) -> None:
         require_integration_environment()
         self.repository = PostgresRunRepository()
