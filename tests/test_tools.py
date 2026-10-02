@@ -327,13 +327,13 @@ class TestBatchResearchTools(unittest.TestCase):
         self.assertEqual(result.data["sources"][0]["error"]["code"], "outbound_url_blocked")
         get_tool.assert_not_called()
 
-    def test_crawl_batch_bounds_redundant_article_content_for_local_model_context(self):
-        from app.execution.tools.news_crawler_batch_tool import MAX_SOURCE_TEXT_CHARS, _source_record
+    def test_crawl_batch_preserves_body_for_chunk_extraction_without_duplicate_representations(self):
+        from app.execution.tools.news_crawler_batch_tool import _source_record
 
         result = success_result(
             {
                 "content_type": "article",
-                "text": "x" * (MAX_SOURCE_TEXT_CHARS + 100),
+                "text": "x" * 8100,
                 "markdown": "duplicate representation",
                 "paragraphs": ["duplicate representation"],
             },
@@ -341,9 +341,8 @@ class TestBatchResearchTools(unittest.TestCase):
         )
 
         source = _source_record("https://example.com/article", result)
-        self.assertEqual(len(source["data"]["text"]), MAX_SOURCE_TEXT_CHARS)
-        self.assertTrue(source["data"]["text_truncated"])
-        self.assertEqual(source["data"]["original_text_length"], MAX_SOURCE_TEXT_CHARS + 100)
+        self.assertEqual(len(source["data"]["text"]), 8100)
+        self.assertNotIn("text_truncated", source["data"])
         self.assertNotIn("markdown", source["data"])
         self.assertNotIn("paragraphs", source["data"])
 

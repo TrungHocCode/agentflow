@@ -53,6 +53,7 @@ class ResearchResult(BaseModel):
     failed_chunks: int = 0
     unprocessed_chunks: int = 0
     warnings: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
     status: Literal["complete", "partial", "failed"] = "partial"
 
 

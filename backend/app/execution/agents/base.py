@@ -15,6 +15,7 @@ from app.execution.model_router import model_name_for
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
+from app.execution.research_evidence import EvidenceProcessor, EvidenceStore
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
 from app.shared.llm_call_metrics import LLMCallObserver
 from app.shared.observability import bind_context
@@ -319,6 +320,8 @@ class WorkerAgent(BaseAgent):
     """
     MINIMUM_USABLE_SOURCE_RATIO = 0.5
 
+    evidence_store: EvidenceStore | None = None
+
     async def execute(self, state: State) -> Dict[str, Any]:
         current_task = state.get("current_task")
         if not current_task:
@@ -370,6 +373,12 @@ class WorkerAgent(BaseAgent):
         worker_error_id: str | None = None
         execution_timings: List[ExecutionTiming] = []
         llm_call_metrics: list[dict[str, Any]] = []
+        metadata = state.get("metadata") or {}
+        processor = (
+            EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(current_task.id))
+            if self.evidence_store is not None and self.name == "source_researcher" and metadata.get("run_id")
+            else None
+        )
 
         try:
             if self.tools:
@@ -648,7 +657,10 @@ class WorkerAgent(BaseAgent):
                             tool_outcomes[call_key] = outcome
 
                         # Prompt injection defense: wrap tool output in XML tags
-                        wrapped_output = f"<tool_output>\n{project_tool_result(normalized_tool_result)}\n</tool_output>"
+                        observation = normalized_tool_result
+                        if processor is not None and tool_name in {"news_crawler", "news_crawler_batch"}:
+                            observation = await processor.process(normalized_tool_result, current_task.description)
+                        wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
@@ -735,6 +747,17 @@ class WorkerAgent(BaseAgent):
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
+
+        if processor is not None:
+            llm_call_metrics.extend(processor.metrics)
+            final_result = processor.bundle.model_dump(mode="json")
+            if status != "failed":
+                if not processor.bundle.claims:
+                    status = "failed"
+                    error_msg = "No validated source-backed evidence was collected; search results alone are insufficient."
+                elif processor.bundle.status != "complete":
+                    status = "partial"
+                    error_msg = "Evidence extraction is partial; inspect chunk coverage and warnings."
 
         # Update state
         new_result = {
