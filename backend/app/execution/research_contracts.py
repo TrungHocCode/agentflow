@@ -11,8 +11,8 @@ class ExtractedClaim(BaseModel):
     claim: str = Field(min_length=1, max_length=600)
     excerpt: str = Field(min_length=1, max_length=800)
     subject: str = Field(default="", max_length=200)
-    metric: str | None = Field(default=None, max_length=200)
-    value_text: str | None = Field(default=None, max_length=100)
+    metric: str | None = Field(default=None, max_length=200, description="Benchmark or measurement name, not the score")
+    value_text: str | None = Field(default=None, max_length=100, description="Exact numeric string without its unit")
     unit: str | None = Field(default=None, max_length=50)
     evaluation_setup: str | None = Field(default=None, max_length=300)
 
