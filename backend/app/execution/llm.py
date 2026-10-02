@@ -27,5 +27,7 @@ def get_llm(
     return ChatOllama(
         model=model,
         temperature=temperature,
-        base_url=url
+        base_url=url,
+        num_ctx=settings.LLM_CONTEXT_TOKENS,
+        num_predict=settings.LLM_OUTPUT_TOKENS,
     )

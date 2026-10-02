@@ -18,6 +18,7 @@ from app.infrastructure.postgres.identity_repository import PostgresUserReposito
 from app.infrastructure.postgres.results_repository import PostgresResearchRepository
 from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider
 from app.infrastructure.artifacts.storage import LocalArtifactStorage
+from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore
 from app.infrastructure.redis.event_publisher import (
     RedisRunEventPublisher,
     get_in_memory_publisher,
@@ -46,7 +47,9 @@ def build_execution_port() -> ExecutionPort:
     """Return the current in-process execution adapter."""
 
     return LangGraphExecutionAdapter(
-        agent_resolver=AgentResolver(provider=PostgresAgentProfileProvider())
+        agent_resolver=AgentResolver(provider=PostgresAgentProfileProvider()),
+        evidence_store=DurableEvidenceStore(PostgresResearchRepository(), settings.ARTIFACT_ROOT,
+                                           PostgresRunRepository()),
     )
 
 
