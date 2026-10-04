@@ -1,14 +1,16 @@
 # AgentFlow
 
-**A local-first multi-agent workbench for technology research.**
+**A local-first multi-agent platform evolving toward evidence-backed competitive intelligence.**
 
-AgentFlow turns a research question into a workflow you can review, edit, approve, run, and inspect. It combines a conversational planner with a deterministic workflow executor, local LLMs through Ollama, source collection, and structured research artifacts.
+AgentFlow's product direction is to help founders and product teams understand how competitors' products change, compare those changes with their own product, and identify relevant opportunities and risks. Its existing foundation combines a conversational planner, user-approved workflows, a deterministic execution engine, local LLMs through Ollama, source collection, and downloadable research artifacts.
 
-> **Project status:** active personal-project prototype. The current focus is making technology-research runs reliable, traceable, and useful on local hardware. It is not a production-ready hosted service.
+> **Project status:** active personal-project prototype in a domain refactor. The workflow/research foundation exists; product profiles, cross-run product history, change detection and competitive briefs described below are planned capabilities, not available end-to-end features. AgentFlow is not a production-ready hosted service.
 
 ## Contents
 
 - [Why AgentFlow](#why-agentflow)
+- [Competitive intelligence: the target experience](#competitive-intelligence-the-target-experience)
+- [Agent roles](#agent-roles)
 - [What it does](#what-it-does)
 - [How it works](#how-it-works)
 - [Technology](#technology)
@@ -23,19 +25,58 @@ AgentFlow turns a research question into a workflow you can review, edit, approv
 
 ## Why AgentFlow
 
-Technology research often involves repeating the same work: discovering sources, checking evidence, synthesizing findings, comparing options, and writing a report. AgentFlow explores how multi-agent workflows can make that process easier to inspect and reuse while keeping the user in control.
+Product teams repeatedly check competitor pricing pages, feature documentation, integrations and release notes. Detecting an edit is only the beginning: they also need to establish what changed, whether the evidence supports it, and why it matters to their customers.
 
-The initial audience is technology researchers, developers, students, and technical teams who want to automate research without hiding the steps behind a single opaque answer. Local model execution can reduce model-service costs and keep prompts on the user's machine, with a trade-off: speed and answer quality depend on the local model and available hardware.
+AgentFlow targets founders, product managers and small teams. The intended output is a traceable competitive brief, not another copy of crawled text or an absolute claim that one product is "better." Comparisons need explicit criteria, customer segments, observation dates and evidence.
+
+Local inference avoids a required per-token cloud-model bill and keeps model processing on the configured host. It does not mean zero operating cost or fully offline research: websites are still external, and speed and quality depend on hardware, model size, quantization and context. Evidence collection must not disclose private product profiles or strategy through search queries.
+
+## Competitive intelligence: the target experience
+
+The following is the planned manual MVP, not a walkthrough of the current UI:
+
+1. Create an own-product profile and competitor profiles, including target users, features, pricing and approved public sources.
+2. Review the comparison goal, criteria, source scope and execution budget before approving a workflow.
+3. Capture a first baseline. An initial capture alone cannot establish that a product improved.
+4. Run again to compare compatible source snapshots and investigate meaningful additions, removals or modifications.
+5. Verify important claims, compare them with the user's product, and produce a downloadable brief with citations, limitations and advisory actions.
+
+Product history will be immutable rather than overwritten. Publication, launch, effective, observation and fetch dates are distinct; unknown dates stay unknown. A failed fetch is not a removed feature. A change is not automatically an improvement.
+
+| Capability | Availability |
+| --- | --- |
+| Authentication, conversations and workflow review | Existing foundation |
+| Queued runs, authorized agent tools, SSE progress and artifacts | Existing foundation |
+| Own-product and competitor profiles with historical versions | Planned |
+| Approved watchlists, durable snapshots and cross-run baselines | Planned |
+| Change detection, bounded investigation and evidence verification | Planned |
+| Product comparison and structured competitive briefs | Planned |
+| Scheduled monitoring | Deferred until the manual flow is validated |
+
+## Agent roles
+
+These are target responsibilities, not six agents already wired into the application:
+
+| Role | Responsibility | Proposed tool capabilities |
+| --- | --- | --- |
+| Supervisor / Coordinator | Clarify goals, propose a plan, resolve evidence gaps within approved scope | Read profiles, product history, source catalog and investigation state |
+| Source Researcher | Find and collect approved public evidence | Search, single/batch crawl, HTTP fetch, bounded snapshot reads |
+| Product Analyst | Extract product facts and interpret detected changes | Read profiles/history, change candidates, snapshots and evidence |
+| Evidence Verifier | Check support, contradictions, dates and conditions | Read evidence/snapshots; scoped additional search or collection |
+| Competitive Analyst | Assess gaps, strengths and impact for the target customer | Read verified findings, product profiles/history and comparison criteria |
+| Report Agent | Present the analysis without inventing new facts | Read comparison results/evidence; deterministic report and conditional chart rendering |
+
+The backend owns permissions, storage, diffs, arithmetic, validation, budgets and task scheduling. Agents cannot grant themselves tool access. Not every run invokes every role; missing evidence can trigger bounded follow-up investigation, while no-change runs may need no analytical LLM call.
 
 ## What it does
 
-- **Plan in chat:** describe a technology-research task and receive a proposed workflow; clarify or edit it before execution.
+- **Plan in chat:** describe a research task and receive a proposed workflow; clarify or edit it before execution. This is the existing generic flow, not yet a product-profile setup flow.
 - **Keep approval in the loop:** review and approve a workflow before its run begins.
 - **Execute dependency-aware workflows:** tasks are ordered by their dependencies; the current dispatcher runs one ready task at a time, so parallel task execution is not implemented yet.
 - **Use role-specific agents and tools:** research, synthesis, reporting, and chart work are assigned to agents with authorized tools.
 - **Follow progress:** inspect task status and run events while work is executing.
 - **Keep results:** review research outputs and download generated artifacts such as Markdown reports and charts.
-- **Route inference by role:** short, direct chat uses `qwen3:0.6b`; planning and worker execution use `qwen3:8b` by default. Users do not select a model in the UI.
+- **Route inference by role:** model profiles are configured server-side; users do not select a model in the UI. Repository defaults and local operator overrides can differ.
 - **Manage personal work:** sign in, create conversations, and manage workflows and runs associated with the user.
 
 ## How it works
@@ -131,7 +172,7 @@ python backend/app/db/init_db.py
 
 ### 3. Start Ollama and download a model
 
-Start the Ollama application or run `ollama serve` in another terminal, then pull the default chat and planning/worker models:
+Start the Ollama application or run `ollama serve` in another terminal, then pull the models named in your configuration. For the repository defaults:
 
 ```powershell
 ollama pull qwen3:0.6b
@@ -256,7 +297,9 @@ agentflow/
 
 ## Current scope and limitations
 
-- The product focus is **technology research automation**, not a general-purpose business automation platform.
+- The product direction is **competitive product intelligence**. Current application screens still expose the generic research/workflow foundation; the domain refactor is not complete.
+- Initial scope is public, approved pricing, feature, integration and release-note sources. Authenticated/paywalled collection, anti-bot bypass and autonomous external actions are out of scope.
+- Comparison quality requires an accurate own-product profile and explicit criteria. Do not infer a winner from incomplete data, page edits or incompatible measurements.
 - Workflow scheduling is planned for a later phase and is not currently available.
 - Web research depends on external sites; sources may be unavailable, block requests, or return incomplete content.
 - Local model speed and structured-output quality vary with model, quantization, context size, and CPU/GPU resources. Multi-agent runs can take substantially longer than a single chat response.

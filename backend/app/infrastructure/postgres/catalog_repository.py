@@ -7,6 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
+from app.execution.tools.base import ToolRegistry
+from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.models import AgentCatalogModel, ToolCatalogModel
 from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 from app.modules.catalog.ports import CatalogRepository
@@ -44,10 +46,21 @@ class PostgresCatalogRepository(CatalogRepository):
         if active_only:
             statement = statement.where(ToolCatalogModel.is_active.is_(True))
         try:
-            result = await self.session.execute(statement)
+            if self.session is not None:
+                result = await self.session.execute(statement)
+                rows = result.scalars().all()
+            else:
+                async with AsyncSessionLocal() as session:
+                    result = await session.execute(statement)
+                    rows = result.scalars().all()
         except Exception as exc:
             raise PersistenceError("Could not list tool catalog.") from exc
-        return [ToolDefinition.model_validate(row) for row in result.scalars().all()]
+        autodiscover_tools()
+        registered = set(ToolRegistry.list_tools())
+        return [ToolDefinition.model_validate(row).model_copy(update={
+            "is_available": row.name in registered,
+            "unavailable_reason": None if row.name in registered else "No registered runtime implementation.",
+        }) for row in rows]
 
     async def get_agent(self, identifier: str) -> AgentDefinition | None:
         """Load an active agent profile by its stable ID or unique name."""

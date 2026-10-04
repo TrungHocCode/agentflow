@@ -135,7 +135,7 @@ async def validate_workflow_references(
             requested_refs = [
                 name
                 for name in agent.tool_names
-                if name in tools and not _deployment_disabled(name)
+                if name in tools and tools[name].is_available and not _deployment_disabled(name)
             ]
 
         resolved_names: list[str] = []
@@ -150,6 +150,8 @@ async def validate_workflow_references(
                 raise ValidationError(
                     f"Tool '{tool.name}' is not authorized for agent '{agent.name}' on step '{task_key}'."
                 )
+            if not tool.is_available:
+                raise ValidationError(f"Tool '{tool.name}' has no registered runtime implementation.")
             if explicit_tools and _deployment_disabled(tool.name):
                 raise ValidationError(
                     f"Tool '{tool.name}' is disabled by deployment policy for step '{task_key}'."

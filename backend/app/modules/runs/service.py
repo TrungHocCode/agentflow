@@ -1403,7 +1403,7 @@ class RunService:
             typed_evidence = isinstance(content, dict) and content.get("schema_version") == "1" and (
                 "claims" in content or "findings" in content
             )
-            source_urls = [] if typed_evidence else sorted(set(re.findall(r"https?://[^\s<>\"']+", serialized)))
+            source_urls = [] if typed_evidence else self._find_evidence_urls(content)
             for source_url in source_urls:
                 evidence_id = str(
                     uuid.uuid5(
@@ -1416,7 +1416,7 @@ class RunService:
                         id=evidence_id,
                         run_id=run_doc.run_id,
                         task_execution_id=str(task_id) if task_id is not None else None,
-                        source_url=source_url.rstrip(".,);"),
+                        source_url=source_url,
                         source_type=self._infer_source_type(source_url),
                         excerpt=serialized[:500],
                         metadata={"node": node_name},
@@ -1461,6 +1461,25 @@ class RunService:
         if "summar" in lowered:
             return "summary"
         return "raw_data"
+
+    @staticmethod
+    def _find_evidence_urls(content: Any) -> List[str]:
+        """Extract deduplicated URLs from raw content, excluding Markdown/JSON delimiters."""
+        if isinstance(content, dict):
+            values = content.values()
+        elif isinstance(content, (list, tuple)):
+            values = content
+        elif isinstance(content, str):
+            urls = set()
+            for url in re.findall(r"""https?://[^\s<>"'\\\[\]]+""", content):
+                url = url.rstrip(".,;:!?")
+                while url.endswith(")") and url.count(")") > url.count("("):
+                    url = url[:-1].rstrip(".,;:!?")
+                urls.add(url)
+            return sorted(urls)
+        else:
+            return []
+        return sorted({url for value in values for url in RunService._find_evidence_urls(value)})
 
     @staticmethod
     def _infer_source_type(source_url: str) -> str:
