@@ -95,13 +95,32 @@ class State(TypedDict, total=False):
     mode: Literal["conversation", "executing"]
     metadata: Optional[Dict[str, Any]]
 
+class PlannedTask(BaseModel):
+    """Business planning contract; tool permissions and execution controls belong to the backend."""
+
+    model_config = {"from_attributes": True, "extra": "ignore"}
+
+    id: int
+    node: str
+    status: str = "pending"
+    description: str
+    dependencies: List[int] = Field(default_factory=list)
+    expected_output_type: Literal[
+        "raw_data", "normalized_data", "summary", "comparison", "chart_spec", "report"
+    ] = "raw_data"
+
+    def to_runtime_task(self) -> Task:
+        """Create a fresh task that inherits its selected agent's authorized tools."""
+        return Task.model_validate(self.model_dump())
+
+
 class SupervisorOutput(BaseModel):
     """Validated decision contract for one Supervisor conversation turn."""
 
     decision: Literal["clarify", "propose_plan", "answer"]
     mode: Literal["conversation", "executing"] = "conversation"
     assistant_message: str = Field(min_length=1, max_length=4000)
-    plan: List[Task] = Field(default_factory=list)
+    plan: List[PlannedTask] = Field(default_factory=list)
     metadata: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
