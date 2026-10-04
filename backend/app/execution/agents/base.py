@@ -301,7 +301,7 @@ class SupervisorAgent(BaseAgent):
                 "explicit user approval is required."
             ]
         if response.decision in {"clarify", "propose_plan"}:
-            updates["plan"] = response.plan
+            updates["plan"] = [task.to_runtime_task() for task in response.plan]
 
         # Merge existing metadata (e.g. use_llm and inference purpose) with model metadata.
         existing_metadata = state.get("metadata") or {}
@@ -406,7 +406,7 @@ class WorkerAgent(BaseAgent):
             else:
                 llm_with_tools = self.llm
 
-            max_iterations = current_task.max_iterations if current_task.max_iterations else 5
+            max_iterations = current_task.max_iterations or settings.MAX_TASK_ITERATIONS
             iteration = 0
             tool_map = {tool.name: tool for tool in self.tools}
 

@@ -15,10 +15,13 @@ from app.core.config import settings
 from app.execution.state import Task
 from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.agent_profile_provider import PostgresAgentProfileProvider
-from app.modules.catalog.domain import AgentDefinition
+from app.modules.catalog.domain import AgentDefinition, ToolDefinition
 
 
 class FakeAgentProfileRepository:
+    async def list_tools(self, active_only: bool = True) -> list[ToolDefinition]:
+        return [ToolDefinition(id=name, name=name) for name in ["web_search", "news_crawler"]]
+
     async def get_agent(self, identifier: str) -> AgentDefinition | None:
         if identifier not in {"source_researcher", "agent-source"}:
             return None
@@ -321,6 +324,52 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(profile, AgentProfile)
         self.assertEqual(profile.name, "source_researcher")
         self.assertEqual(profile.tool_names, ["web_search", "news_crawler"])
+        self.assertEqual(profile.catalog_tool_names, ["web_search", "news_crawler"])
+
+    async def test_planner_and_runtime_reject_a_registered_tool_missing_from_database(self) -> None:
+        class IncompleteRepository(FakeAgentProfileRepository):
+            async def list_tools(self, active_only: bool = True) -> list[ToolDefinition]:
+                return [ToolDefinition(id="search", name="web_search")]
+
+        resolver = AgentResolver(provider=PostgresAgentProfileProvider(IncompleteRepository()))
+        catalog = await resolver.format_agent_tool_catalog()
+        self.assertIn("- source_researcher: web_search", catalog)
+        self.assertNotIn("- source_researcher: web_search, news_crawler", catalog)
+        task = Task(id=1, node="source_researcher", status="pending", description="Collect sources",
+                    tool_names=["news_crawler"])
+        with self.assertRaisesRegex(ValueError, "missing or inactive in the tool catalog"):
+            await resolver.validate_plan([task])
+        with self.assertRaisesRegex(ValueError, "missing or inactive in the tool catalog"):
+            await resolver.resolve(task)
+        resolved = await resolver.resolve(task.model_copy(update={"tool_names": []}))
+        self.assertEqual([tool.name for tool in resolved.tools], ["web_search"])
+
+    async def test_disabled_catalog_agent_cannot_fall_back_to_default_permissions(self) -> None:
+        class EmptyProvider:
+            async def get_agent(self, identifier: str) -> AgentProfile | None:
+                return None
+
+        resolver = AgentResolver(provider=EmptyProvider())
+        self.assertNotIn("- source_researcher:", await resolver.format_agent_tool_catalog())
+        task = Task(id=1, node="source_researcher", status="pending", description="Search sources")
+        with self.assertRaisesRegex(ValueError, "missing or inactive"):
+            await resolver.validate_plan([task])
+
+    async def test_resolution_refreshes_catalog_instead_of_using_stale_permissions(self) -> None:
+        class MutableRepository(FakeAgentProfileRepository):
+            active = True
+
+            async def list_tools(self, active_only: bool = True) -> list[ToolDefinition]:
+                return await super().list_tools(active_only) if self.active else []
+
+        repository = MutableRepository()
+        resolver = AgentResolver(provider=PostgresAgentProfileProvider(repository))
+        task = Task(id=1, node="source_researcher", status="pending", description="Search sources",
+                    tool_names=["web_search"])
+        await resolver.validate_plan([task])
+        repository.active = False
+        with self.assertRaisesRegex(ValueError, "missing or inactive"):
+            await resolver.validate_plan([task])
 
     async def test_resolved_profile_can_create_registered_runtime_agent(self) -> None:
         resolver = AgentResolver()
