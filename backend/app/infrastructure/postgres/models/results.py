@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -44,7 +44,7 @@ class EvidenceModel(Base):
     evidence_metadata: Mapped[Dict[str, Any]] = mapped_column(
         "metadata", JSON, nullable=False, default=dict
     )
-    collected_at: Mapped[datetime] = mapped_column(nullable=False)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (Index("ix_evidence_run_collected_at", "run_id", "collected_at"),)
 
