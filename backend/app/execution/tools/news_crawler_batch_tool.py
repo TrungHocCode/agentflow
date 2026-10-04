@@ -18,7 +18,6 @@ from app.execution.tools.network_policy import validate_external_url
 
 MAX_URLS = 8
 MAX_CONCURRENCY = 3
-MAX_SOURCE_TEXT_CHARS = 8_000
 
 
 class NewsCrawlerBatchInput(BaseModel):
@@ -88,17 +87,8 @@ def _crawl_one(
 
 def _source_record(url: str, result: ToolResult) -> dict[str, Any]:
     data = dict(result.data) if isinstance(result.data, dict) else {}
-    original_text_length = 0
-    text = data.get("text")
-    if isinstance(text, str):
-        original_text_length = len(text)
-        if original_text_length > MAX_SOURCE_TEXT_CHARS:
-            data["text"] = text[:MAX_SOURCE_TEXT_CHARS]
-            data["text_truncated"] = True
-            data["original_text_length"] = original_text_length
-
     # The crawler provides equivalent text, Markdown, and paragraph representations.
-    # Keep one bounded body in a multi-source response to control local-model context use.
+    # Preserve one complete body for durable chunk extraction. Prompt projection is separate.
     data.pop("markdown", None)
     data.pop("paragraphs", None)
     articles = data.get("articles")
@@ -109,11 +99,6 @@ def _source_record(url: str, result: ToolResult) -> dict[str, Any]:
                 bounded_articles.append(article)
                 continue
             bounded_article = dict(article)
-            article_text = bounded_article.get("text")
-            if isinstance(article_text, str) and len(article_text) > MAX_SOURCE_TEXT_CHARS:
-                bounded_article["text"] = article_text[:MAX_SOURCE_TEXT_CHARS]
-                bounded_article["text_truncated"] = True
-                bounded_article["original_text_length"] = len(article_text)
             bounded_articles.append(bounded_article)
         data["articles"] = bounded_articles
     items = data.get("items")

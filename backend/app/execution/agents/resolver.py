@@ -91,6 +91,10 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
 
 AGENT_RUNTIME_GUIDANCE: Mapping[str, str] = {
     "source_researcher": (
+        "Collected page bodies are processed by the backend evidence mapper before being returned to you. "
+        "Use validated claim IDs and chunk coverage from that result; do not recreate numbers from memory. "
+        "Search results are discovery candidates only. Crawl relevant primary pages before completing the task. "
+        "Finish when evidence covers the request or explicitly identify gaps; the backend publishes the typed dossier. "
         "Before searching, extract the user's requested subjects, comparison dimensions, and source constraints. For "
         "comparisons, maintain a coverage ledger with one entry per named subject; do not treat a broad query that "
         "mentions every subject as evidence for every subject. A subject is covered only after retrieving a directly "
@@ -123,6 +127,9 @@ AGENT_RUNTIME_GUIDANCE: Mapping[str, str] = {
         "write the final report, and do not copy entire page bodies."
     ),
     "synthesis_agent": (
+        "Your responsibility is cross-source reconciliation, not extraction or repeating the researcher's prose. "
+        "Preserve evidence IDs, benchmark variants, model versions, evaluation conditions and missing values. "
+        "Keep conflicting observations separate; never average incompatible benchmark scores. "
         "text_summarizer is an extractive sentence sampler; it does not semantically summarize or paraphrase. "
         "Use your own reasoning to synthesize available source bodies into distinct, evidence-supported findings. "
         "Preserve every requested subject and comparison dimension from the task; do not silently omit subjects with "

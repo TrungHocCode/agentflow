@@ -11,6 +11,7 @@ from langgraph.runtime import Runtime
 
 from app.core.config import settings
 from app.execution.context import ExecutionContext
+from app.execution.research_evidence import EvidenceStore
 from app.execution.ports import AssistantTokenCallback
 from app.execution.state import State, Task
 from app.execution.model_router import InferencePurpose, model_name_for
@@ -238,6 +239,7 @@ async def dispatcher_node(state: State) -> Dict[str, Any]:
 async def _execute_worker_node(
     state: State,
     agent_resolver: AgentResolver | None = None,
+    evidence_store: EvidenceStore | None = None,
 ) -> Dict[str, Any]:
     """
     Worker Node executes the current dispatched task using configured tools.
@@ -339,6 +341,7 @@ async def _execute_worker_node(
                 system_prompt_override=step_snapshot.get("effective_system_prompt"),
             )
             agent_state = dict(state)
+            worker_agent.evidence_store = evidence_store
             agent_state["metadata"] = {**metadata, "model_name": model_name}
             agent_output = await worker_agent.execute(agent_state)
             agent_output["logs"] = logs + (agent_output.get("logs") or [])
@@ -582,19 +585,19 @@ async def _execute_worker_node(
 async def worker_node(
     state: State,
     agent_resolver: AgentResolver | None = None,
+    evidence_store: EvidenceStore | None = None,
 ) -> Dict[str, Any]:
     """Run a worker with a per-task wall-clock limit."""
 
     current_task = state.get("current_task")
+    options = {}
+    if agent_resolver is not None:
+        options["agent_resolver"] = agent_resolver
+    if evidence_store is not None:
+        options["evidence_store"] = evidence_store
+    worker_execution = _execute_worker_node(state, **options)
     if current_task is None or current_task.timeout_seconds is None:
-        if agent_resolver is None:
-            return await _execute_worker_node(state)
-        return await _execute_worker_node(state, agent_resolver=agent_resolver)
-    worker_execution = (
-        _execute_worker_node(state)
-        if agent_resolver is None
-        else _execute_worker_node(state, agent_resolver=agent_resolver)
-    )
+        return await worker_execution
     try:
         return await asyncio.wait_for(
             worker_execution,
@@ -660,6 +663,7 @@ def route_after_dispatch(state: State) -> str:
 def build_execution_graph(
     checkpointer: Optional[BaseCheckpointSaver] = None,
     agent_resolver: AgentResolver | None = None,
+    evidence_store: EvidenceStore | None = None,
 ) -> "CompiledGraph":
     """
     Constructs and compiles the AgentFlow LangGraph StateGraph.
@@ -694,7 +698,7 @@ def build_execution_graph(
     workflow.add_node("dispatcher_node", dispatcher_node)
 
     async def resolved_worker_node(state: State) -> Dict[str, Any]:
-        return await worker_node(state, agent_resolver=resolver)
+        return await worker_node(state, agent_resolver=resolver, evidence_store=evidence_store)
 
     workflow.add_node("worker_node", resolved_worker_node)
 
