@@ -374,7 +374,7 @@ class WorkerAgent(BaseAgent):
             else:
                 llm_with_tools = self.llm
 
-            max_iterations = current_task.max_iterations if current_task.max_iterations else 5
+            max_iterations = current_task.max_iterations or settings.MAX_TASK_ITERATIONS
             iteration = 0
             tool_map = {tool.name: tool for tool in self.tools}
 
