@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 class ExtractedClaim(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    claim: str = Field(min_length=1, max_length=600)
+    claim: str = Field(min_length=1, max_length=800)
     excerpt: str = Field(min_length=1, max_length=800)
+    source_span_id: str | None = Field(default=None, max_length=32,
+        description="ID of the supporting source paragraph supplied by the backend; not an evidence ID")
     subject: str = Field(default="", max_length=200)
     metric: str | None = Field(default=None, max_length=200, description="Benchmark or measurement name, not the score")
     value_text: str | None = Field(default=None, max_length=100, description="Exact numeric string without its unit")
@@ -54,6 +56,7 @@ class ResearchResult(BaseModel):
     unprocessed_chunks: int = 0
     warnings: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
+    rejection_counts: dict[str, int] = Field(default_factory=dict)
     status: Literal["complete", "partial", "failed"] = "partial"
 
 

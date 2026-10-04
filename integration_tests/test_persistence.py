@@ -110,6 +110,36 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(text[claim.start_offset:claim.end_offset], excerpt)
             self.assertNotIn("<main>", text)
 
+    async def test_span_validation_persists_source_numeric_spelling_and_entity_context(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from app.execution.research_contracts import ChunkExtraction, ExtractedClaim
+        from app.execution.research_evidence import EvidenceProcessor
+        from app.execution.tools.contracts import SourceMetadata, success_result
+        from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+
+        subject = "Qwen3-4B-Instruct-2507"
+        excerpt = "Context Length: 262,144 natively ."
+        model = MagicMock()
+        model.with_structured_output.return_value.ainvoke = AsyncMock(return_value=ChunkExtraction(claims=[
+            ExtractedClaim(claim=f"{subject} supports 262144 natively", subject=subject,
+                excerpt="Incorrect model paraphrase", source_span_id="s1", value_text="262144")]))
+        repository = PostgresResearchRepository()
+        with tempfile.TemporaryDirectory() as root:
+            processor = EvidenceProcessor(model, DurableEvidenceStore(repository, root, self.repository),
+                                          self.run_id, "1")
+            await processor.process(success_result({"text": subject + "\n\n" + excerpt},
+                source=SourceMetadata(final_url="https://fixture.invalid/card")), "Find context length")
+            self.assertEqual(processor.bundle.status, "complete")
+            claims = await repository.list_evidence(self.run_id)
+            self.assertEqual(len(claims), 1)
+            self.assertEqual(claims[0].excerpt, excerpt)
+            self.assertEqual(claims[0].metadata["value_text"], "262,144")
+            records = await repository.list_results(self.run_id)
+            bundle = next(record for record in records if record.metadata.get("kind") == "evidence_bundle")
+            self.assertEqual(bundle.content["claims"][0]["subject"], subject)
+            self.assertEqual(bundle.content["claims"][0]["claim"], excerpt)
+
     async def test_seeded_catalog_accepts_the_same_plan_as_runtime_validation(self) -> None:
         async with AsyncSessionLocal() as session:
             catalog = PostgresCatalogRepository(session)

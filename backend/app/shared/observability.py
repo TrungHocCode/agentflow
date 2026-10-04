@@ -105,6 +105,13 @@ class JsonLogFormatter(logging.Formatter):
             "http_path",
             "status_code",
             "duration_ms",
+            "chunk_id",
+            "rejection_reason",
+            "source_span_id",
+            "prompt_version",
+            "processed_chunks",
+            "failed_chunks",
+            "claims_count",
         ):
             value = getattr(record, field, None)
             if value is not None:
