@@ -77,6 +77,39 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("text", source.content)
             self.assertIsNone(await self.repository.get(self.run_id, "another-owner"))
 
+    async def test_http_fallback_persists_normalized_source_and_verified_claim(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from app.execution.research_contracts import ChunkExtraction, ExtractedClaim
+        from app.execution.research_evidence import EvidenceProcessor
+        from app.execution.tools.contracts import SourceMetadata, success_result
+        from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+
+        url = "https://fixture.invalid/redirected-paper"
+        excerpt = "Model Alpha scored 62.2%."
+        llm = MagicMock()
+        llm.model = "mock-model"
+        llm.with_structured_output.return_value.ainvoke = AsyncMock(return_value=ChunkExtraction(claims=[
+            ExtractedClaim(claim=excerpt, excerpt=excerpt, value_text="62.2", unit="%")]))
+        repository = PostgresResearchRepository()
+        with tempfile.TemporaryDirectory() as root:
+            processor = EvidenceProcessor(llm, DurableEvidenceStore(repository, root, self.repository),
+                                          self.run_id, "1")
+            await processor.process_http(success_result({"body": f"<main><p>{excerpt}</p></main>"},
+                tool_name="http_request", source=SourceMetadata(requested_url="https://fixture.invalid/start",
+                    final_url=url, content_type="text/html", status_code=200)), "Find the score")
+            self.assertEqual(processor.bundle.status, "complete")
+            claims = await repository.list_evidence(self.run_id)
+            self.assertEqual(len(claims), 1)
+            self.assertEqual(claims[0].source_url, url)
+            self.assertEqual(claims[0].metadata["value_text"], "62.2")
+            source = next(record for record in await repository.list_results(self.run_id)
+                          if record.metadata.get("kind") == "source_document")
+            text = (Path(root) / source.content["storage_uri"]).read_text(encoding="utf-8")
+            claim = processor.bundle.claims[0]
+            self.assertEqual(text[claim.start_offset:claim.end_offset], excerpt)
+            self.assertNotIn("<main>", text)
+
     async def test_seeded_catalog_accepts_the_same_plan_as_runtime_validation(self) -> None:
         async with AsyncSessionLocal() as session:
             catalog = PostgresCatalogRepository(session)

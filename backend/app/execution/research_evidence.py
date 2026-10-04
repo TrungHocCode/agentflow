@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.config import settings
 from app.execution.context_budget import guard_context
+from app.execution.research_http import normalize_http_source
 from app.execution.research_contracts import ChunkExtraction, EvidenceClaim, ResearchResult, SourceDocument
 from app.execution.tools.contracts import ToolResult, success_result
 from app.shared.llm_call_metrics import LLMCallObserver
@@ -69,6 +70,14 @@ class EvidenceProcessor:
         self.seen: set[str] = set()
         self.calls = 0
         self.metrics: list[dict] = []
+
+    async def process_http(self, result: ToolResult, question: str, method: str = "GET") -> ToolResult:
+        """Route HTTP fallback through the same storage, chunking and validation pipeline."""
+        normalized = normalize_http_source(result, method)
+        self.bundle.warnings.extend(normalized.metadata.warnings)
+        if normalized.error:
+            self.bundle.warnings.append(f"HTTP evidence unavailable: {normalized.error.code}.")
+        return await self.process(normalized, question)
 
     async def process(self, result: ToolResult, question: str) -> ToolResult:
         """Persist source bodies, extract bounded claims, and return a bounded observation."""

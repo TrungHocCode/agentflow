@@ -686,6 +686,10 @@ class WorkerAgent(BaseAgent):
                         if processor is not None and tool_name in {"news_crawler", "news_crawler_batch"}:
                             observation = await processor.process(
                                 normalized_tool_result, current_task.description + _run_input_context(state))
+                        elif processor is not None and tool_name == "http_request":
+                            observation = await processor.process_http(
+                                normalized_tool_result, current_task.description + _run_input_context(state),
+                                method=str(tool_args.get("method") or "GET"))
                         wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
 
                         messages.append(ToolMessage(
