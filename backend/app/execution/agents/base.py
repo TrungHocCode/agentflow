@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.execution.model_router import model_name_for
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
+from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
 from app.shared.llm_call_metrics import LLMCallObserver
 from app.shared.observability import bind_context
@@ -337,6 +338,8 @@ class WorkerAgent(BaseAgent):
 
         # Build context from previous results
         results = state.get("result_storage") or []
+        results = [result for result in results if str(result.get("task_id")) in
+                   {str(task_id) for task_id in current_task.dependencies}]
         if results:
             results_str = "\n".join([
                 f"- Task {res.get('task_id', '?')} (Node: {res.get('node', '?')}) "
@@ -380,6 +383,13 @@ class WorkerAgent(BaseAgent):
 
             while iteration < max_iterations:
                 iteration += 1
+                estimated_input = guard_context(messages, self.tools)
+                logger.info("Worker context budget checked", extra={
+                    "estimated_input_tokens": estimated_input,
+                    "token_counting_method": "utf8/2_heuristic",
+                    "context_tokens": settings.LLM_CONTEXT_TOKENS,
+                    "output_reservation": settings.LLM_OUTPUT_TOKENS,
+                })
                 logs.append(f"[{self.name}] Iteration {iteration}: Invoking LLM.")
                 llm_started_at = datetime.now(timezone.utc) if timing_enabled else None
                 llm_started = perf_counter() if timing_enabled else None
@@ -638,7 +648,7 @@ class WorkerAgent(BaseAgent):
                             tool_outcomes[call_key] = outcome
 
                         # Prompt injection defense: wrap tool output in XML tags
-                        wrapped_output = f"<tool_output>\n{str(tool_result)}\n</tool_output>"
+                        wrapped_output = f"<tool_output>\n{project_tool_result(normalized_tool_result)}\n</tool_output>"
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
@@ -698,7 +708,12 @@ class WorkerAgent(BaseAgent):
 
         except Exception as e:
             status = "failed"
-            error_msg = f"Worker execution failed ({type(e).__name__})."
+            context_error = isinstance(e, ContextBudgetExceeded) or "exceed_context_size_error" in str(e)
+            error_code = "context_budget_exceeded" if context_error else "worker_execution_failed"
+            error_msg = (
+                "Research input exceeded the model context budget. No oversized request was retried."
+                if context_error else f"Worker execution failed ({type(e).__name__})."
+            )
             error_id = worker_error_id or str(uuid.uuid4())
             logs.append(f"[{self.name}] Execution failed ({type(e).__name__}).")
             logger.error(
@@ -707,16 +722,16 @@ class WorkerAgent(BaseAgent):
                 extra={
                     "task_execution_id": str(current_task.id),
                     "error_id": error_id,
-                    "error_code": "worker_execution_failed",
+                    "error_code": error_code,
                 },
             )
             worker_error_metadata = {
                 **(state.get("metadata") or {}),
                 "last_error": {
                     "error_id": error_id,
-                    "code": "worker_execution_failed",
+                    "code": error_code,
                     "category": "execution",
-                    "retryable": True,
+                    "retryable": not context_error,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }

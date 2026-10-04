@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     LLM_CHAT_MODEL: str = "qwen3:0.6b"
     LLM_PLANNER_MODEL: str = "qwen3:8b"
     LLM_WORKER_MODEL: str = "qwen3:8b"
+    # Explicit context policy; estimates are conservative, not provider token counts.
+    LLM_CONTEXT_TOKENS: int = 8192
+    LLM_OUTPUT_TOKENS: int = 1024
+    LLM_CONTEXT_MARGIN_TOKENS: int = 1024
+    RESEARCH_MAP_OUTPUT_TOKENS: int = 768
+    RESEARCH_MAX_CHUNKS: int = 32
+    RESEARCH_MAX_DOCUMENTS: int = 8
+    RESEARCH_CHUNK_CHARS: int = 3000
     ARTIFACT_ROOT: str = "workspace_data"
     MAX_RUN_DURATION: int = 3600
     MAX_TASK_CONCURRENCY: int = 1
