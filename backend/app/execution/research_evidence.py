@@ -12,7 +12,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.core.config import settings
 from app.execution.context_budget import guard_context
 from app.execution.research_http import normalize_http_source
-from app.execution.research_contracts import ChunkExtraction, EvidenceClaim, ResearchResult, SourceDocument
+from app.execution.research_contracts import (
+    ChunkDiagnostic, ChunkExtraction, EvidenceClaim, ResearchResult, SourceDocument,
+)
 from app.execution.research_validation import source_spans, validate_candidate
 from app.execution.tools.contracts import ToolResult, success_result
 from app.shared.llm_call_metrics import LLMCallObserver
@@ -121,7 +123,8 @@ class EvidenceProcessor:
             "processed_chunks": self.bundle.processed_chunks,
             "failed_chunks": self.bundle.failed_chunks,
             "unprocessed_chunks": self.bundle.unprocessed_chunks,
-            "coverage": self.bundle.status,
+            "extraction_status": self.bundle.status,
+            "coverage_scope": self.bundle.coverage_scope,
             "warnings": list(dict.fromkeys(self.bundle.warnings))[-4:],
         }
         return success_result(projection, tool_name="evidence_extraction", status=(
@@ -183,9 +186,13 @@ class EvidenceProcessor:
                     options={"num_predict": settings.RESEARCH_MAP_OUTPUT_TOKENS,
                              "num_ctx": settings.LLM_CONTEXT_TOKENS, "temperature": 0})
                 extracted = ChunkExtraction.model_validate(raw)
-                self.bundle.missing_fields = list(dict.fromkeys(
-                    self.bundle.missing_fields + extracted.missing_fields
-                ))
+                # Chunk gaps may be answered elsewhere. Retain scoped diagnostics, never
+                # union them into global claims that a publisher did not provide a fact.
+                if extracted.missing_fields:
+                    self.bundle.chunk_diagnostics.append(ChunkDiagnostic(
+                        document_id=identity, chunk_id=chunk_id,
+                        missing_fields=list(dict.fromkeys(extracted.missing_fields)),
+                    ))
                 for candidate in extracted.claims:
                     validated, offset, reason = validate_candidate(candidate, piece, text, spans)
                     if reason:
