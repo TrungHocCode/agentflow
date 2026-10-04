@@ -25,7 +25,8 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
     def test_supervisor_requires_explicit_coverage_for_comparisons(self) -> None:
         self.assertIn("preserve every subject", SUPERVISOR_SYSTEM_PROMPT)
         self.assertIn("HTTP 200 is not proof", SUPERVISOR_SYSTEM_PROMPT)
-        self.assertIn("authorization allowlist, not", SUPERVISOR_SYSTEM_PROMPT)
+        self.assertIn("The backend owns tool authorization and execution budgets", SUPERVISOR_SYSTEM_PROMPT)
+        self.assertIn("Never specify tool_names, tool_ids", SUPERVISOR_SYSTEM_PROMPT)
 
     async def test_unavailable_supervisor_model_is_explicit(self) -> None:
         with patch("app.execution.llm.get_llm", side_effect=ConnectionError("Ollama offline")):

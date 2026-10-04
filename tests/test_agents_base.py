@@ -290,6 +290,34 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["mode"], "executing")
         self.mock_llm.with_structured_output.assert_not_called()
 
+    async def test_worker_uses_configured_iteration_budget_and_task_override(self) -> None:
+        @tool
+        def budget_ping() -> str:
+            """Return usable data for an iteration-budget test."""
+            return success_result({"value": "evidence"}).to_json()
+
+        for task_limit, expected_calls, expected_status in ((None, 10, "done"), (3, 3, "failed")):
+            with self.subTest(task_limit=task_limit):
+                llm = MagicMock(spec=BaseChatModel)
+                bound = AsyncMock()
+                llm.bind_tools.return_value = bound
+                bound.ainvoke.side_effect = [
+                    AIMessage(content="", tool_calls=[
+                        {"name": "budget_ping", "args": {}, "id": f"budget-{index}"}
+                    ]) for index in range(9)
+                ] + [AIMessage(content="Evidence dossier complete.")]
+                worker = WorkerAgent(name="researcher", system_prompt="Research.", llm=llm, tools=[budget_ping])
+                task = Task(id=1, node="worker", status="running", description="Research", max_iterations=task_limit)
+                with patch.object(settings, "MAX_TASK_ITERATIONS", 10), patch.object(
+                    settings, "ENABLE_EXECUTION_BENCHMARK_METRICS", False
+                ):
+                    updates = await worker.execute({
+                        "messages": [], "plan": [task], "current_task": task,
+                        "logs": [], "result_storage": [], "mode": "executing", "metadata": {},
+                    })
+                self.assertEqual(bound.ainvoke.call_count, expected_calls)
+                self.assertEqual(updates["current_task"].status, expected_status)
+
     async def test_worker_agent_execution_no_tools(self):
         """Test WorkerAgent executing without tools."""
         worker = WorkerAgent(

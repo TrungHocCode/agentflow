@@ -16,9 +16,26 @@ from app.modules.results.models import ArtifactRecord, EvidenceRecord, ResultRec
 from app.main import app
 from app.modules.runs.models import RunDocument
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
+from app.infrastructure.postgres.models.results import EvidenceModel
+from app.modules.runs.service import RunService
 
 
 class TestResearchOutputAdapters(unittest.IsolatedAsyncioTestCase):
+    def test_evidence_timestamp_and_markdown_url_contract(self) -> None:
+        self.assertTrue(EvidenceModel.__table__.c.collected_at.type.timezone)
+        content = {
+            "text": "[https://arxiv.org/html/2601.01743v1](https://arxiv.org/html/2601.01743v1)\n"
+                    "<https://example.com/docs?q=agent&lang=en>. https://example.com/other.",
+            "sources": ["https://example.com/docs?q=agent&lang=en",
+                        "[Article](https://example.com/wiki/Thing_(AI))"],
+        }
+        self.assertEqual(RunService._find_evidence_urls(content), [
+            "https://arxiv.org/html/2601.01743v1",
+            "https://example.com/docs?q=agent&lang=en",
+            "https://example.com/other",
+            "https://example.com/wiki/Thing_(AI)",
+        ])
+
     async def asyncSetUp(self) -> None:
         use_test_adapters(self)
         self.enterContext(isolated_workspace())
