@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 
-from app.core.config import settings
+from app.core.config import settings, Settings
 from app.execution.agents.base import WorkerAgent
 from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
 from app.execution.state import Task
@@ -19,6 +19,11 @@ from app.execution.tools.contracts import success_result
 
 
 class ResearchContextTests(unittest.IsolatedAsyncioTestCase):
+    def test_invalid_context_settings_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            Settings(_env_file=None, LLM_CONTEXT_TOKENS=2048, LLM_OUTPUT_TOKENS=2048)
+        with self.assertRaises(ValueError):
+            Settings(_env_file=None, RESEARCH_MAX_CHUNKS=0)
     def test_large_duplicate_search_is_bounded(self) -> None:
         candidates = [{"title": "Benchmark", "url": f"https://example.org/{i}", "snippet": "x" * 3000}
                       for i in range(25)]
