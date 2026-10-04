@@ -15,12 +15,13 @@ class CatalogService:
 
     async def list_agents(self, active_only: bool = True) -> List[AgentDefinition]:
         agents = await self.repository.list_agents(active_only=active_only)
+        available_names = {tool.name for tool in await self.list_tools(active_only=True) if tool.is_available}
         result = []
         for agent in agents:
             available = []
             blocked = []
             for tool_name in agent.tool_names:
-                if self._disabled_reason(tool_name):
+                if tool_name not in available_names:
                     blocked.append(tool_name)
                 else:
                     available.append(tool_name)
@@ -38,11 +39,11 @@ class CatalogService:
         tools = await self.repository.list_tools(active_only=active_only)
         result = []
         for tool in tools:
-            disabled_reason = self._disabled_reason(tool.name)
+            disabled_reason = self._disabled_reason(tool.name) or tool.unavailable_reason
             result.append(
                 tool.model_copy(
                     update={
-                        "is_available": disabled_reason is None,
+                        "is_available": tool.is_available and disabled_reason is None,
                         "unavailable_reason": disabled_reason,
                     }
                 )
