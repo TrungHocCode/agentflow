@@ -21,6 +21,7 @@ class AgentProfile(BaseModel):
     system_prompt: str
     tool_names: list[str] = Field(default_factory=list)
     runtime_name: str = "worker"
+    catalog_tool_names: list[str] | None = None
 
 
 class AgentProfileProvider(Protocol):
@@ -224,12 +225,16 @@ class AgentResolver:
                 self._canonical_tool_name(tool_name)
                 for tool_name in profile.tool_names
                 if self._tool_enabled(self._canonical_tool_name(tool_name))
+                and (profile.catalog_tool_names is None
+                     or self._canonical_tool_name(tool_name) in profile.catalog_tool_names)
             ))
 
         denied = tuple(denied_tool_names)
         tools: list[BaseTool] = []
         missing: list[str] = []
         for tool_name in requested_tools:
+            if profile.catalog_tool_names is not None and tool_name not in profile.catalog_tool_names:
+                raise ValueError(f"Tool '{tool_name}' is missing or inactive in the tool catalog.")
             try:
                 tools.append(ToolRegistry.get_tool(tool_name))
             except ValueError:
@@ -257,7 +262,9 @@ class AgentResolver:
                 continue
             profile = fallback_profile
             if self.provider is not None:
-                profile = await self.provider.get_agent(profile_name) or fallback_profile
+                profile = await self.provider.get_agent(profile_name)
+                if profile is None:
+                    continue
             self._cache[profile_name] = profile
             self._cache[profile.name] = profile
 
@@ -267,6 +274,7 @@ class AgentResolver:
                     for name in profile.tool_names
                     if (canonical_name := self._canonical_tool_name(name))
                     in registered_tools
+                    and (profile.catalog_tool_names is None or canonical_name in profile.catalog_tool_names)
                     and self._tool_enabled(canonical_name)
                 )
             )
@@ -320,7 +328,7 @@ class AgentResolver:
         for key in lookup_keys:
             if not key:
                 continue
-            if key in self._cache:
+            if self.provider is None and key in self._cache:
                 return self._cache[key]
             if self.provider is not None:
                 profile = await self.provider.get_agent(key)
@@ -337,11 +345,18 @@ class AgentResolver:
             fallback = self.fallback_profiles.get(fallback_key)
             if fallback is None:
                 raise ValueError(f"Agent profile '{explicit_identifier}' was not found.")
+            if self.provider is not None:
+                persisted = await self.provider.get_agent(fallback.name)
+                if persisted is None:
+                    raise ValueError(f"Agent profile '{explicit_identifier}' is missing or inactive in the catalog.")
+                return persisted
             return fallback
 
         profile = self.fallback_profiles.get(inferred_name)
         if profile is None:
             raise ValueError(f"Agent profile '{inferred_name}' was not found.")
+        if self.provider is not None:
+            raise ValueError(f"Agent profile '{inferred_name}' is missing or inactive in the catalog.")
         self._cache[inferred_name] = profile
         return profile
 
