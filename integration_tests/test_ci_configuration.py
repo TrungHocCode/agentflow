@@ -207,7 +207,7 @@ class TestCIRealConfiguration(unittest.IsolatedAsyncioTestCase):
         schema = "ci_upgrade_" + uuid4().hex
         backend = Path(__file__).resolve().parents[1] / "backend"
         def migrate(connection, target: str) -> None:
-            config = Config(str(backend / "alembic.ini"))
+            config = Config(str(backend.parent / "alembic.ini"))
             config.set_main_option("script_location", str(backend / "alembic"))
             config.attributes["connection"] = connection
             command.upgrade(config, target)
