@@ -1,8 +1,25 @@
 """Persistence contracts for research outputs."""
 
+from pathlib import Path
 from typing import List, Protocol
 
 from app.modules.results.models import ArtifactRecord, EvidenceRecord, ResultRecord
+
+
+class ArtifactStorage(Protocol):
+    """Filesystem operations needed by run collection and owned downloads."""
+
+    def is_generated_file(self, source_path: str) -> bool:
+        ...
+
+    def ingest_file(
+        self, source_path: str, user_id: str, run_id: str,
+        task_execution_id: str | None = None, name: str | None = None,
+    ) -> ArtifactRecord | None:
+        ...
+
+    def resolve(self, storage_uri: str) -> Path:
+        ...
 
 
 class ResearchDataRepository(Protocol):

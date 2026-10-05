@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from unittest.mock import AsyncMock, patch
 
 from integration_tests.environment import require_integration_environment
 
@@ -48,6 +49,48 @@ def setUpModule() -> None:
 
 
 class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
+    async def test_configured_artifact_root_persists_metadata_and_downloads(self) -> None:
+        from app.api.dependencies import get_current_user_id, get_run_query_service
+        from app.infrastructure.artifacts.storage import LocalArtifactStorage
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+        from app.modules.runs.service import RunService
+
+        repository = PostgresResearchRepository()
+        self.assertFalse(repository.use_memory)
+        run = await self.repository.get(self.run_id, self.owner)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "configured-artifacts"
+            with patch.object(settings, "ARTIFACT_ROOT", str(root)):
+                output = ToolRegistry.get_tool("markdown_report_generator").invoke({
+                    "title": "Integration report", "filename": "fixture.md",
+                    "sections": [{"header": "Evidence", "content": "Fixture evidence."}],
+                })
+                storage = LocalArtifactStorage()
+                service = RunService(self.repository, None, AsyncMock(),
+                                     research_repository=repository, artifact_storage=storage)
+                await service._persist_research_output(run, "report_agent", {
+                    "result_storage": [{"task_id": "report", "result": output}],
+                })
+                artifacts = await repository.list_artifacts(self.run_id)
+                self.assertEqual(len(artifacts), 1)
+                artifact = artifacts[0]
+                self.assertEqual(artifact.user_id, self.owner)
+                source = root / "reports" / "fixture.md"
+                self.assertEqual(storage.resolve(artifact.storage_uri).read_bytes(), source.read_bytes())
+                url = f"/api/v1/runs/{self.run_id}/artifacts/{artifact.id}/download"
+                # Override identity only: real repositories and filesystem remain in use.
+                with patch.dict(app.dependency_overrides, {
+                    get_run_query_service: lambda: service, get_current_user_id: lambda: self.owner,
+                }):
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app), base_url="http://test",
+                    ) as client:
+                        response = await client.get(url)
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(response.content, source.read_bytes())
+                        app.dependency_overrides[get_current_user_id] = lambda: "other-owner"
+                        self.assertEqual((await client.get(url)).status_code, 404)
+
     async def test_raw_sources_and_claims_persist_with_exact_provenance(self) -> None:
         from app.execution.research_contracts import EvidenceClaim, ResearchResult, SourceDocument
         from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore

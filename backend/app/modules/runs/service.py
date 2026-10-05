@@ -9,7 +9,6 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.core.config import settings
@@ -29,7 +28,7 @@ from app.modules.runs.queue import (
     RunCommandQueue,
 )
 from app.modules.results.models import EvidenceRecord, ResultRecord
-from app.modules.results.ports import ResearchDataRepository
+from app.modules.results.ports import ArtifactStorage, ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
 from app.shared.errors import ConflictError, PersistenceError, ValidationError
@@ -82,7 +81,7 @@ class RunService:
         command_queue: RunCommandQueue | None = None,
         event_publisher: RunEventPublisher | None = None,
         research_repository: ResearchDataRepository | None = None,
-        artifact_storage: Any | None = None,
+        artifact_storage: ArtifactStorage | None = None,
         conversation_repository: ConversationRepository | None = None,
         catalog_repository: CatalogRepository | None = None,
     ) -> None:
@@ -1436,7 +1435,7 @@ class RunService:
                 for source_path in artifact_paths:
                     if source_path in ingested_paths:
                         continue
-                    if not self._is_managed_artifact_path(source_path):
+                    if not self.artifact_storage.is_generated_file(source_path):
                         continue
                     ingested_paths.add(source_path)
                     artifact = self.artifact_storage.ingest_file(
@@ -1497,6 +1496,9 @@ class RunService:
         paths: list[str] = []
         try:
             payload = json.loads(serialized)
+            # Tool envelopes may be stored as a JSON string inside result content.
+            if isinstance(payload, str):
+                payload = json.loads(payload)
         except (json.JSONDecodeError, TypeError):
             payload = None
 
@@ -1513,21 +1515,6 @@ class RunService:
             if path:
                 paths.append(path)
         return list(dict.fromkeys(paths))
-
-    @staticmethod
-    def _is_managed_artifact_path(source_path: str) -> bool:
-        """Only ingest generated files from AgentFlow's report/chart workspace."""
-
-        try:
-            candidate = Path(source_path).resolve()
-            workspace = Path(__file__).resolve().parents[4] / "workspace_data"
-            allowed_roots = (workspace / "reports", workspace / "charts")
-            return candidate.is_file() and any(
-                candidate == root or root in candidate.parents
-                for root in allowed_roots
-            )
-        except (OSError, RuntimeError):
-            return False
 
     async def _enqueue_document(self, document: RunDocument) -> RunDocument:
         request_context = current_context()

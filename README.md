@@ -216,6 +216,8 @@ npm run dev
 
 Open <http://localhost:5173>, register or sign in, create a research workflow in chat, review and approve it, then follow the run in the execution view. Vite proxies `/api` requests to the backend at `http://localhost:8000`.
 
+Reports, charts, evidence storage, and downloads use `ARTIFACT_ROOT` (default: `workspace_data`, relative to the process working directory). Set the same absolute path for API and worker when starting them from different directories; both processes must have access to that location. Report-tool `relative_path` values are relative to this root, for example `reports/summary_report.md`, not to the repository.
+
 The crawler tries static HTTP fetching first. In automatic mode, it uses Chromium only when the extracted content is poor or the page appears to need client-side rendering. For local browser-based fallback, install Chromium once:
 
 ```powershell

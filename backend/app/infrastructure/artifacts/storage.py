@@ -8,14 +8,17 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from app.core.config import settings
 from app.modules.results.models import ArtifactRecord
+from app.shared.artifact_paths import artifact_root, is_generated_artifact
 
 
 class LocalArtifactStorage:
     def __init__(self, root: str | None = None) -> None:
-        self.root = Path(root or settings.ARTIFACT_ROOT).resolve()
+        self.root = artifact_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def is_generated_file(self, source_path: str) -> bool:
+        return is_generated_artifact(source_path, str(self.root))
 
     def ingest_file(
         self,

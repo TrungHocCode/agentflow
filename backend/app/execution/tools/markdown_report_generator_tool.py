@@ -14,9 +14,9 @@ from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import failure_result, success_result
+from app.shared.artifact_paths import generated_file
 
 
-WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "workspace_data"))
 MAX_REPORT_BYTES = 5 * 1024 * 1024
 
 
@@ -116,10 +116,8 @@ def markdown_report_generator(
         ).to_json()
 
     try:
-        reports_dir = os.path.join(WORKSPACE_DIR, "reports")
-        os.makedirs(reports_dir, exist_ok=True)
         safe_filename = _safe_report_filename(filename)
-        file_path = os.path.join(reports_dir, safe_filename)
+        file_path = str(generated_file("reports", safe_filename))
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         rendered_sections = [
@@ -161,12 +159,12 @@ def markdown_report_generator(
 
         with open(file_path, "w", encoding="utf-8") as stream:
             stream.write(full_text)
-        relative_path = os.path.relpath(file_path, WORKSPACE_DIR).replace(os.sep, "/")
+        relative_path = f"reports/{safe_filename}"
         return success_result(
             {
                 "message": "Successfully generated Markdown report!",
                 "file_path": file_path,
-                "relative_path": f"workspace_data/{relative_path}",
+                "relative_path": relative_path,
                 "characters": len(full_text),
                 "sections": len(rendered_sections),
                 "source_urls": source_urls,

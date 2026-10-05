@@ -18,10 +18,9 @@ def isolated_workspace() -> Iterator[Path]:
         root = Path(directory).resolve()
         with ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, {"ARTIFACT_ROOT": str(root / "workspace_data")}))
-            for name in ("markdown_report_generator_tool", "chart_generator_tool"):
-                module = sys.modules.get(f"app.execution.tools.{name}")
-                if module is not None:
-                    stack.enter_context(patch.object(module, "WORKSPACE_DIR", str(root / "workspace_data")))
+            config = sys.modules.get("app.core.config")
+            if config is not None:
+                stack.enter_context(patch.object(config.settings, "ARTIFACT_ROOT", str(root / "workspace_data")))
             os.chdir(root)
             try:
                 yield root
