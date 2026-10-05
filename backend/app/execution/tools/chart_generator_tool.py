@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import failure_result, success_result
+from app.shared.artifact_paths import generated_file
 
 
-WORKSPACE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "workspace_data"))
 MAX_POINTS = 100
 
 
@@ -113,8 +113,6 @@ def chart_generator(
         ).to_json()
 
     try:
-        charts_dir = os.path.join(WORKSPACE_DIR, "charts")
-        os.makedirs(charts_dir, exist_ok=True)
         base = _safe_filename(filename)
         if base.endswith(".json"):
             base = base[:-5]
@@ -126,8 +124,8 @@ def chart_generator(
             "values": clean_values,
             "source_urls": source_urls or [],
         }
-        spec_path = os.path.join(charts_dir, f"{base}.json")
-        svg_path = os.path.join(charts_dir, f"{base}.svg")
+        spec_path = str(generated_file("charts", f"{base}.json"))
+        svg_path = str(generated_file("charts", f"{base}.svg"))
         with open(spec_path, "w", encoding="utf-8") as stream:
             json.dump(spec, stream, ensure_ascii=False, indent=2)
         with open(svg_path, "w", encoding="utf-8") as stream:
