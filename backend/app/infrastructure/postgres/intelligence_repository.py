@@ -60,6 +60,8 @@ class PostgresIntelligenceRepository:
                         approved_at=record.approved_at, approved_by=record.approved_by, created_at=record.created_at)
 
     async def view(self, session: AsyncSession, record: WatchlistModel) -> Watchlist:
+        # Server-side onupdate expires timestamps after flush; load them asynchronously.
+        await session.refresh(record)
         revision = await session.get(WatchlistRevisionModel, record.current_revision_id)
         return Watchlist(id=record.id, owner_id=record.owner_id, name=record.name, description=record.description,
                         status=record.status, current_revision=self.revision(revision),

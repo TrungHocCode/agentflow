@@ -226,6 +226,7 @@ class TestCIRealConfiguration(unittest.IsolatedAsyncioTestCase):
                     run_id=identity, flow_id=identity, user_id="legacy", status="completed"))
                 values.pop("watchlist_id")
                 values.pop("watchlist_revision_id")
+                values["metadata"] = values.pop("run_metadata")
                 legacy_table = RunModel.__table__.to_metadata(__import__("sqlalchemy").MetaData())
                 await connection.execute(legacy_table.insert().values(**values))
                 await connection.run_sync(lambda conn: migrate(conn, "head"))
