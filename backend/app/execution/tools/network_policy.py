@@ -8,6 +8,8 @@ import socket
 import time
 from urllib.parse import urlparse
 
+from app.shared.collection_scope import collection_allowed, scoped_collection
+
 
 MAX_TRANSIENT_ATTEMPTS = 2
 MAX_REDIRECTS = 3
@@ -53,6 +55,8 @@ def validate_external_url(raw_url: str) -> tuple[str | None, str | None]:
     """
 
     candidate = str(raw_url or "").strip()
+    if not collection_allowed(candidate):
+        return None, "URL is outside the explicitly approved collection scope."
     parsed = urlparse(candidate)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return None, "URL must be an absolute HTTP(S) URL."
@@ -64,7 +68,7 @@ def validate_external_url(raw_url: str) -> tuple[str | None, str | None]:
         return None, "URL contains an invalid port."
 
     host = parsed.hostname.lower().rstrip(".")
-    if os.getenv("AGENTFLOW_ALLOW_PRIVATE_NETWORK") != "1":
+    if scoped_collection() or os.getenv("AGENTFLOW_ALLOW_PRIVATE_NETWORK") != "1":
         if host in {"localhost", "localhost.localdomain", "metadata.google.internal"} or host.endswith(".localhost"):
             return None, "Private and local network targets are blocked."
         if _is_private_address(host) or _host_resolves_private(host, port):

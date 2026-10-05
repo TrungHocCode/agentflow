@@ -9,6 +9,8 @@ from app.shared.validation import enforce_json_size
 class RunDocument(BaseModel):
     """Durable schema for run lifecycle and execution history."""
     run_id: str
+    watchlist_id: Optional[str] = None
+    watchlist_revision_id: Optional[str] = None
     flow_id: str
     user_id: str = "default_user"
     conversation_id: Optional[str] = None
@@ -126,6 +128,8 @@ class RunChatRequest(BaseModel):
 class RunResponse(BaseModel):
     """Response schema for run status and details"""
     run_id: str
+    watchlist_id: Optional[str] = None
+    watchlist_revision_id: Optional[str] = None
     flow_id: str
     user_id: str
     conversation_id: Optional[str] = None

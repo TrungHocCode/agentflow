@@ -7,6 +7,7 @@ from app.api.v1.catalog import router as catalog_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.runs import router as runs_router, workflow_run_router
 from app.api.v1.workflows import router as workflows_router
+from app.api.v1.watchlists import router as watchlists_router
 
 api_v1_router = APIRouter(prefix="/v1")
 api_v1_router.include_router(health_router)
@@ -18,3 +19,4 @@ api_v1_router.include_router(conversations_router)
 api_v1_router.include_router(runs_router)
 api_v1_router.include_router(workflow_run_router)
 api_v1_router.include_router(workflows_router)
+api_v1_router.include_router(watchlists_router)

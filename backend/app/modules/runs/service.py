@@ -237,6 +237,7 @@ class RunService:
         idempotency_key: Optional[str] = None,
         user_id: str = "default_user",
         conversation_id: str | None = None,
+        defer_persistence: bool = False,
     ) -> RunDocument | None:
         """Create and enqueue an asynchronous run from a workflow snapshot."""
 
@@ -249,6 +250,10 @@ class RunService:
 
         if self.workflow_repository is None:
             return None
+        if not defer_persistence and (
+            "competitive_intelligence" in (input_data or {}) or "ci_scope" in (metadata or {})
+        ):
+            raise ValidationError("CI runs must be submitted through the approved watchlist command.")
         if not workflow_version_id:
             raise ValidationError("A published workflow version must be selected before creating a run.")
         if conversation_id is not None and self.conversation_repository is not None:
@@ -362,6 +367,9 @@ class RunService:
             idempotency_key=idempotency_key,
             idempotency_fingerprint=fingerprint if idempotency_key else None,
         )
+        if defer_persistence:
+            # CI admission persists this prepared core run and its scope in one transaction.
+            return document
         try:
             await self.save_run_doc(document)
         except PersistenceError:
@@ -667,6 +675,9 @@ class RunService:
         """Create a new attempt from a failed/interrupted run snapshot."""
 
         source = await self.get_run(run_id, user_id=user_id)
+        if source is not None and source.watchlist_id:
+            raise ConflictError("Retry CI runs through the watchlist command to revalidate scope and overlap.",
+                                code="ci_retry_requires_admission")
         if source is None or source.status not in {"failed", "interrupted", "cancelled"}:
             return None
         if (
@@ -748,9 +759,16 @@ class RunService:
             if latest is None or latest.status != "running":
                 raise RunNoLongerActive("Run is no longer active.")
 
-        budget = RunBudget(settings.MAX_RUN_LLM_CALLS, settings.MAX_RUN_ESTIMATED_TOKENS,
-                           settings.MAX_RUN_DURATION, check_active)
-        with bind_context(run_id=run_id), artifact_scope(run_id), run_budget_scope(budget):
+        from app.shared.collection_scope import collection_scope
+
+        snapshot = await self.get_run(run_id)
+        frozen = snapshot.input_data.get("competitive_intelligence", {}) if snapshot and snapshot.watchlist_id else {}
+        limits = frozen.get("config", {}).get("budget", {})
+        budget = RunBudget(min(settings.MAX_RUN_LLM_CALLS, limits.get("max_llm_calls", settings.MAX_RUN_LLM_CALLS)),
+            min(settings.MAX_RUN_ESTIMATED_TOKENS, limits.get("max_total_tokens", settings.MAX_RUN_ESTIMATED_TOKENS)),
+            min(settings.MAX_RUN_DURATION, limits.get("max_duration_seconds", settings.MAX_RUN_DURATION)), check_active)
+        urls = frozen.get("approved_urls") if snapshot and snapshot.watchlist_id else None
+        with bind_context(run_id=run_id), artifact_scope(run_id), run_budget_scope(budget), collection_scope(urls):
             result = await self._execute_queued_run(run_id)
             if result is not None and budget.claimed:
                 result.metadata["run_budget"] = budget.snapshot()
@@ -1549,6 +1567,12 @@ class RunService:
             if path:
                 paths.append(path)
         return list(dict.fromkeys(paths))
+
+    async def enqueue_admitted_run(self, document: RunDocument) -> RunDocument:
+        """Publish an already atomically admitted run; never performs a second admission."""
+        await self._record_event(document.run_id, "run_progress", phase="execute", status="queued",
+                                 payload={"watchlist_id": document.watchlist_id})
+        return await self._enqueue_document(document)
 
     async def _enqueue_document(self, document: RunDocument) -> RunDocument:
         request_context = current_context()

@@ -9,6 +9,7 @@ from time import perf_counter
 from urllib.parse import urlparse
 
 from app.execution.tools.network_policy import MAX_REDIRECTS, validate_external_url
+from app.shared.collection_scope import scoped_collection
 
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -48,6 +49,9 @@ class BrowserFetchError(RuntimeError):
 def render_page(url: str) -> RenderedPage:
     """Render one page with Chromium while applying outbound URL safeguards."""
 
+    if scoped_collection():
+        raise BrowserFetchError("ci_browser_scope_unsupported",
+                                "Browser fallback is disabled for exact-URL approved collection.")
     if os.getenv("AGENTFLOW_CRAWLER_BROWSER_ENABLED", "true").lower() in {"0", "false", "no"}:
         raise BrowserFetchError("browser_disabled", "Browser fallback is disabled by configuration.")
 

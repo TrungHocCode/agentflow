@@ -4,7 +4,7 @@
 
 AgentFlow's product direction is to help founders and product teams understand how competitors' products change, compare those changes with their own product, and identify relevant opportunities and risks. Its existing foundation combines a conversational planner, user-approved workflows, a deterministic execution engine, local LLMs through Ollama, source collection, and downloadable research artifacts.
 
-> **Project status:** active personal-project prototype in a domain refactor. The workflow/research foundation exists; product profiles, cross-run product history, change detection and competitive briefs described below are planned capabilities, not available end-to-end features. AgentFlow is not a production-ready hosted service.
+> **Project status:** active personal-project prototype in a domain refactor. The workflow/research foundation and backend APIs for approved watchlists and versioned product profiles exist. Cross-run snapshots, change detection, adaptive investigation and competitive briefs are still planned; the complete competitive-intelligence experience is not available yet. AgentFlow is not a production-ready hosted service.
 
 ## Contents
 
@@ -47,8 +47,9 @@ Product history will be immutable rather than overwritten. Publication, launch, 
 | --- | --- |
 | Authentication, conversations and workflow review | Existing foundation |
 | Queued runs, authorized agent tools, SSE progress and artifacts | Existing foundation |
-| Own-product and competitor profiles with historical versions | Planned |
-| Approved watchlists, durable snapshots and cross-run baselines | Planned |
+| Own-product and competitor profiles with immutable historical versions | Backend API; no business UI yet |
+| Approved watchlists and frozen manual run admission | Backend API; no business UI yet |
+| Durable snapshots and cross-run baselines | Planned |
 | Change detection, bounded investigation and evidence verification | Planned |
 | Product comparison and structured competitive briefs | Planned |
 | Scheduled monitoring | Deferred until the manual flow is validated |
@@ -70,9 +71,16 @@ The backend owns permissions, storage, diffs, arithmetic, validation, budgets an
 
 ## What it does
 
+- **Configure competitive intelligence through the API:** create an unapproved watchlist, version own/competitor profiles, review exact source scope and criteria, approve its current revision with a published workflow, and submit a manual run. Edits require the expected revision and create a new unapproved revision; history is retained.
+- **Keep CI collection scoped:** CI runs permit explicitly approved exact URLs and public GET only, not arbitrary search, outbound writes or private-network access. Redirect targets must also be approved. Browser fallback is disabled for this strict collection policy. Declaring an official host is a reviewed owner assertion, not publisher verification.
+
 - **Plan in chat:** describe a research task and receive a proposed workflow; clarify or edit it before execution. This is the existing generic flow, not yet a product-profile setup flow.
 - **Keep approval in the loop:** review and approve a workflow before its run begins.
 - **Execute dependency-aware workflows:** tasks are ordered by their dependencies; the current dispatcher runs one ready task at a time, so parallel task execution is not implemented yet.
+
+CI configuration endpoints are under `/api/v1/watchlists`: create/list/read/update/archive, revision history and approval, products/sources, immutable product profile history, and manual run submission/history. `/watchlists/proposals` derives a bounded draft from an owned persisted conversation; it neither saves nor approves it. API schemas are available at `/docs` and `/openapi.json` while the backend is running.
+
+CI run admission freezes goals, product profile versions, criteria, source configuration and tightened budgets. One active run per watchlist is enforced in PostgreSQL; owner-scoped idempotency returns the original run without requeueing it. Baseline references are explicitly null until snapshot support is implemented; these runs do **not** perform competitive change detection yet.
 - **Use role-specific agents and tools:** research, synthesis, reporting, and chart work are assigned to agents with authorized tools.
 - **Follow progress:** inspect task status and run events while work is executing.
 - **Keep results:** review research outputs and download generated artifacts such as Markdown reports and charts.

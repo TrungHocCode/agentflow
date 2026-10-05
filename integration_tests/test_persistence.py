@@ -370,7 +370,7 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                 <= set(tables)
             )
             self.assertEqual(await connection.scalar(text("SELECT version_num FROM alembic_version")),
-                             "0005_durable_conversation_turns")
+                             "0006_ci_configuration")
 
     async def test_conversation_turn_acceptance_is_idempotent_serialized_and_replayable(self) -> None:
         repository = PostgresConversationRepository()

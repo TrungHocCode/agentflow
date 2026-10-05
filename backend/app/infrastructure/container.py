@@ -41,6 +41,9 @@ from app.modules.workflows.service import WorkflowService
 from app.modules.identity.service import IdentityService
 from app.modules.results.service import ResearchResultService
 from app.core.config import settings
+from app.infrastructure.postgres.intelligence_repository import PostgresIntelligenceRepository
+from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
+from app.modules.competitive_intelligence.service import IntelligenceService
 
 
 def build_execution_port() -> ExecutionPort:
@@ -135,3 +138,8 @@ def build_research_result_service(session: AsyncSession | None = None) -> Resear
     """Compose the structured research output query service."""
 
     return ResearchResultService(PostgresResearchRepository(session))
+
+
+def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
+    return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
+                               PostgresConversationRepository(), OllamaSetupPlanner())

@@ -14,6 +14,7 @@ from app.infrastructure.container import (
     build_run_service,
     build_workflow_service,
     build_research_result_service,
+    build_intelligence_service,
 )
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
@@ -27,6 +28,11 @@ from app.infrastructure.artifacts.storage import LocalArtifactStorage
 from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
 from app.modules.system.ports import RateLimiter
 from app.shared.errors import AuthenticationError
+from app.modules.competitive_intelligence.service import IntelligenceService
+
+
+async def get_intelligence_service(db: AsyncSession = Depends(get_db)) -> IntelligenceService:
+    return build_intelligence_service(db)
 
 
 async def get_current_user_id(

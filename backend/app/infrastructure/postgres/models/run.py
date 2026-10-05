@@ -5,11 +5,13 @@ from typing import Any, Dict, Optional
 from sqlalchemy import (
     JSON,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +24,9 @@ class RunModel(Base):
     __tablename__ = "runs"
 
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    watchlist_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("ci_watchlists.id", ondelete="RESTRICT"), nullable=True)
+    watchlist_revision_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     flow_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("flows.id", ondelete="RESTRICT"),
@@ -87,6 +92,12 @@ class RunModel(Base):
     execution_time_ms: Mapped[float] = mapped_column(nullable=False, default=0.0)
 
     __table_args__ = (
+        ForeignKeyConstraint(["watchlist_id", "watchlist_revision_id"],
+                             ["ci_watchlist_revisions.watchlist_id", "ci_watchlist_revisions.id"],
+                             name="fk_runs_ci_revision", ondelete="RESTRICT"),
+        Index("uq_runs_ci_active_watchlist", "watchlist_id", unique=True,
+              postgresql_where=text("watchlist_id IS NOT NULL AND status IN "
+                                    "('pending','created','waiting_for_approval','queued','running','paused')")),
         UniqueConstraint(
             "user_id",
             "idempotency_key",

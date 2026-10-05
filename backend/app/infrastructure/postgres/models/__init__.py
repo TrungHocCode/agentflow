@@ -4,6 +4,9 @@ from app.infrastructure.postgres.models.catalog import (
     AgentCatalogModel,
     ToolCatalogModel,
 )
+from app.infrastructure.postgres.models.competitive_intelligence import (
+    WatchlistModel, WatchlistRevisionModel, TrackedProductModel, ProductProfileVersionModel, TrackedSourceModel,
+)
 from app.infrastructure.postgres.models.conversation import (
     ConversationMessageModel,
     ConversationModel,
