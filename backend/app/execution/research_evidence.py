@@ -241,7 +241,9 @@ class EvidenceProcessor:
                 failure_type = type(exc).__name__
                 self.bundle.failed_chunks += 1
                 self.bundle.warnings.append(f"Extraction failed for chunk {chunk_id}: {type(exc).__name__}.")
-                logger.exception("Evidence chunk extraction failed", extra={"chunk_id": chunk_id})
+                # Pydantic exception strings can embed raw source/model content.
+                logger.error("Evidence chunk extraction failed", extra={"chunk_id": chunk_id,
+                                                                       "error_type": failure_type})
             if observer is not None:
                 self.metrics.append(observer.to_metric(status="failed" if failure_type else "success",
                                                        error_type=failure_type).model_dump(mode="json"))

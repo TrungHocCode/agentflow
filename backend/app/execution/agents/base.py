@@ -888,7 +888,7 @@ class WorkerAgent(BaseAgent):
         except Exception as exc:
             error_code = exc.code if isinstance(exc, (RunBudgetExceeded, RunNoLongerActive)) else error_code
             status, error = "failed", "Could not render validated analysis; no unsupported report was substituted."
-            logger.exception("Evidence presentation failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
+            logger.error("Evidence presentation failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
         updated = task.model_copy(update={"status": status, "error": error})
         updates = {"plan": [updated], "current_task": updated,
                 "logs": [f"[report_agent] Deterministic presentation {status}."],
@@ -959,7 +959,7 @@ class WorkerAgent(BaseAgent):
             error_code = exc.code if isinstance(exc, (RunBudgetExceeded, RunNoLongerActive)) else error_code
             status = "failed"
             error = "Could not reconcile source evidence; no unsupported synthesis was substituted."
-            logger.exception("Evidence synthesis failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
+            logger.error("Evidence synthesis failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
         updated = task.model_copy(update={"status": status, "error": error})
         output = {"current_task": updated, "plan": [updated], "logs": [
             f"[synthesis_agent] Reconciliation {status}; {reducer.calls} bounded LLM calls."],

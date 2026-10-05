@@ -189,6 +189,19 @@ class TestCIPhaseOneContracts(IsolatedAsyncioTestCase):
         self.assertEqual(budget.calls, 2)
         self.assertEqual(model.with_structured_output.return_value.ainvoke.await_count, 1)
 
+    async def test_invalid_extraction_does_not_log_raw_model_payload(self) -> None:
+        model = MagicMock()
+        model.with_structured_output.return_value.ainvoke = AsyncMock(return_value={
+            "claims": [{"claim": "private-model-payload", "excerpt": {"private": "source-data"}}]})
+        store = MagicMock(check_active=AsyncMock(), save_document=AsyncMock(), save_bundle=AsyncMock())
+        processor = EvidenceProcessor(model, store, "run", "1")
+        with self.assertLogs("app.execution.research_evidence", "ERROR") as logs:
+            await processor.process(success_result({"text": "source-data"},
+                source=SourceMetadata(final_url="https://fixture.invalid/docs")), "Research")
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertEqual(logs.records[0].error_type, "ValidationError")
+        self.assertNotIn("private-model-payload", " ".join(logs.output))
+
     async def test_token_budget_rejects_before_invocation_and_failed_calls_are_charged(self) -> None:
         model = MagicMock(ainvoke=AsyncMock(side_effect=ValueError("provider failed")))
         with run_budget_scope(RunBudget(10, 1, 10)), self.assertRaises(RunBudgetExceeded):
