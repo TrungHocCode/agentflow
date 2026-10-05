@@ -2,8 +2,26 @@
 
 from pathlib import Path
 from typing import Literal
+from contextlib import contextmanager
+from contextvars import ContextVar
+from hashlib import sha256
+from uuid import uuid4
+from collections.abc import Iterator
 
 from app.core.config import settings
+
+
+_RUN_SCOPE: ContextVar[str] = ContextVar("artifact_run_scope", default="standalone")
+
+
+@contextmanager
+def artifact_scope(run_id: str) -> Iterator[None]:
+    """Scope producer staging without trusting an LLM filename or exposing account identifiers."""
+    token = _RUN_SCOPE.set(sha256(run_id.encode("utf-8")).hexdigest())
+    try:
+        yield
+    finally:
+        _RUN_SCOPE.reset(token)
 
 
 def artifact_root(root: str | None = None) -> Path:
@@ -36,9 +54,16 @@ def is_generated_artifact(source_path: str, root: str | None = None) -> bool:
         return False
 
 
-def generated_file(category: Literal["reports", "charts"], filename: str) -> Path:
+def generated_file(category: Literal["reports", "charts"], filename: str, generation_id: str | None = None) -> Path:
     """Resolve a producer filename without following a file link outside its directory."""
-    directory = generated_directory(category)
+    boundary = generated_directory(category)
+    generation = generation_id or uuid4().hex
+    if not generation.isalnum():
+        raise ValueError("Invalid artifact generation identifier.")
+    directory = (boundary / _RUN_SCOPE.get() / generation).resolve()
+    if boundary not in directory.parents:
+        raise ValueError("Artifact staging escapes its output directory.")
+    directory.mkdir(parents=True, exist_ok=True)
     candidate = (directory / filename).resolve()
     if candidate.parent != directory:
         raise ValueError("Generated artifact file escapes its output directory.")

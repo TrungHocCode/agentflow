@@ -20,6 +20,12 @@ class LocalArtifactStorage:
     def is_generated_file(self, source_path: str) -> bool:
         return is_generated_artifact(source_path, str(self.root))
 
+    def release_generated_file(self, source_path: str) -> None:
+        source = Path(source_path)
+        if source.is_symlink() or not self.is_generated_file(source_path):
+            raise ValueError("Only generated files in the configured root may be released.")
+        source.unlink()
+
     def ingest_file(
         self,
         source_path: str,

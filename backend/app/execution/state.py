@@ -1,6 +1,7 @@
 from typing import List, Dict, TypedDict, Optional, Literal, Annotated, Any
 from pydantic import BaseModel, Field, model_validator
 from langchain_core.messages import BaseMessage
+from app.execution.research_contracts import ResearchRequirement
 
 # Reducer functions
 def add_messages(left, right):
@@ -71,6 +72,7 @@ class Task(BaseModel):
     expected_output_type: str = "raw_data"
     input_mapping: Dict[str, Any] = Field(default_factory=dict)
     config: Dict[str, Any] = Field(default_factory=dict)
+    research_requirements: List[ResearchRequirement] = Field(default_factory=list, max_length=64)
 
 class FlowDefinition(BaseModel):
     flow_id: str
@@ -104,6 +106,8 @@ class PlannedTask(BaseModel):
     node: str
     status: str = "pending"
     description: str
+    research_requirements: List[ResearchRequirement] = Field(default_factory=list, max_length=64,
+        description="Explicit subject/field pairs requested by the user for research; aliases only when known.")
     dependencies: List[int] = Field(default_factory=list)
     expected_output_type: Literal[
         "raw_data", "normalized_data", "summary", "comparison", "chart_spec", "report"

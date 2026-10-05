@@ -15,6 +15,10 @@ from app.core.config import settings
 from app.execution.ports import ExecutionPort
 from app.execution.model_router import InferencePurpose
 from app.execution.state import State, Task
+from app.execution.run_budget import (
+    RunBudget, RunBudgetExceeded, RunNoLongerActive, bounded_stream, current_budget, run_budget_scope,
+)
+from app.shared.artifact_paths import artifact_scope
 from app.modules.runs.events import (
     DiscardingRunEventPublisher,
     RunEventPublisher,
@@ -96,6 +100,9 @@ class RunService:
         self.catalog_repository = catalog_repository
 
     async def save_run_doc(self, document: RunDocument) -> None:
+        budget = current_budget()
+        if budget is not None and budget.claimed:
+            document.metadata["run_budget"] = budget.snapshot()
         await self.run_repository.save(document)
 
     async def get_run(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
@@ -736,8 +743,19 @@ class RunService:
         return await self._enqueue_document(retry)
 
     async def execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
-        with bind_context(run_id=run_id):
-            return await self._execute_queued_run(run_id)
+        async def check_active() -> None:
+            latest = await self.get_run(run_id)
+            if latest is None or latest.status != "running":
+                raise RunNoLongerActive("Run is no longer active.")
+
+        budget = RunBudget(settings.MAX_RUN_LLM_CALLS, settings.MAX_RUN_ESTIMATED_TOKENS,
+                           settings.MAX_RUN_DURATION, check_active)
+        with bind_context(run_id=run_id), artifact_scope(run_id), run_budget_scope(budget):
+            result = await self._execute_queued_run(run_id)
+            if result is not None and budget.claimed:
+                result.metadata["run_budget"] = budget.snapshot()
+                await self.save_run_doc(result)
+            return result
 
     async def _execute_queued_run(self, run_id: str) -> Optional[RunDocument]:
         """Execute one queued run; called by the background worker only."""
@@ -745,6 +763,8 @@ class RunService:
         run_doc = await self.run_repository.claim(run_id)
         if not run_doc:
             return await self.get_run(run_id)
+        if current_budget() is not None:
+            current_budget().claimed = True
         current_revision = self._plan_revision(run_doc.plan)
         if (
             self.workflow_repository is not None
@@ -824,7 +844,7 @@ class RunService:
         execution_started_at = time.perf_counter()
 
         try:
-            async for chunk in self.execution_port.execute_run(run_id, initial_state):
+            async for chunk in bounded_stream(self.execution_port.execute_run(run_id, initial_state)):
                 latest = await self.get_run(run_id)
                 if latest and latest.status == "cancelled":
                     return latest
@@ -956,11 +976,20 @@ class RunService:
                     },
                 )
         except Exception as exc:
+            if isinstance(exc, RunNoLongerActive):
+                latest = await self.get_run(run_id)
+                if latest and latest.status == "cancelled":
+                    return latest
             error_id = str(uuid.uuid4())
-            error_code = exc.code if isinstance(exc, PersistenceError) else "execution_error"
+            error_code = (
+                exc.code if isinstance(exc, (PersistenceError, RunBudgetExceeded, RunNoLongerActive))
+                else "execution_error"
+            )
             safe_message = (
                 f"Run data could not be saved. Please retry after storage is available. Reference: {error_id}."
                 if isinstance(exc, PersistenceError)
+                else f"Workflow stopped because its cumulative budget was exhausted. Reference: {error_id}."
+                if isinstance(exc, RunBudgetExceeded)
                 else f"Workflow execution failed unexpectedly. Please retry the run. Reference: {error_id}."
             )
             logger.error(
@@ -1400,7 +1429,7 @@ class RunService:
             serialized = json.dumps(content, ensure_ascii=False, default=str)
             # Typed evidence is already persisted per chunk with exact source excerpts.
             typed_evidence = isinstance(content, dict) and content.get("schema_version") == "1" and (
-                "claims" in content or "findings" in content
+                "claims" in content or "findings" in content or "report" in content
             )
             source_urls = [] if typed_evidence else self._find_evidence_urls(content)
             for source_url in source_urls:
@@ -1446,6 +1475,11 @@ class RunService:
                     )
                     if artifact is not None:
                         await self.research_repository.save_artifact(artifact)
+                        try:
+                            self.artifact_storage.release_generated_file(source_path)
+                        except (OSError, ValueError):
+                            logger.warning("Artifact staging cleanup failed; durable artifact remains available",
+                                           extra={"run_id": run_doc.run_id, "artifact_id": artifact.id})
 
     @staticmethod
     def _infer_result_type(node_name: str, item: Dict[str, Any]) -> str:

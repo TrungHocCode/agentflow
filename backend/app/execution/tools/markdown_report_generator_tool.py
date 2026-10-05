@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -14,7 +15,8 @@ from pydantic import BaseModel, Field
 
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import failure_result, success_result
-from app.shared.artifact_paths import generated_file
+from app.execution.research_presentation import EvidenceReport, render_evidence_report
+from app.shared.artifact_paths import artifact_root, generated_file
 
 
 MAX_REPORT_BYTES = 5 * 1024 * 1024
@@ -45,6 +47,7 @@ class MarkdownReportInput(BaseModel):
         ),
     )
     filename: str = Field(default="summary_report.md", max_length=200)
+    structured_report: EvidenceReport | None = None
 
 
 def _safe_report_filename(filename: str) -> str:
@@ -104,6 +107,7 @@ def markdown_report_generator(
     sections: list[SectionItem],
     summary: str | None = None,
     filename: str = "summary_report.md",
+    structured_report: EvidenceReport | None = None,
 ) -> str:
     """Generate a Markdown report only when at least one evidence section exists."""
 
@@ -149,6 +153,8 @@ def markdown_report_generator(
             md_content.extend(f"- {url}\n" for url in source_urls)
 
         full_text = "\n".join(md_content)
+        if structured_report is not None:
+            full_text = render_evidence_report(EvidenceReport.model_validate(structured_report))
         if len(full_text.encode("utf-8")) > MAX_REPORT_BYTES:
             return failure_result(
                 "blocked",
@@ -157,9 +163,9 @@ def markdown_report_generator(
                 tool_name="markdown_report_generator",
             ).to_json()
 
-        with open(file_path, "w", encoding="utf-8") as stream:
+        with open(file_path, "x", encoding="utf-8") as stream:
             stream.write(full_text)
-        relative_path = f"reports/{safe_filename}"
+        relative_path = Path(file_path).relative_to(artifact_root()).as_posix()
         return success_result(
             {
                 "message": "Successfully generated Markdown report!",

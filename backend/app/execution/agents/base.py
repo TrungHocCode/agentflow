@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -16,8 +17,11 @@ from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
 from app.execution.research_evidence import EvidenceProcessor, EvidenceStore
-from app.execution.research_contracts import ResearchResult
+from app.execution.research_contracts import EvidenceAnalysis, ResearchResult
 from app.execution.research_reduction import EvidenceReducer
+from app.execution.research_coverage import reconcile_coverage
+from app.execution.research_presentation import EvidenceReport, render_evidence_report
+from app.execution.run_budget import RunBudgetExceeded, RunNoLongerActive, bounded_invoke, bounded_operation
 from app.shared.execution_metrics import ExecutionTiming, serialize_execution_timings
 from app.shared.llm_call_metrics import LLMCallObserver
 from app.shared.observability import bind_context
@@ -337,6 +341,8 @@ class WorkerAgent(BaseAgent):
             raise ValueError(f"Worker '{self.name}' executed but 'current_task' is missing in state.")
         if self.name == "synthesis_agent" and self.evidence_store is not None:
             return await self._synthesize(state, current_task)
+        if self.name == "report_agent" and self.evidence_store is not None:
+            return await self._present(state, current_task)
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
         task_started_at = datetime.now(timezone.utc) if timing_enabled else None
         task_started = perf_counter() if timing_enabled else None
@@ -395,7 +401,8 @@ class WorkerAgent(BaseAgent):
         llm_call_metrics: list[dict[str, Any]] = []
         metadata = state.get("metadata") or {}
         processor = (
-            EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(current_task.id))
+            EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(current_task.id),
+                              current_task.research_requirements)
             if self.evidence_store is not None and self.name == "source_researcher" and metadata.get("run_id")
             else None
         )
@@ -454,9 +461,9 @@ class WorkerAgent(BaseAgent):
                             },
                         )
                         response = (
-                            await llm_with_tools.ainvoke(messages, config=llm_config)
+                            await bounded_invoke(llm_with_tools, messages, tools=self.tools, config=llm_config)
                             if llm_config
-                            else await llm_with_tools.ainvoke(messages)
+                            else await bounded_invoke(llm_with_tools, messages, tools=self.tools)
                         )
                         llm_duration_ms = round(
                             (perf_counter() - llm_call_started) * 1000,
@@ -566,9 +573,12 @@ class WorkerAgent(BaseAgent):
                                         extra={"tool_name": tool_name, "purpose": "worker"},
                                     )
                                     if hasattr(tool_obj, "_arun") or hasattr(tool_obj, "arun"):
-                                        tool_result = await tool_obj.ainvoke(tool_args)
+                                        tool_result = await bounded_operation(lambda: tool_obj.ainvoke(tool_args))
                                     else:
-                                        tool_result = tool_obj.invoke(tool_args)
+                                        tool_result = await bounded_operation(
+                                            lambda: asyncio.to_thread(tool_obj.invoke, tool_args))
+                            except (RunBudgetExceeded, RunNoLongerActive):
+                                raise
                             except Exception as exc:
                                 tool_error_type = type(exc).__name__
                                 tool_result = f"Error: tool execution failed ({tool_error_type})."
@@ -758,7 +768,8 @@ class WorkerAgent(BaseAgent):
         except Exception as e:
             status = "failed"
             context_error = isinstance(e, ContextBudgetExceeded) or "exceed_context_size_error" in str(e)
-            error_code = "context_budget_exceeded" if context_error else "worker_execution_failed"
+            error_code = (e.code if isinstance(e, (RunBudgetExceeded, RunNoLongerActive)) else
+                          "context_budget_exceeded" if context_error else "worker_execution_failed")
             error_msg = (
                 "Research input exceeded the model context budget. No oversized request was retried."
                 if context_error else f"Worker execution failed ({type(e).__name__})."
@@ -780,7 +791,7 @@ class WorkerAgent(BaseAgent):
                     "error_id": error_id,
                     "code": error_code,
                     "category": "execution",
-                    "retryable": not context_error,
+                    "retryable": not context_error and not isinstance(e, (RunBudgetExceeded, RunNoLongerActive)),
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }
@@ -841,6 +852,63 @@ class WorkerAgent(BaseAgent):
             ]
         return updates
 
+    async def _present(self, state: State, task: Task) -> Dict[str, Any]:
+        """Use the authorized renderer with validated analysis; never ask an LLM to rewrite facts."""
+        started = perf_counter()
+        started_at = datetime.now(timezone.utc)
+        inputs = [item["result"] for item in state.get("result_storage", [])
+                  if str(item.get("task_id")) in {str(identity) for identity in task.dependencies}]
+        status, error, paths, result = "done", None, [], {}
+        error_code = "evidence_presentation_failed"
+        try:
+            renderer = next((tool for tool in self.tools if tool.name == "markdown_report_generator"), None)
+            if renderer is None:
+                raise ValueError("An authorized Markdown renderer is required.")
+            report = EvidenceReport(title=task.description[:300],
+                findings=[finding for item in inputs for finding in item.get("findings", [])],
+                evidence=list({claim["evidence_id"]: claim for item in inputs
+                               for claim in item.get("evidence", [])}.values()),
+                requirement_coverage=[row for item in inputs for row in item.get("requirement_coverage", [])],
+                source_outcomes=[row for item in inputs for row in item.get("source_outcomes", [])])
+            rendered = render_evidence_report(report)
+            # Tool owns bounded filesystem writing; the content is already deterministic.
+            output = parse_tool_result(await bounded_operation(lambda: renderer.ainvoke({"title": report.title,
+                "sections": [{"header": "Evidence-backed analysis", "content": rendered}],
+                "filename": "evidence_report.md", "structured_report": report.model_dump(mode="json")})),
+                tool_name="markdown_report_generator")
+            if not output.ok:
+                raise ValueError("Markdown artifact generation failed.")
+            paths = [output.data["file_path"]]
+            result = {"schema_version": "1", "report": report.model_dump(mode="json"),
+                      "markdown": rendered, "artifact": output.data}
+            if any(item.get("status") == "partial" for item in inputs) or any(
+                row.status == "unresolved" for row in report.requirement_coverage
+            ) or any(row.status != "processed" for row in report.source_outcomes):
+                status = "partial"
+        except Exception as exc:
+            error_code = exc.code if isinstance(exc, (RunBudgetExceeded, RunNoLongerActive)) else error_code
+            status, error = "failed", "Could not render validated analysis; no unsupported report was substituted."
+            logger.error("Evidence presentation failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
+        updated = task.model_copy(update={"status": status, "error": error})
+        updates = {"plan": [updated], "current_task": updated,
+                "logs": [f"[report_agent] Deterministic presentation {status}."],
+                "result_storage": [{"task_id": task.id, "node": self.name, "result": result,
+                                    "status": status, "error": error, "artifact_paths": paths}]}
+        if status == "failed":
+            updates["metadata"] = {**(state.get("metadata") or {}), "last_error": {
+                "error_id": str(uuid.uuid4()), "code": error_code, "category": "execution", "retryable": False}}
+        if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
+            completed_at = datetime.now(timezone.utc)
+            duration_ms = round((perf_counter() - started) * 1000, 3)
+            updates["task_execution_metrics"] = [TaskExecutionMetric(task_id=task.id, node=self.name,
+                status=status, duration_ms=duration_ms, started_at=started_at,
+                completed_at=completed_at).model_dump(mode="json")]
+            updates["execution_timings"] = [ExecutionTiming(operation="tool", phase="execute",
+                name="deterministic_report_render", agent_name=self.name, task_id=task.id,
+                call_id=str(uuid.uuid4()), duration_ms=duration_ms, status="failed" if error else "success",
+                started_at=started_at, completed_at=completed_at).model_dump(mode="json")]
+        return updates
+
     async def _synthesize(self, state: State, task: Task) -> Dict[str, Any]:
         """Synthesis is reconciliation over typed evidence, not another generic summarizer loop."""
         started = perf_counter()
@@ -849,6 +917,7 @@ class WorkerAgent(BaseAgent):
         reducer = EvidenceReducer(self.llm, self.evidence_store, metadata.get("run_id", ""), task.id)
         error = None
         status = "done"
+        error_code = "evidence_synthesis_failed"
         result: dict[str, Any] = {}
         try:
             inputs = [item for item in state.get("result_storage", [])
@@ -860,6 +929,18 @@ class WorkerAgent(BaseAgent):
             result = {**reduced.model_dump(), "sources": {
                 identity: claims[identity].source_url for identity in sorted(used_ids)},
                 "input_claim_count": len(claims),
+                "evidence": [claim.model_dump() for claim in claims.values()],
+                "requirement_coverage": [item.model_dump() for item in reconcile_coverage(
+                    [requirement for bundle in bundles for requirement in bundle.requirements], list(claims.values()))],
+                "source_outcomes": [item.model_dump() for bundle in bundles for item in bundle.source_outcomes],
+                "analysis_limitations": [{"origin": "reconciliation", "message": message, "evidence_ids": []}
+                                         for message in reduced.limitations] + [
+                    {"origin": "extraction", "message": message, "evidence_ids": []}
+                    for bundle in bundles for message in bundle.warnings] + [
+                    {"origin": "coverage", "message": f"Unresolved requirement: {row.requirement.id}",
+                     "evidence_ids": []} for row in reconcile_coverage(
+                         [requirement for bundle in bundles for requirement in bundle.requirements], list(claims.values()))
+                    if row.status == "unresolved"],
                 "limitations": list(dict.fromkeys(reduced.limitations + [warning for bundle in bundles
                     for warning in bundle.warnings] + [
                     f"Unresolved extraction field (not publisher absence): {field}" for bundle in bundles
@@ -868,13 +949,17 @@ class WorkerAgent(BaseAgent):
                 "chunk_diagnostics": [diagnostic.model_dump() for bundle in bundles
                                       for diagnostic in bundle.chunk_diagnostics],
             }
-            if any(bundle.status != "complete" for bundle in bundles):
+            if any(bundle.status != "complete" for bundle in bundles) or any(
+                item["status"] == "unresolved" for item in result["requirement_coverage"]
+            ):
                 status = "partial"
             result["status"] = status
+            result = EvidenceAnalysis.model_validate(result).model_dump(mode="json")
         except Exception as exc:
+            error_code = exc.code if isinstance(exc, (RunBudgetExceeded, RunNoLongerActive)) else error_code
             status = "failed"
             error = "Could not reconcile source evidence; no unsupported synthesis was substituted."
-            logger.exception("Evidence synthesis failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
+            logger.error("Evidence synthesis failed", extra={"task_id": task.id, "error_type": type(exc).__name__})
         updated = task.model_copy(update={"status": status, "error": error})
         output = {"current_task": updated, "plan": [updated], "logs": [
             f"[synthesis_agent] Reconciliation {status}; {reducer.calls} bounded LLM calls."],
@@ -893,7 +978,7 @@ class WorkerAgent(BaseAgent):
                 completed_at=datetime.now(timezone.utc)).model_dump(mode="json")]
         if status == "failed":
             output["metadata"] = {**metadata, "last_error": {"error_id": str(uuid.uuid4()),
-                "code": "evidence_synthesis_failed", "category": "execution", "retryable": False,
+                "code": error_code, "category": "execution", "retryable": False,
                 "occurred_at": datetime.now(timezone.utc).isoformat()}}
         logger.info("Evidence synthesis finished", extra={"duration_ms": round((perf_counter() - started) * 1000, 3),
                                                           "status": status, "task_id": task.id})

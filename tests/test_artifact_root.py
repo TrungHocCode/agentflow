@@ -34,8 +34,9 @@ class TestConfiguredArtifactRoot(IsolatedAsyncioTestCase):
         })
         data = json.loads(output)["data"]
         source = Path(data["file_path"])
-        self.assertEqual(source.parent, self.root / "reports")
-        self.assertEqual(data["relative_path"], "reports/fixture.md")
+        expected_bytes = source.read_bytes()
+        self.assertIn(self.root / "reports", source.parents)
+        self.assertEqual(self.root / data["relative_path"], source)
         run = RunDocument(run_id="custom-root-run", flow_id="fixture", user_id="owner")
         runs = PostgresRunRepository()
         await runs.save(run)
@@ -53,8 +54,9 @@ class TestConfiguredArtifactRoot(IsolatedAsyncioTestCase):
         artifacts = await repository.list_artifacts(run.run_id)
         self.assertEqual(len(artifacts), 1)
         artifact = artifacts[0]
-        self.assertEqual(storage.resolve(artifact.storage_uri).read_bytes(), source.read_bytes())
-        self.assertEqual(artifact.size_bytes, source.stat().st_size)
+        self.assertEqual(storage.resolve(artifact.storage_uri).read_bytes(), expected_bytes)
+        self.assertEqual(artifact.size_bytes, len(expected_bytes))
+        self.assertFalse(source.exists())
         self.assertFalse((self.workspace / "workspace_data" / "reports" / "fixture.md").exists())
         url = f"/api/v1/runs/{run.run_id}/artifacts/{artifact.id}/download"
         with patch.dict(app.dependency_overrides, {
@@ -63,7 +65,7 @@ class TestConfiguredArtifactRoot(IsolatedAsyncioTestCase):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
                 response = await client.get(url)
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.content, source.read_bytes())
+                self.assertEqual(response.content, expected_bytes)
                 app.dependency_overrides[get_current_user_id] = lambda: "other-owner"
                 self.assertEqual((await client.get(url)).status_code, 404)
 
@@ -74,7 +76,7 @@ class TestConfiguredArtifactRoot(IsolatedAsyncioTestCase):
         data = json.loads(output)["data"]
         storage = LocalArtifactStorage()
         for key in ("svg_path", "spec_path"):
-            self.assertEqual(Path(data[key]).parent, self.root / "charts")
+            self.assertIn(self.root / "charts", Path(data[key]).parents)
             self.assertTrue(storage.is_generated_file(data[key]))
 
     def test_collection_rejects_other_roots_and_non_generated_files(self) -> None:

@@ -20,6 +20,9 @@ services:
       - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
       - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
       - ARTIFACT_ROOT=/app/workspace_data
+      - MAX_RUN_DURATION=${MAX_RUN_DURATION:-3600}
+      - MAX_RUN_LLM_CALLS=${MAX_RUN_LLM_CALLS:-64}
+      - MAX_RUN_ESTIMATED_TOKENS=${MAX_RUN_ESTIMATED_TOKENS:-262144}
       - AUTH_SIGNING_SECRET=${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in .env before starting Compose}
       - AGENTFLOW_CRAWLER_BROWSER_ENABLED=false
     volumes:
@@ -56,6 +59,9 @@ services:
       - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
       - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
       - ARTIFACT_ROOT=/app/workspace_data
+      - MAX_RUN_DURATION=${MAX_RUN_DURATION:-3600}
+      - MAX_RUN_LLM_CALLS=${MAX_RUN_LLM_CALLS:-64}
+      - MAX_RUN_ESTIMATED_TOKENS=${MAX_RUN_ESTIMATED_TOKENS:-262144}
       - AGENTFLOW_CRAWLER_BROWSER_ENABLED=true
     volumes:
       - artifacts_data:/app/workspace_data

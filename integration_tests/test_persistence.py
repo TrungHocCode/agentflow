@@ -49,6 +49,102 @@ def setUpModule() -> None:
 
 
 class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
+    async def test_run_cumulative_budget_is_durable_and_duplicate_does_not_reset_it(self) -> None:
+        from langchain_core.messages import HumanMessage
+        from app.execution.run_budget import bounded_invoke
+        from app.modules.runs.service import RunService
+
+        model = AsyncMock()
+        class BudgetExecution:
+            async def execute_run(self, run_id: str, state: dict):
+                await bounded_invoke(model, [HumanMessage(content="first")])
+                await bounded_invoke(model, [HumanMessage(content="second")])
+                yield {}
+        service = RunService(self.repository, None, BudgetExecution())
+        with patch.object(settings, "MAX_RUN_LLM_CALLS", 1):
+            result = await service.execute_queued_run(self.run_id)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.error_code, "run_budget_exhausted")
+        self.assertEqual(model.ainvoke.await_count, 1)
+        persisted = await self.repository.get(self.run_id, self.owner)
+        self.assertEqual(persisted.metadata["run_budget"]["calls"], 1)
+        duplicate = await service.execute_queued_run(self.run_id)
+        self.assertEqual(duplicate.metadata["run_budget"], persisted.metadata["run_budget"])
+
+    async def test_evidence_analysis_report_handoff_with_real_storage(self) -> None:
+        from langchain_core.messages import AIMessage
+        from langchain_core.tools import tool
+        from unittest.mock import MagicMock
+        from app.execution.agents.base import WorkerAgent
+        from app.execution.research_contracts import ChunkExtraction, ExtractedClaim, SynthesisFinding, SynthesisResult
+        from app.execution.tools.contracts import SourceMetadata, success_result
+        from app.execution.tools.markdown_report_generator_tool import markdown_report_generator
+        from app.infrastructure.artifacts.evidence_store import DurableEvidenceStore
+        from app.infrastructure.artifacts.storage import LocalArtifactStorage
+        from app.infrastructure.postgres.results_repository import PostgresResearchRepository
+        from app.modules.runs.service import RunService
+
+        excerpt = "Alpha context length is 262,144 tokens; use <think>."
+        url = "https://fixture.invalid/docs"
+        @tool("news_crawler")
+        def crawl(url: str) -> str:
+            """Collect a deterministic fixture without external HTTP."""
+            return success_result({"text": excerpt}, source=SourceMetadata(final_url=url)).to_json()
+        source_model = MagicMock()
+        source_model.with_structured_output.return_value.ainvoke = AsyncMock(return_value=ChunkExtraction(claims=[
+            ExtractedClaim(claim=excerpt, excerpt=excerpt, subject="Alpha", metric="context length",
+                           value_text="262,144", unit="tokens")]))
+        source_model.bind_tools.return_value.ainvoke = AsyncMock(side_effect=[
+            AIMessage(content="", tool_calls=[{"name": "news_crawler", "args": {"url": url}, "id": "crawl"}]),
+            AIMessage(content="Collected")])
+        synthesis_model = MagicMock()
+        async def reconcile(messages: list, **kwargs):
+            import json
+            identity = json.loads(messages[1].content)["evidence"][0]["evidence_id"]
+            return SynthesisResult(findings=[SynthesisFinding(text=excerpt, evidence_ids=[identity])])
+        synthesis_model.with_structured_output.return_value.ainvoke = AsyncMock(side_effect=reconcile)
+        report_model = MagicMock()
+        repository = PostgresResearchRepository()
+        with tempfile.TemporaryDirectory() as directory, patch.object(settings, "ARTIFACT_ROOT", directory):
+            store = DurableEvidenceStore(repository, directory, self.repository)
+            agents = [WorkerAgent("source_researcher", "Collect", source_model, [crawl]),
+                      WorkerAgent("synthesis_agent", "Reconcile", synthesis_model),
+                      WorkerAgent("report_agent", "Render", report_model, [markdown_report_generator])]
+            for agent in agents:
+                agent.evidence_store = store
+            tasks = [Task(id=1, node="source_researcher", status="pending", description="Collect context", research_requirements=[
+                        {"id": "a-context", "subject": "Alpha", "field": "context length"},
+                        {"id": "b-price", "subject": "Beta", "field": "price"}]),
+                     Task(id=2, node="synthesis_agent", status="pending", description="Analyze", dependencies=[1]),
+                     Task(id=3, node="report_agent", status="pending", description="Brief", dependencies=[2])]
+            run = await self.repository.get(self.run_id, self.owner)
+            run.plan = tasks
+            await self.repository.save(run)
+            class FixtureExecution:
+                async def execute_run(self, run_id: str, state: dict):
+                    state["metadata"]["run_id"] = run_id
+                    for task, agent in zip(tasks, agents):
+                        state["current_task"] = task
+                        output = await agent.execute(state)
+                        state["result_storage"] = state.get("result_storage", []) + output["result_storage"]
+                        yield {agent.name: output}
+            service = RunService(self.repository, None, FixtureExecution(), research_repository=repository,
+                                 artifact_storage=LocalArtifactStorage())
+            result = await service.execute_queued_run(self.run_id)
+            self.assertEqual(result.status, "completed")
+            self.assertTrue(result.metadata["partial_completion"])
+            self.assertEqual(result.metadata["run_budget"]["calls"], 4)
+            claims = await repository.list_evidence(self.run_id)
+            self.assertEqual(len(claims), 1, "Presentation must not create fake evidence from generated prose")
+            artifacts = await repository.list_artifacts(self.run_id)
+            self.assertEqual(len(artifacts), 1)
+            content = service.artifact_storage.resolve(artifacts[0].storage_uri).read_text(encoding="utf-8")
+            self.assertIn("262,144", content)
+            self.assertIn("<think>", content)
+            self.assertIn("unresolved", content)
+            self.assertIn(url, content)
+            report_model.bind_tools.assert_not_called()
+
     async def test_configured_artifact_root_persists_metadata_and_downloads(self) -> None:
         from app.api.dependencies import get_current_user_id, get_run_query_service
         from app.infrastructure.artifacts.storage import LocalArtifactStorage
@@ -66,6 +162,8 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                     "sections": [{"header": "Evidence", "content": "Fixture evidence."}],
                 })
                 storage = LocalArtifactStorage()
+                source = next((root / "reports").rglob("fixture.md"))
+                expected_bytes = source.read_bytes()
                 service = RunService(self.repository, None, AsyncMock(),
                                      research_repository=repository, artifact_storage=storage)
                 await service._persist_research_output(run, "report_agent", {
@@ -75,8 +173,8 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(artifacts), 1)
                 artifact = artifacts[0]
                 self.assertEqual(artifact.user_id, self.owner)
-                source = root / "reports" / "fixture.md"
-                self.assertEqual(storage.resolve(artifact.storage_uri).read_bytes(), source.read_bytes())
+                self.assertEqual(storage.resolve(artifact.storage_uri).read_bytes(), expected_bytes)
+                self.assertFalse(source.exists())
                 url = f"/api/v1/runs/{self.run_id}/artifacts/{artifact.id}/download"
                 # Override identity only: real repositories and filesystem remain in use.
                 with patch.dict(app.dependency_overrides, {
@@ -87,7 +185,7 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                     ) as client:
                         response = await client.get(url)
                         self.assertEqual(response.status_code, 200)
-                        self.assertEqual(response.content, source.read_bytes())
+                        self.assertEqual(response.content, expected_bytes)
                         app.dependency_overrides[get_current_user_id] = lambda: "other-owner"
                         self.assertEqual((await client.get(url)).status_code, 404)
 

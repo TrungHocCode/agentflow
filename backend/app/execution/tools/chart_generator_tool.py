@@ -9,6 +9,7 @@ import os
 import re
 from html import escape
 from typing import Literal
+from uuid import uuid4
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -124,11 +125,12 @@ def chart_generator(
             "values": clean_values,
             "source_urls": source_urls or [],
         }
-        spec_path = str(generated_file("charts", f"{base}.json"))
-        svg_path = str(generated_file("charts", f"{base}.svg"))
-        with open(spec_path, "w", encoding="utf-8") as stream:
+        generation = uuid4().hex
+        spec_path = str(generated_file("charts", f"{base}.json", generation))
+        svg_path = str(generated_file("charts", f"{base}.svg", generation))
+        with open(spec_path, "x", encoding="utf-8") as stream:
             json.dump(spec, stream, ensure_ascii=False, indent=2)
-        with open(svg_path, "w", encoding="utf-8") as stream:
+        with open(svg_path, "x", encoding="utf-8") as stream:
             stream.write(_svg(title, labels, clean_values, chart_type))
         with open(svg_path, "rb") as stream:
             checksum = hashlib.sha256(stream.read()).hexdigest()

@@ -85,8 +85,15 @@ def validate_candidate(
         if len(matches) != 1:
             return None, -1, "value_not_found"
         value = matches.pop()  # Publish the source's exact spelling, never a rounded/generated value.
+    if candidate.metric and candidate.metric.casefold() not in excerpt.casefold():
+        return None, -1, "metric_not_found"
+    if candidate.evaluation_setup and candidate.evaluation_setup.casefold() not in excerpt.casefold():
+        return None, -1, "setup_not_found"
     if candidate.unit and candidate.unit.casefold() not in excerpt.casefold():
         return None, -1, "unit_not_found"
+    unit = candidate.unit
+    if unit:
+        unit = re.search(re.escape(unit), excerpt, re.IGNORECASE).group()
     # Downstream receives the supported source statement, not unverified model paraphrase.
     return candidate.model_copy(update={"claim": excerpt, "excerpt": excerpt, "subject": subject,
-                                        "value_text": value}), offset, None
+                                        "value_text": value, "unit": unit}), offset, None

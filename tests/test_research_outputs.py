@@ -88,8 +88,8 @@ class TestResearchOutputAdapters(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Chart generated successfully", output)
         self.assertIn("phase7_chart.svg", output)
-        self.assertTrue(Path("workspace_data/charts/phase7_chart.svg").is_file())
-        self.assertTrue(Path("workspace_data/charts/phase7_chart.json").is_file())
+        self.assertEqual(len(list(Path("workspace_data/charts").rglob("phase7_chart.svg"))), 1)
+        self.assertEqual(len(list(Path("workspace_data/charts").rglob("phase7_chart.json"))), 1)
 
     async def test_output_api_scopes_reads_to_an_existing_owned_run(self) -> None:
         run_repository = PostgresRunRepository()

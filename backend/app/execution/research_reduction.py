@@ -9,10 +9,11 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.config import settings
-from app.execution.context_budget import guard_context
+from app.execution.context_budget import guard_structured_context
 from app.execution.research_contracts import EvidenceClaim, SynthesisResult
 from app.execution.research_evidence import EvidenceStore
 from app.execution.research_validation import supported_literals, supported_numbers
+from app.execution.run_budget import bounded_invoke
 from app.shared.llm_call_metrics import LLMCallObserver
 
 
@@ -57,13 +58,14 @@ class EvidenceReducer:
             current: list[dict] = []
             for record in records:
                 try:
-                    guard_context(self._messages(current + [record], question), [])
+                    guard_structured_context(self._messages(current + [record], question),
+                                             SynthesisResult.model_json_schema())
                 except ValueError:
                     if not current:
                         raise
                     groups.append(current)
                     current = []
-                    guard_context(self._messages([record], question), [])
+                    guard_structured_context(self._messages([record], question), SynthesisResult.model_json_schema())
                 current.append(record)
             if current:
                 groups.append(current)
@@ -80,8 +82,10 @@ class EvidenceReducer:
                     if settings.ENABLE_EXECUTION_BENCHMARK_METRICS:
                         observer = LLMCallObserver(call_id=str(uuid4()), component="evidence_reducer",
                             purpose="worker", model=getattr(self.llm, "model", None), task_id=self.task_id)
-                    output = await self.llm.with_structured_output(SynthesisResult, method="json_schema").ainvoke(
-                        self._messages(group, question), config={"callbacks": [observer]} if observer else None)
+                    output = await bounded_invoke(
+                        self.llm.with_structured_output(SynthesisResult, method="json_schema"),
+                        self._messages(group, question), schema=SynthesisResult.model_json_schema(),
+                        config={"callbacks": [observer]} if observer else None)
                     result = SynthesisResult.model_validate(output)
                     group_ids = {record["evidence_id"] for record in group if "evidence_id" in record}
                     group_ids.update(identity for record in group for identity in record.get("evidence_ids", []))

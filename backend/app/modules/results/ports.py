@@ -21,6 +21,10 @@ class ArtifactStorage(Protocol):
     def resolve(self, storage_uri: str) -> Path:
         ...
 
+    def release_generated_file(self, source_path: str) -> None:
+        """Release temporary output only after its durable artifact reference was saved."""
+        ...
+
 
 class ResearchDataRepository(Protocol):
     async def save_result(self, result: ResultRecord) -> ResultRecord:
