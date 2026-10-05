@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
 from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient_backoff, validate_external_url
+from app.shared.collection_scope import scoped_collection
 
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -44,6 +45,10 @@ def http_request(url: str, method: str = "GET", headers: dict[str, str] | None =
 
     started = perf_counter()
     method = method.upper().strip()
+    if scoped_collection() and (method != "GET" or headers or data):
+        return failure_result("blocked", code="ci_public_get_only",
+            message="CI collection permits only public GET without custom headers or body.",
+            tool_name="http_request").to_json()
     if method not in ALLOWED_METHODS:
         return failure_result(
             "invalid_input",

@@ -8,6 +8,7 @@ from typing import Any, Literal
 from urllib.parse import urljoin
 
 import requests
+from app.shared.collection_scope import scoped_collection
 
 from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
@@ -352,7 +353,7 @@ def crawl_url(
     started = perf_counter()
     normalized_url = str(raw_url or "").strip()
     cached_key = f"news_crawler:{mode}:{normalized_url}"
-    cached_result = get_cached(cached_key)
+    cached_result = None if scoped_collection() else get_cached(cached_key)
     if isinstance(cached_result, str):
         return cached_result
 
@@ -536,7 +537,7 @@ def crawl_url(
                 duration_ms=round((perf_counter() - started) * 1000),
                 mode=mode,
             )
-            if cacheable:
+            if cacheable and not scoped_collection():
                 set_cached(cached_key, result_json)
             return result_json
         if static_error:
@@ -570,7 +571,7 @@ def crawl_url(
                 duration_ms=round((perf_counter() - started) * 1000),
                 mode=mode,
             )
-            if cacheable:
+            if cacheable and not scoped_collection():
                 set_cached(cached_key, result_json)
             return result_json
 
@@ -670,6 +671,6 @@ def crawl_url(
         duration_ms=round((perf_counter() - started) * 1000),
         mode=mode,
     )
-    if cacheable:
+    if cacheable and not scoped_collection():
         set_cached(cached_key, result_json)
     return result_json

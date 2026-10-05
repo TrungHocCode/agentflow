@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from time import perf_counter
 from typing import Any, Literal
 from urllib.parse import urldefrag
@@ -152,17 +153,10 @@ def news_crawler_batch(
     worker_count = min(concurrency, MAX_CONCURRENCY, len(normalized_urls))
     if normalized_urls:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="agentflow-crawl") as pool:
-            outcomes = list(
-                pool.map(
-                    lambda url: _crawl_one(
-                        url,
-                        mode=mode,
-                        max_articles=max_articles_per_listing,
-                        article_mode=article_mode,
-                    ),
-                    normalized_urls,
-                )
-            )
+            futures = [pool.submit(copy_context().run, _crawl_one, url, mode=mode,
+                                   max_articles=max_articles_per_listing, article_mode=article_mode)
+                       for url in normalized_urls]
+            outcomes = [future.result() for future in futures]
     else:
         outcomes = []
 
