@@ -66,7 +66,8 @@ class TestGraphExecution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(results), 3)
 
         # Verify output file generated
-        report_file = os.path.join(os.getcwd(), "workspace_data", "reports", "intelligence_report.md")
+        from pathlib import Path
+        report_file = next(Path("workspace_data/reports").rglob("intelligence_report.md"))
         self.assertTrue(os.path.exists(report_file))
 
 

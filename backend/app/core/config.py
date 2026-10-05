@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     RESEARCH_MAX_REDUCE_CALLS: int = Field(default=32, ge=1, le=256)
     RESEARCH_MAX_REDUCE_DEPTH: int = Field(default=4, ge=1, le=8)
     ARTIFACT_ROOT: str = "workspace_data"
-    MAX_RUN_DURATION: int = 3600
+    MAX_RUN_DURATION: int = Field(default=3600, ge=1, le=86400)
+    MAX_RUN_LLM_CALLS: int = Field(default=64, ge=1, le=4096)
+    MAX_RUN_ESTIMATED_TOKENS: int = Field(default=262144, ge=1024, le=16777216)
     MAX_TASK_CONCURRENCY: int = 1
     MAX_REQUEST_BODY_BYTES: int = 1_048_576
     MAX_WORKFLOW_STEPS: int = 50

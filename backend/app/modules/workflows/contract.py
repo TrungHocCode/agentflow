@@ -105,6 +105,7 @@ def normalize_workflow_definition(
                 or {}
             ),
             config=deepcopy(config),
+            research_requirements=deepcopy(step.get("research_requirements") or []),
         )
         tasks.append(task.model_dump(mode="json"))
 
@@ -149,6 +150,7 @@ def _legacy_tasks_to_steps(tasks: Any) -> List[Dict[str, Any]]:
             "expected_output_type": task.expected_output_type,
             "position": index,
             "config": deepcopy(task.config),
+            "research_requirements": [requirement.model_dump() for requirement in task.research_requirements],
         }
         if task.tool_names:
             step["tool_names"] = list(task.tool_names)

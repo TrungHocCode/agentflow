@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import unittest
 from test_support import isolated_workspace
@@ -209,7 +210,7 @@ class TestToolsAndReducers(unittest.TestCase):
             "filename": "tech_report.md"
         })
         self.assertTrue("Successfully generated Markdown report" in res)
-        report_file = os.path.join(os.getcwd(), "workspace_data", "reports", "tech_report.md")
+        report_file = json.loads(res)["data"]["file_path"]
         self.assertTrue(os.path.exists(report_file))
 
 

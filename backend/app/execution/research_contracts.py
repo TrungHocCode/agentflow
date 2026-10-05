@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ExtractedClaim(BaseModel):
@@ -55,6 +55,42 @@ class ChunkDiagnostic(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
 
 
+class ResearchRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    subject: str = Field(min_length=1, max_length=200)
+    field: str = Field(min_length=1, max_length=200)
+    subject_aliases: list[str] = Field(default_factory=list, max_length=8)
+    field_aliases: list[str] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_nonblank_values(self) -> "ResearchRequirement":
+        values = [self.id, self.subject, self.field, *self.subject_aliases, *self.field_aliases]
+        if any(not value.strip() or len(value) > 200 for value in values):
+            raise ValueError("Research requirements and aliases must be bounded and nonblank.")
+        return self
+
+
+class RequirementCoverage(BaseModel):
+    requirement: ResearchRequirement
+    status: Literal["observed", "unresolved"]
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class SourceOutcome(BaseModel):
+    source_url: str
+    document_id: str | None = None
+    status: Literal["fetch_failed", "empty", "invalid_extraction", "processed", "unprocessed"]
+    code: str | None = None
+
+
+class AnalysisLimitation(BaseModel):
+    origin: Literal["extraction", "coverage", "reconciliation"]
+    message: str
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
 class ResearchResult(BaseModel):
     schema_version: str = "1"
     claims: list[EvidenceClaim] = Field(default_factory=list)
@@ -66,13 +102,19 @@ class ResearchResult(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     chunk_diagnostics: list[ChunkDiagnostic] = Field(default_factory=list)
     coverage_scope: Literal["extraction_only"] = "extraction_only"
+    requirements: list[ResearchRequirement] = Field(default_factory=list, max_length=64)
+    requirement_coverage: list[RequirementCoverage] = Field(default_factory=list)
+    source_outcomes: list[SourceOutcome] = Field(default_factory=list)
     rejection_counts: dict[str, int] = Field(default_factory=dict)
     status: Literal["complete", "partial", "failed"] = "partial"
 
 
 class SynthesisFinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field(min_length=1, max_length=1000)
     evidence_ids: list[str] = Field(min_length=1, max_length=16)
+    verification: Literal["unverified"] = "unverified"
 
 
 class SynthesisResult(BaseModel):
@@ -80,3 +122,17 @@ class SynthesisResult(BaseModel):
     findings: list[SynthesisFinding] = Field(default_factory=list, max_length=16)
     conflicts: list[str] = Field(default_factory=list, max_length=16)
     limitations: list[str] = Field(default_factory=list, max_length=16)
+
+
+class EvidenceAnalysis(SynthesisResult):
+    """Typed handoff; validation labels remain quotation-level, not semantic verification."""
+
+    evidence: list[EvidenceClaim] = Field(default_factory=list)
+    sources: dict[str, str] = Field(default_factory=dict)
+    input_claim_count: int = 0
+    requirement_coverage: list[RequirementCoverage] = Field(default_factory=list)
+    source_outcomes: list[SourceOutcome] = Field(default_factory=list)
+    analysis_limitations: list[AnalysisLimitation] = Field(default_factory=list)
+    coverage_scope: Literal["extraction_only"] = "extraction_only"
+    chunk_diagnostics: list[ChunkDiagnostic] = Field(default_factory=list)
+    status: Literal["done", "partial"] = "partial"

@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -58,6 +58,11 @@ def guard_context(messages: list[BaseMessage], tools: list[BaseTool]) -> int:
             "reduce evidence or increase the configured context. Counting method: utf8/2 heuristic."
         )
     return estimate
+
+
+def guard_structured_context(messages: list[BaseMessage], schema: dict) -> int:
+    """Include the structured response schema in admission, without sending it as chat content."""
+    return guard_context(messages + [SystemMessage(content=json.dumps(schema, ensure_ascii=False))], [])
 
 
 def project_tool_result(result: ToolResult, max_chars: int = 5000) -> str:

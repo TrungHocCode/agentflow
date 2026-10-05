@@ -19,7 +19,7 @@ class TestPlannerToolPolicy(unittest.IsolatedAsyncioTestCase):
     def test_planner_schema_excludes_execution_permissions(self) -> None:
         fields = set(PlannedTask.model_json_schema()["properties"])
         self.assertEqual(fields, {
-            "id", "node", "status", "description", "dependencies", "expected_output_type"
+            "id", "node", "status", "description", "dependencies", "expected_output_type", "research_requirements"
         })
 
     async def test_generated_tool_selection_cannot_restrict_or_expand_role_permissions(self) -> None:
