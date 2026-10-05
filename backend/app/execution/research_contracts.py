@@ -47,6 +47,14 @@ class SourceDocument(BaseModel):
     truncated_upstream: bool = False
 
 
+class ChunkDiagnostic(BaseModel):
+    """A chunk observation is not a conclusion about the entire publisher document."""
+
+    document_id: str
+    chunk_id: str
+    missing_fields: list[str] = Field(default_factory=list)
+
+
 class ResearchResult(BaseModel):
     schema_version: str = "1"
     claims: list[EvidenceClaim] = Field(default_factory=list)
@@ -56,6 +64,8 @@ class ResearchResult(BaseModel):
     unprocessed_chunks: int = 0
     warnings: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)
+    chunk_diagnostics: list[ChunkDiagnostic] = Field(default_factory=list)
+    coverage_scope: Literal["extraction_only"] = "extraction_only"
     rejection_counts: dict[str, int] = Field(default_factory=dict)
     status: Literal["complete", "partial", "failed"] = "partial"
 

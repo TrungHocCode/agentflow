@@ -7,6 +7,16 @@ from app.execution.research_contracts import ExtractedClaim
 
 
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+LITERAL = re.compile(r"</?[A-Za-z_][A-Za-z0-9_.:-]*>|`([^`\n]{1,120})`")
+
+
+def supported_literals(text: str, sources: str) -> bool:
+    """Preserve explicit tags/code identifiers; this is not semantic entailment."""
+    for match in LITERAL.finditer(text):
+        literal = match.group(1) if match.group(1) is not None else match.group()
+        if literal not in sources:
+            return False
+    return True
 
 
 def source_spans(text: str) -> dict[str, tuple[int, str]]:

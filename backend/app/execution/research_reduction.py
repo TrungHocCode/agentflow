@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.execution.context_budget import guard_context
 from app.execution.research_contracts import EvidenceClaim, SynthesisResult
 from app.execution.research_evidence import EvidenceStore
-from app.execution.research_validation import supported_numbers
+from app.execution.research_validation import supported_literals, supported_numbers
 from app.shared.llm_call_metrics import LLMCallObserver
 
 
@@ -26,6 +26,8 @@ REDUCE_PROMPT = (
     "Do not calculate numeric differences, averages or rankings. Numeric strings in each finding must "
     "already appear in the source excerpts cited by that finding; avoid numbered-list prefixes. "
     "Combine duplicate findings, retain necessary distinctions, and produce at most six concise findings."
+    " Preserve exact tags and code identifiers, including their spelling and case. "
+    "Extraction gaps are not proof that information is absent from the publisher's document."
 )
 
 
@@ -93,6 +95,8 @@ class EvidenceReducer:
                                 finding_text = finding_text.replace(claim.subject, "")
                         if not supported_numbers(finding_text, " ".join(claim.excerpt for claim in supporting)):
                             raise ValueError("Synthesis introduced a number absent from its supporting excerpts.")
+                        if not supported_literals(finding.text, " ".join(claim.excerpt for claim in supporting)):
+                            raise ValueError("Synthesis introduced a literal absent from its supporting excerpts.")
                     if not result.findings:
                         raise ValueError("Synthesis produced no source-backed findings.")
                     outcomes.append(result)

@@ -861,8 +861,12 @@ class WorkerAgent(BaseAgent):
                 identity: claims[identity].source_url for identity in sorted(used_ids)},
                 "input_claim_count": len(claims),
                 "limitations": list(dict.fromkeys(reduced.limitations + [warning for bundle in bundles
-                    for warning in bundle.warnings] + [f"Missing field: {field}" for bundle in bundles
+                    for warning in bundle.warnings] + [
+                    f"Unresolved extraction field (not publisher absence): {field}" for bundle in bundles
                     for field in bundle.missing_fields])),
+                "coverage_scope": "extraction_only",
+                "chunk_diagnostics": [diagnostic.model_dump() for bundle in bundles
+                                      for diagnostic in bundle.chunk_diagnostics],
             }
             if any(bundle.status != "complete" for bundle in bundles):
                 status = "partial"
