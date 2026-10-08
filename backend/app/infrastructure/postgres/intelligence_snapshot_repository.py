@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, Callable, Literal
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
@@ -48,6 +48,75 @@ class PostgresSnapshotRepository:
         if source is None:
             raise ResourceNotFoundError("Tracked source was not found.", entity="source")
         return source
+
+    @staticmethod
+    def comparison_contract(record: RunComparisonModel) -> RunSourceComparison:
+        return RunSourceComparison(run_id=UUID(record.run_id), source_id=UUID(record.source_id),
+            baseline_snapshot_id=UUID(record.baseline_snapshot_id) if record.baseline_snapshot_id else None,
+            current_snapshot_id=UUID(record.current_snapshot_id) if record.current_snapshot_id else None,
+            outcome=record.outcome, quality=record.quality, reason_codes=list(record.reason_codes or []),
+            promotion=record.promotion, promoted_at=record.promoted_at, decided_at=record.decided_at)
+
+    @staticmethod
+    def candidate_contract(record: ChangeCandidateModel) -> ChangeCandidate:
+        return ChangeCandidate(id=UUID(record.id), run_id=UUID(record.run_id),
+            source_id=UUID(record.source_id), before_snapshot_id=UUID(record.before_snapshot_id),
+            after_snapshot_id=UUID(record.after_snapshot_id), kind=record.kind, section=record.section,
+            before_start=record.before_start, before_end=record.before_end, after_start=record.after_start,
+            after_end=record.after_end, before_excerpt=record.before_excerpt or "",
+            after_excerpt=record.after_excerpt or "", diff_algorithm_version=record.diff_algorithm_version,
+            diff_hash=record.diff_hash, detected_at=record.detected_at)
+
+    async def get_change(self, change_id: str, owner_id: str) -> ChangeCandidate:
+        async with self.session() as session:
+            record = await session.get(ChangeCandidateModel, change_id)
+            if record is None or record.owner_id != owner_id:
+                raise ResourceNotFoundError("Change candidate was not found.", entity="change")
+            return self.candidate_contract(record)
+
+    async def list_comparisons(self, run_id: str, owner_id: str) -> list[RunSourceComparison]:
+        async with self.session() as session:
+            rows = (await session.execute(select(RunComparisonModel).where(
+                RunComparisonModel.run_id == run_id, RunComparisonModel.owner_id == owner_id
+                ).order_by(RunComparisonModel.source_id))).scalars().all()
+            return [self.comparison_contract(row) for row in rows]
+
+    async def list_candidates(self, run_id: str, owner_id: str,
+                              source_id: str | None = None) -> list[ChangeCandidate]:
+        async with self.session() as session:
+            query = select(ChangeCandidateModel).where(ChangeCandidateModel.run_id == run_id,
+                                                       ChangeCandidateModel.owner_id == owner_id)
+            if source_id is not None:
+                query = query.where(ChangeCandidateModel.source_id == source_id)
+            rows = (await session.execute(query.order_by(ChangeCandidateModel.source_id,
+                                                         ChangeCandidateModel.section))).scalars().all()
+            return [self.candidate_contract(row) for row in rows]
+
+    async def list_snapshots(self, source_id: str, owner_id: str, limit: int) -> list[SourceSnapshot]:
+        async with self.session() as session:
+            await self.owned_source(session, source_id, owner_id)
+            rows = (await session.execute(select(SourceSnapshotModel).where(
+                SourceSnapshotModel.source_id == source_id, SourceSnapshotModel.owner_id == owner_id
+                ).order_by(desc(SourceSnapshotModel.fetched_at)).limit(min(max(limit, 1), 50)))).scalars().all()
+            return [self.snapshot_contract(row) for row in rows]
+
+    async def list_changes_for_watchlist(self, watchlist_id: str, owner_id: str, limit: int,
+                                         offset: int) -> list[ChangeCandidate]:
+        async with self.session() as session:
+            query = (select(ChangeCandidateModel).join(
+                TrackedSourceModel, TrackedSourceModel.id == ChangeCandidateModel.source_id).where(
+                TrackedSourceModel.watchlist_id == watchlist_id,
+                ChangeCandidateModel.owner_id == owner_id).order_by(desc(ChangeCandidateModel.detected_at)))
+            rows = (await session.execute(query.limit(min(max(limit, 1), 100)).offset(max(offset, 0)))
+                    ).scalars().all()
+            return [self.candidate_contract(row) for row in rows]
+
+    async def count_changes_for_watchlist(self, watchlist_id: str, owner_id: str) -> int:
+        async with self.session() as session:
+            return await session.scalar(select(func.count()).select_from(ChangeCandidateModel).join(
+                TrackedSourceModel, TrackedSourceModel.id == ChangeCandidateModel.source_id).where(
+                TrackedSourceModel.watchlist_id == watchlist_id,
+                ChangeCandidateModel.owner_id == owner_id)) or 0
 
     @staticmethod
     def snapshot_contract(record: SourceSnapshotModel) -> SourceSnapshot:

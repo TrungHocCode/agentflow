@@ -97,6 +97,9 @@ class InvestigationService:
             await self.rounds.set_round_status(round_id, owner_id, status, COORDINATOR_IDENTITY)
         return round_updates, task_updates
 
+    async def list_rounds(self, run_id: UUID, owner_id: str) -> list[InvestigationRound]:
+        return await self.rounds.list_rounds(str(run_id), owner_id)
+
     @staticmethod
     def coverage(questions: list[InvestigationQuestion],
                  accepted_rounds: list[InvestigationRound]) -> list:

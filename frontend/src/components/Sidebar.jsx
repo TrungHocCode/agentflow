@@ -1,8 +1,9 @@
-import { BookOpenText, Clock3, GitMerge, MessageSquareText, Wrench } from 'lucide-react';
+import { BookOpenText, Clock3, GitMerge, MessageSquareText, Radar, Wrench } from 'lucide-react';
 import { Button } from './ui/button';
 
 const NAV_ITEMS = [
   { id: 'studio', label: 'Nghiên cứu', icon: MessageSquareText },
+  { id: 'intelligence', label: 'Intelligence', icon: Radar },
   { id: 'canvas', label: 'Quy trình', icon: GitMerge },
   { id: 'catalog', label: 'Công cụ', icon: Wrench },
   { id: 'runs', label: 'Lịch sử', icon: Clock3 }

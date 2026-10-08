@@ -5,6 +5,7 @@ import ChatStudio from './components/ChatStudio';
 import FlowCanvas from './components/FlowCanvas';
 import CatalogBrowser from './components/CatalogBrowser';
 import ExecutionTracker from './components/ExecutionTracker';
+import Intelligence from './components/Intelligence';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
 
@@ -1100,7 +1101,7 @@ export default function App() {
           )}
 
           {activeTab === 'runs' && (
-            <ExecutionTracker 
+            <ExecutionTracker
               currentRun={currentRun}
               results={executionResults}
               plan={activePlan}
@@ -1114,6 +1115,8 @@ export default function App() {
               }}
             />
           )}
+
+          {activeTab === 'intelligence' && <Intelligence />}
         </main>
       </div>
       <RunResultsDrawer

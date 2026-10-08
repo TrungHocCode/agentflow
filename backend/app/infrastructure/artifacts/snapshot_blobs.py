@@ -29,7 +29,8 @@ class SnapshotFileStore:
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             raise ValueError("Snapshot blobs are immutable and must not be overwritten.")
-        target.write_text(text, encoding="utf-8")
+        # newline="\n" keeps stored bytes identical on every OS so recorded hashes verify anywhere.
+        target.write_text(text, encoding="utf-8", newline="\n")
         return target.relative_to(self.root).as_posix()
 
     def read_span(self, storage_uri: str, start: int, limit: int) -> str:

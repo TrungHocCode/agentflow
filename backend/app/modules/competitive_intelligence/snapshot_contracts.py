@@ -28,6 +28,18 @@ ComparisonOutcome = Literal["baseline_created", "no_change", "changed", "unavail
 CoverageQuality = Literal["complete", "partial", "insufficient"]
 PromotionState = Literal["pending", "promoted", "rejected_stale", "skipped"]
 ChangeKind = Literal["added", "removed", "modified"]
+SnapshotRepresentation = Literal["captured", "normalized"]
+
+
+class SnapshotContent(Contract):
+    """Bounded owner-scoped text span; offsets resolve into stored immutable text."""
+
+    snapshot_id: UUID
+    representation: SnapshotRepresentation
+    start_offset: int = Field(ge=0)
+    limit_chars: int = Field(ge=1, le=MAX_SPAN_CHARS)
+    total_chars: int = Field(ge=0)
+    text: str = Field(max_length=MAX_SPAN_CHARS)
 
 
 class FetchOutcome(Contract):

@@ -12,12 +12,14 @@ from uuid import UUID, uuid4
 from app.modules.competitive_intelligence.models import SourceKind
 from app.modules.competitive_intelligence.ports import SnapshotRepository
 from app.modules.competitive_intelligence.snapshot_contracts import (
-    EXTRACTOR_VERSION, NORMALIZATION_VERSION, ChangeCandidate, FetchOutcome, RunSourceComparison, SourceSnapshot,
+    EXTRACTOR_VERSION, NORMALIZATION_VERSION, MAX_SPAN_CHARS, ChangeCandidate, FetchOutcome, RunSourceComparison,
+    SourceSnapshot, SnapshotContent,
 )
 from app.modules.competitive_intelligence.snapshot_normalize import (
     compare_snapshots, context_hash, detect_candidates, hash_text, normalize_captured, quality_gate,
 )
 from app.modules.competitive_intelligence.snapshot_policy import eligible_for_baseline, promotion_plan
+from app.shared.errors import ValidationError
 
 
 class SnapshotService:
@@ -87,3 +89,30 @@ class SnapshotService:
     @staticmethod
     def check_eligible(snapshot: SourceSnapshot, outcome: FetchOutcome) -> bool:
         return eligible_for_baseline(snapshot, outcome)
+
+    async def get_snapshot(self, snapshot_id: str, owner_id: str) -> SourceSnapshot:
+        return await self.snapshots.get_snapshot(snapshot_id, owner_id)
+
+    async def list_snapshots(self, source_id: str, owner_id: str, limit: int) -> list[SourceSnapshot]:
+        return await self.snapshots.list_snapshots(source_id, owner_id, limit)
+
+    async def read_content(self, snapshot_id: str, owner_id: str, representation: str, start: int,
+                           limit: int) -> SnapshotContent:
+        if representation not in ("captured", "normalized"):
+            raise ValidationError("Snapshot representation must be captured or normalized.")
+        full = await self.snapshots.snapshot_text(snapshot_id, owner_id)
+        text = full[0] if representation == "captured" else full[1]
+        start = max(0, start)
+        bounded = text[start:start + min(max(0, limit), MAX_SPAN_CHARS)]
+        snapshot = await self.snapshots.get_snapshot(snapshot_id, owner_id)
+        return SnapshotContent(snapshot_id=snapshot.id, representation=representation, start_offset=start,
+                               limit_chars=min(max(0, limit), MAX_SPAN_CHARS), total_chars=len(text),
+                               text=bounded)
+
+    async def get_change(self, change_id: str, owner_id: str) -> ChangeCandidate:
+        return await self.snapshots.get_change(change_id, owner_id)
+
+    async def list_changes(self, watchlist_id: str, owner_id: str, limit: int,
+                           offset: int) -> tuple[list[ChangeCandidate], int]:
+        return (await self.snapshots.list_changes_for_watchlist(watchlist_id, owner_id, limit, offset),
+                await self.snapshots.count_changes_for_watchlist(watchlist_id, owner_id))

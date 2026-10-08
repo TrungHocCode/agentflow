@@ -15,6 +15,9 @@ from app.infrastructure.container import (
     build_workflow_service,
     build_research_result_service,
     build_intelligence_service,
+    build_snapshot_service,
+    build_investigation_service,
+    build_brief_service,
 )
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
@@ -29,10 +32,25 @@ from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimi
 from app.modules.system.ports import RateLimiter
 from app.shared.errors import AuthenticationError
 from app.modules.competitive_intelligence.service import IntelligenceService
+from app.modules.competitive_intelligence.snapshot_service import SnapshotService
+from app.modules.competitive_intelligence.investigation_service import InvestigationService
+from app.modules.competitive_intelligence.brief_service import BriefService
 
 
 async def get_intelligence_service(db: AsyncSession = Depends(get_db)) -> IntelligenceService:
     return build_intelligence_service(db)
+
+
+async def get_snapshot_service() -> SnapshotService:
+    return build_snapshot_service()
+
+
+async def get_investigation_service() -> InvestigationService:
+    return build_investigation_service()
+
+
+async def get_brief_service(db: AsyncSession = Depends(get_db)) -> BriefService:
+    return build_brief_service(db)
 
 
 async def get_current_user_id(
