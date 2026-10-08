@@ -7,6 +7,9 @@ from app.infrastructure.postgres.models.catalog import (
 from app.infrastructure.postgres.models.competitive_intelligence import (
     WatchlistModel, WatchlistRevisionModel, TrackedProductModel, ProductProfileVersionModel, TrackedSourceModel,
 )
+from app.infrastructure.postgres.models.competitive_intelligence_snapshots import (
+    ChangeCandidateModel, FetchOutcomeModel, RunComparisonModel, SourceBaselineModel, SourceSnapshotModel,
+)
 from app.infrastructure.postgres.models.conversation import (
     ConversationMessageModel,
     ConversationModel,

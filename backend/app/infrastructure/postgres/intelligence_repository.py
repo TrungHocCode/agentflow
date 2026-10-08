@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import AsyncSessionLocal
@@ -15,6 +15,7 @@ from app.infrastructure.postgres.models import (
     FlowModel, RunModel, WorkflowVersionModel, WatchlistModel, WatchlistRevisionModel,
     TrackedProductModel, TrackedSourceModel, ProductProfileVersionModel, EvidenceModel,
 )
+from app.infrastructure.postgres.models.competitive_intelligence_snapshots import SourceBaselineModel
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
 from app.modules.competitive_intelligence.models import (
     CreateWatchlist, ProductProfileVersion, Revision, UpdateWatchlist, Watchlist, WatchlistConfig, digest,
@@ -293,6 +294,22 @@ class PostgresIntelligenceRepository:
             await session.flush()
             await PostgresRunRepository._create_task_execution_rows(session, document)
             return document
+
+    async def pin_baselines(self, watchlist_id: str, owner_id: str) -> dict[str, str | None]:
+        """Latest promoted baseline per non-archived source; absent pointers pin to no baseline."""
+        async with self.session() as session:
+            await self.owned(session, watchlist_id, owner_id)
+            sources = (await session.execute(select(TrackedSourceModel).where(
+                TrackedSourceModel.watchlist_id == watchlist_id,
+                TrackedSourceModel.archived.is_(False)))).scalars().all()
+            pinned: dict[str, str | None] = {}
+            for source in sources:
+                pointer = (await session.execute(select(SourceBaselineModel).where(
+                    SourceBaselineModel.source_id == source.id,
+                    SourceBaselineModel.owner_id == owner_id
+                    ).order_by(desc(SourceBaselineModel.promoted_at)).limit(1))).scalar_one_or_none()
+                pinned[source.id] = pointer.snapshot_id if pointer is not None else None
+            return pinned
 
     async def runs(self, watchlist_id: str, owner_id: str, limit: int, offset: int) -> list[RunDocument]:
         async with self.session() as session:

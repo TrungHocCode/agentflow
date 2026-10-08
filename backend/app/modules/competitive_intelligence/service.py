@@ -126,11 +126,12 @@ class IntelligenceService:
         workflow_id = await self.repository.workflow_id(version_id, watchlist.owner_id)
         config = watchlist.current_revision.config
         enabled = [source for product in config.products for source in product.sources if source.enabled]
+        pinned = await self.repository.pin_baselines(str(watchlist.id), watchlist.owner_id)
         frozen = {"schema_version": "1", "watchlist_id": str(watchlist.id), "revision_id": revision_id,
                   "config_hash": watchlist.current_revision.config_hash, "config": config.model_dump(mode="json"),
                   "approved_urls": [source.url for source in enabled],
-                  "baselines": {str(source.id): None for source in enabled},
-                  "baseline_policy": "not_available_until_ci_p3"}
+                  "baselines": {str(source.id): pinned.get(str(source.id)) for source in enabled},
+                  "baseline_policy": "pinned_at_acceptance"}
         document = await self.run_service.create_workflow_run(workflow_id, version_id,
             user_id=watchlist.owner_id, input_data={"competitive_intelligence": frozen,
                 "user_prompt": config.goal, "urls": [source.url for source in enabled]},
