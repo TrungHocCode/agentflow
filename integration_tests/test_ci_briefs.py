@@ -117,13 +117,14 @@ class TestCIRealBriefs(unittest.IsolatedAsyncioTestCase):
                                       {"id": str(run_id)})
 
     async def compare_and_finalize(self, run_id: UUID, before: str, after: str):
-        first_kwargs = self.capture_kwargs(run_id, before * 4)
-        outcome, first = await self.snapshot_service.capture(**first_kwargs)
+        outcome, first = await self.snapshot_service.capture(**self.capture_kwargs(run_id, before * 4))
         comparison, _ = await self.snapshot_service.compare_source(
             self.owner, run_id, self.source.id, first.id, NOW)
-        await self.snapshot_service.finalize_source(self.owner, comparison, [], "completed", NOW, None)
-        second_kwargs = self.capture_kwargs(run_id, after * 4)
-        _, second = await self.snapshot_service.capture(**second_kwargs)
+        self.assertEqual(comparison.outcome, "baseline_created")
+        # Advance the pointer directly; each (run, source) comparison is recorded exactly once below.
+        promoted = await self.snapshots.promote_baseline(first, str(run_id), None)
+        self.assertEqual(promoted, "promoted")
+        _, second = await self.snapshot_service.capture(**self.capture_kwargs(run_id, after * 4))
         comparison, candidates = await self.snapshot_service.compare_source(
             self.owner, run_id, self.source.id, second.id, NOW)
         finalized = await self.snapshot_service.finalize_source(
