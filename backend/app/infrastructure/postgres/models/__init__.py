@@ -11,6 +11,7 @@ from app.infrastructure.postgres.models.competitive_intelligence_snapshots impor
     ChangeCandidateModel, FetchOutcomeModel, RunComparisonModel, SourceBaselineModel, SourceSnapshotModel,
 )
 from app.infrastructure.postgres.models.competitive_intelligence_investigation import RoundModel
+from app.infrastructure.postgres.models.competitive_intelligence_brief import BriefModel
 from app.infrastructure.postgres.models.conversation import (
     ConversationMessageModel,
     ConversationModel,
