@@ -64,6 +64,7 @@ class TestCIConfiguration(IsolatedAsyncioTestCase):
                        description="Collect approved sources", status="pending")]))
         self.runs.enqueue_admitted_run = AsyncMock(side_effect=lambda doc: doc)
         self.repository.admit_run.side_effect = lambda doc, *args: doc
+        self.repository.pin_baselines = AsyncMock(return_value={})
         self.service = IntelligenceService(self.repository, self.runs)
 
     async def test_budget_policy_and_unknown_fields(self) -> None:
