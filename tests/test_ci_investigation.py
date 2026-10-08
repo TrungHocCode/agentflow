@@ -291,6 +291,21 @@ class TestInvestigationService(unittest.IsolatedAsyncioTestCase):
             False, NOW)
         self.assertEqual((stored.round_number, stored.parent_round_id, outcome), (2, accepted.id, "accepted"))
 
+    async def test_taken_round_number_rejected_without_persisting_duplicate(self) -> None:
+        candidate = candidate_fixture()
+        first, _ = await self.service.propose_round(
+            uuid4(), uuid4(), uuid4(), "owner", [], [candidate], self.scope, budget_fixture(max_tasks=1),
+            0, 0, 0, False, NOW)
+        self.assertEqual(first.status, "rejected")
+        self.rounds.list_rounds = AsyncMock(return_value=[first])
+        calls_before = self.rounds.save_round.await_count
+        stored, outcome = await self.service.propose_round(
+            first.run_id, uuid4(), uuid4(), "owner", [], [candidate], self.scope, self.budget,
+            0, 0, 0, False, NOW)
+        self.assertEqual((stored.status, outcome), ("rejected", "rejected"))
+        self.assertIn("duplicate_round_number", stored.rejection_reasons)
+        self.assertEqual(self.rounds.save_round.await_count, calls_before)
+
     async def test_finalize_requires_terminal_tasks(self) -> None:
         candidate = candidate_fixture()
         stored, _ = await self.service.propose_round(

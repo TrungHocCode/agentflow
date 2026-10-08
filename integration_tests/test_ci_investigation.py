@@ -30,7 +30,9 @@ from app.modules.competitive_intelligence.investigation_contracts import (
 )
 from app.modules.competitive_intelligence.investigation_coordinator import scope_digest
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
-from app.modules.competitive_intelligence.models import CreateWatchlist, InvestigationBudget
+from app.modules.competitive_intelligence.models import (
+    CreateWatchlist, InvestigationBudget, StartRunRequest,
+)
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
 from app.modules.competitive_intelligence.snapshot_normalize import hash_text
@@ -81,11 +83,14 @@ class TestCIRealInvestigation(unittest.IsolatedAsyncioTestCase):
                                               self.version, self.owner)
         self.revision_id = revision.id
         self.source_id = revision.config.products[1].sources[0].id
+        started = await self.service.start(str(self.watchlist.id),
+            StartRunRequest(revision_id=revision.id, workflow_version_id=self.version), self.owner, None)
+        self.run = started
         self.scope = RoundScope(approved_source_ids=[self.source_id],
                                 approved_urls=["https://rival.invalid/pricing"],
                                 config_hash=revision.config_hash)
         self.budget = InvestigationBudget()
-        self.run_id = uuid4()
+        self.run_id = UUID(started.run_id)
 
     async def cleanup(self) -> None:
         await self.session.close()
@@ -126,6 +131,10 @@ class TestCIRealInvestigation(unittest.IsolatedAsyncioTestCase):
             await self.rounds.save_round(stored.model_copy(update={"id": uuid4()}), self.owner)
 
     async def test_rejected_rounds_and_invalid_transitions_fail_visibly(self) -> None:
+        accepted, outcome = await self.investigation.propose_round(
+            self.run_id, self.watchlist.id, self.revision_id, self.owner, [], [self.candidate()],
+            self.scope, self.budget, 0, 0, 0, False, NOW)
+        self.assertEqual(outcome, "accepted")
         stored, outcome = await self.investigation.propose_round(
             self.run_id, self.watchlist.id, self.revision_id, self.owner, [], [self.candidate()],
             self.scope, InvestigationBudget(max_tasks=1), 0, 0, 0, False, NOW)
@@ -133,9 +142,6 @@ class TestCIRealInvestigation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(stored.rejection_reasons)
         with self.assertRaises(ConflictError):
             await self.rounds.set_round_status(str(stored.id), self.owner, "completed", "test")
-        accepted, _ = await self.investigation.propose_round(
-            uuid4(), self.watchlist.id, self.revision_id, self.owner, [], [self.candidate()], self.scope,
-            self.budget, 0, 0, 0, False, NOW)
         with self.assertRaises(ResourceNotFoundError):
             await self.rounds.get_round(str(accepted.id), str(uuid4()))
         renamed = await self.rounds.set_round_status(str(accepted.id), self.owner, "superseded", "test")

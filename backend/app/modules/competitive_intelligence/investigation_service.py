@@ -34,12 +34,18 @@ class InvestigationService:
                             spent_tokens: int, spent_tasks: int, final: bool,
                             created_at: datetime) -> tuple[InvestigationRound, str]:
         """Plan, validate and persist one round; returns the stored round and its decision outcome."""
-        accepted = [round for round in await self.rounds.list_rounds(str(run_id), owner_id)
-                    if round.status in ("accepted", "completed")]
+        history = await self.rounds.list_rounds(str(run_id), owner_id)
+        accepted = [round for round in history if round.status in ("accepted", "completed")]
+        taken = {round.round_number for round in history}
         latest = max([round.round_number for round in accepted], default=0)
         parent = next((round.id for round in accepted if round.round_number == latest), None)
         planned = plan_round(run_id, watchlist_id, revision_id, latest + 1, parent, questions, candidates,
                              scope, budget, final, created_at)
+        if planned.round_number in taken:
+            # A decided round already owns this number; report visibly without persisting a duplicate.
+            return planned.model_copy(update={"status": "rejected", "decided_at": created_at,
+                                              "decided_by": COORDINATOR_IDENTITY,
+                                              "rejection_reasons": ["duplicate_round_number"]}), "rejected"
         decision = validate_round(planned, scope, budget, accepted, spent_calls, spent_tokens, spent_tasks,
                                   created_at)
         if decision.outcome == "accepted":
