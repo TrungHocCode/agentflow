@@ -16,6 +16,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Isolated unit tests (no live models or HTTP)
         run: python scripts/run_tests.py unit
+      - name: CI scenario replay evidence (deterministic, no network or model)
+        run: python scripts/run_ci_evaluation.py --report-dir workspace_data/evaluation/ci
       - name: Compile Python sources
         run: python -m compileall -q backend/app scripts integration_tests tests
 

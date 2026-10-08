@@ -125,6 +125,10 @@ def compare_snapshots(current: SourceSnapshot, current_text: str, baseline: Sour
         return RunSourceComparison(run_id=run_id, source_id=current.source_id,
             baseline_snapshot_id=baseline.id, current_snapshot_id=current.id, outcome="no_change",
             quality="complete", reason_codes=["identical_normalized_hash"], decided_at=decided_at)
+    if baseline_text is not None and _same_section_multiset(baseline_text, current_text):
+        return RunSourceComparison(run_id=run_id, source_id=current.source_id,
+            baseline_snapshot_id=baseline.id, current_snapshot_id=current.id, outcome="no_change",
+            quality="complete", reason_codes=["sections_reordered_identical"], decided_at=decided_at)
     outcome: ComparisonOutcome = "changed"
     return RunSourceComparison(run_id=run_id, source_id=current.source_id, baseline_snapshot_id=baseline.id,
         current_snapshot_id=current.id, outcome=outcome, quality="complete",
@@ -133,6 +137,13 @@ def compare_snapshots(current: SourceSnapshot, current_text: str, baseline: Sour
 
 def _excerpt(text: str) -> str:
     return text[:MAX_EXCERPT_CHARS]
+
+
+def _same_section_multiset(before_text: str, after_text: str) -> bool:
+    """Position-independent section identity: reordered documents are not changes."""
+    old = sorted((section.key or "", hash_text(section.text)) for section in split_sections(before_text))
+    new = sorted((section.key or "", hash_text(section.text)) for section in split_sections(after_text))
+    return bool(old) and old == new
 
 
 def detect_candidates(before_text: str, after_text: str, run_id: UUID, source_id: UUID, before_id: UUID,
