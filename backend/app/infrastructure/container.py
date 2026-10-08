@@ -43,10 +43,12 @@ from app.modules.results.service import ResearchResultService
 from app.core.config import settings
 from app.infrastructure.postgres.intelligence_repository import PostgresIntelligenceRepository
 from app.infrastructure.postgres.intelligence_snapshot_repository import PostgresSnapshotRepository
+from app.infrastructure.postgres.intelligence_investigation_repository import PostgresInvestigationRepository
 from app.infrastructure.artifacts.snapshot_blobs import SnapshotFileStore
 from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
+from app.modules.competitive_intelligence.investigation_service import InvestigationService
 
 
 def build_execution_port() -> ExecutionPort:
@@ -151,3 +153,9 @@ def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
 def build_snapshot_service() -> SnapshotService:
     """Compose snapshot capture/compare/promote over the configured artifact root."""
     return SnapshotService(PostgresSnapshotRepository(blobs=SnapshotFileStore()))
+
+
+def build_investigation_service() -> InvestigationService:
+    """Compose round planning/acceptance over durable round and snapshot storage."""
+    return InvestigationService(PostgresInvestigationRepository(),
+                                PostgresSnapshotRepository(blobs=SnapshotFileStore()))

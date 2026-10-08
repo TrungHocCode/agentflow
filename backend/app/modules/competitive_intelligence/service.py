@@ -16,7 +16,8 @@ from app.modules.runs.models import RunDocument, RunResponse
 from app.modules.runs.service import RunService
 from app.shared.errors import ConflictError, ResourceNotFoundError, ValidationError
 
-SAFE_ROLES = {"source_researcher", "synthesis_agent", "report_agent"}
+SAFE_ROLES = {"source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst",
+              "synthesis_agent", "report_agent"}
 SAFE_TOOLS = {"news_crawler", "news_crawler_batch", "http_request", "text_summarizer",
               "markdown_report_generator", "chart_generator"}
 

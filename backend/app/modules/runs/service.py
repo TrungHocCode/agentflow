@@ -713,7 +713,7 @@ class RunService:
             )
         retry_plan = [
             task.model_copy(update={"status": "pending", "error": None})
-            if task.status in {"failed", "skipped"}
+            if task.status in {"failed", "skipped", "interrupted"}
             else task
             for task in source.plan
         ]
@@ -896,10 +896,10 @@ class RunService:
                             await self._record_event_object(event)
 
             all_finished = bool(run_doc.plan) and all(
-                task.status in ("done", "partial", "failed", "skipped")
+                task.status in ("done", "partial", "failed", "skipped", "interrupted")
                 for task in run_doc.plan
             )
-            has_failed_task = any(task.status == "failed" for task in run_doc.plan)
+            has_failed_task = any(task.status in ("failed", "interrupted") for task in run_doc.plan)
             partial_task_ids = [task.id for task in run_doc.plan if task.status == "partial"]
             if has_failed_task:
                 run_doc.status = "failed"

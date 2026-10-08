@@ -118,6 +118,35 @@ async def seed_defaults() -> None:
                 ),
                 tool_names=["chart_generator", "file_reader", "file_writer"],
             ),
+            AgentCatalogModel(
+                name="product_analyst",
+                description="Compares confirmed observations with the own-product profile.",
+                system_prompt=(
+                    "You compare confirmed source observations with the own-product profile, "
+                    "customer segments and explicit comparison criteria. Distinguish observed "
+                    "source facts from your assessment, and never invent evidence."
+                ),
+                tool_names=["http_request", "text_summarizer"],
+            ),
+            AgentCatalogModel(
+                name="evidence_verifier",
+                description="Examines supporting and contradictory evidence per candidate.",
+                system_prompt=(
+                    "You examine supporting and contradictory evidence for one change candidate. "
+                    "Label each claim observed or unresolved with exact snapshot offsets."
+                ),
+                tool_names=["text_summarizer"],
+            ),
+            AgentCatalogModel(
+                name="competitive_analyst",
+                description="Assesses competitor observations against the own-product profile.",
+                system_prompt=(
+                    "You assess what a confirmed competitor observation means against the "
+                    "own-product profile and recorded customer segments. Ground every "
+                    "comparison in cited snapshot evidence."
+                ),
+                tool_names=["http_request", "text_summarizer"],
+            ),
         ]
         existing_agents_result = await session.execute(select(AgentCatalogModel))
         existing_agents = {agent.name: agent for agent in existing_agents_result.scalars().all()}
