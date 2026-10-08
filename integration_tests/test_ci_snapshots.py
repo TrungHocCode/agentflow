@@ -121,13 +121,10 @@ class TestCIRealSnapshots(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(comparison.outcome, "changed")
         self.assertEqual(len(candidates), 1)
         self.assertIn("$12", candidates[0].after_excerpt)
-        finalized = await self.snapshot_service.finalize_source(
-            self.owner, comparison, candidates, "completed", NOW, first.id)
-        self.assertEqual(finalized.promotion, "promoted")
-        latest = await self.snapshots.latest_baseline(str(self.source.id), self.owner)
-        self.assertEqual(str(latest.id), str(second.id))
-
-        # A late decision against the superseded pointer is rejected, never overwrites.
+        # A concurrent run advancing the pointer first makes this decision stale;
+        # it is recorded once as rejected_stale and never overwrites the pointer.
+        concurrent = await self.snapshots.promote_baseline(second, str(second_run), str(first.id))
+        self.assertEqual(concurrent, "promoted")
         stale = await self.snapshot_service.finalize_source(
             self.owner, comparison, candidates, "completed", NOW, first.id)
         self.assertEqual(stale.promotion, "rejected_stale")
@@ -173,14 +170,18 @@ class TestCIRealSnapshots(unittest.IsolatedAsyncioTestCase):
                 await connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
                 await connection.run_sync(lambda conn: migrate(conn, "0006_ci_configuration"))
                 watchlist_id, revision_id, product_id, source_id = (str(uuid4()) for _ in range(4))
+                # Circular watchlist↔revision FKs require NULL pointer first, then backfill.
                 await connection.execute(text(
                     "INSERT INTO ci_watchlists(id,owner_id,name,status,current_revision_id) "
-                    "VALUES (:id,:owner,'legacy','active',:revision)"),
-                    {"id": watchlist_id, "owner": self.owner, "revision": revision_id})
+                    "VALUES (:id,:owner,'legacy','active',NULL)"),
+                    {"id": watchlist_id, "owner": self.owner})
                 await connection.execute(text(
                     "INSERT INTO ci_watchlist_revisions(id,watchlist_id,revision_number,config,config_hash,"
                     "approval_status) VALUES (:id,:watchlist,1,'{}','hash','approved')"),
                     {"id": revision_id, "watchlist": watchlist_id})
+                await connection.execute(text(
+                    "UPDATE ci_watchlists SET current_revision_id=:revision WHERE id=:id"),
+                    {"id": watchlist_id, "revision": revision_id})
                 await connection.execute(text(
                     "INSERT INTO ci_products(id,watchlist_id,owner_id,kind) "
                     "VALUES (:id,:watchlist,:owner,'competitor')"),
