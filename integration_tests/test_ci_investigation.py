@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 from unittest.mock import AsyncMock, MagicMock
 
 from integration_tests.environment import require_integration_environment
