@@ -63,7 +63,7 @@ class Task(BaseModel):
     capability: Optional[str] = None
     tool_names: List[str] = Field(default_factory=list)
     tool_ids: List[str] = Field(default_factory=list)
-    status: Literal["done", "partial", "pending", "running", "failed", "skipped"]
+    status: Literal["done", "partial", "pending", "running", "failed", "skipped", "interrupted"]
     error: Optional[str] = None
     description: str
     dependencies: List[int] = Field(default_factory=list)

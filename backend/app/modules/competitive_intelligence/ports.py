@@ -10,6 +10,7 @@ from app.modules.competitive_intelligence.models import (
 from app.modules.competitive_intelligence.snapshot_contracts import (
     ChangeCandidate, FetchOutcome, RunSourceComparison, SourceSnapshot,
 )
+from app.modules.competitive_intelligence.investigation_contracts import InvestigationRound
 from app.modules.runs.models import RunDocument
 
 
@@ -49,6 +50,14 @@ class SnapshotRepository(Protocol):
                                 candidates: list[ChangeCandidate]) -> RunSourceComparison: ...
     async def promote_baseline(self, snapshot: SourceSnapshot, run_id: str,
                                expected_snapshot_id: str | None) -> str: ...
+
+
+class InvestigationRepository(Protocol):
+    async def save_round(self, round: InvestigationRound, owner_id: str) -> InvestigationRound: ...
+    async def get_round(self, round_id: str, owner_id: str) -> InvestigationRound: ...
+    async def list_rounds(self, run_id: str, owner_id: str) -> list[InvestigationRound]: ...
+    async def set_round_status(self, round_id: str, owner_id: str, status: str, decided_by: str,
+                               rejection_reasons: list[str] | None = None) -> InvestigationRound: ...
 
 
 class SetupPlanner(Protocol):

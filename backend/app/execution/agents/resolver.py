@@ -86,6 +86,34 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
         ),
         tool_names=["chart_generator", "file_reader", "file_writer"],
     ),
+    "product_analyst": AgentProfile(
+        name="product_analyst",
+        system_prompt=(
+            "You compare confirmed source observations with the own-product profile, "
+            "customer segments and explicit comparison criteria. Distinguish observed "
+            "source facts from your assessment, and never invent evidence."
+        ),
+        tool_names=["http_request", "text_summarizer"],
+    ),
+    "evidence_verifier": AgentProfile(
+        name="evidence_verifier",
+        system_prompt=(
+            "You examine supporting and contradictory evidence for one change candidate. "
+            "Label each claim observed or unresolved with exact snapshot offsets. "
+            "Quote matching is not semantic entailment; absence in a snapshot is not "
+            "absence on the publisher page."
+        ),
+        tool_names=["text_summarizer"],
+    ),
+    "competitive_analyst": AgentProfile(
+        name="competitive_analyst",
+        system_prompt=(
+            "You assess what a confirmed competitor observation means against the "
+            "own-product profile and recorded customer segments. Ground every "
+            "comparison in cited snapshot evidence."
+        ),
+        tool_names=["http_request", "text_summarizer"],
+    ),
 }
 
 
