@@ -98,7 +98,7 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         planned = MagicMock()
         self.hooks.investigations.propose_round = AsyncMock(return_value=(planned, "accepted"))
         followup = Task(id=9, node="evidence_verifier", description="Verify", status="pending")
-        self.hooks.investigations.materialize = AsyncMock(return_value=[followup])
+        self.hooks.investigations.materialize_tasks = AsyncMock(return_value=[followup])
         self.hooks.research.list_results = AsyncMock(
             return_value=[self.document("https://rival.invalid/pricing")])
         tasks = await self.hooks.on_task_completed(self.run, researcher_task(), "done")
