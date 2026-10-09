@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import AsyncIterator, Callable, Literal
 from uuid import UUID
 
@@ -17,7 +18,9 @@ from app.infrastructure.postgres.models.competitive_intelligence_snapshots impor
 from app.modules.competitive_intelligence.snapshot_contracts import (
     ChangeCandidate, FetchOutcome, RunSourceComparison, SourceSnapshot,
 )
-from app.shared.errors import ApplicationError, PersistenceError, ResourceNotFoundError, ValidationError
+from app.shared.errors import (
+    ApplicationError, ConflictError, PersistenceError, ResourceNotFoundError, ValidationError,
+)
 
 
 class PostgresSnapshotRepository:
@@ -272,3 +275,18 @@ class PostgresSnapshotRepository:
                 pointer.promoted_at = snapshot.observed_at
             await session.flush()
             return "promoted"
+
+    async def set_comparison_promotion(self, run_id: str, source_id: str, owner_id: str, promotion: str,
+                                       promoted_at: datetime | None) -> RunSourceComparison:
+        if promotion not in ("promoted", "skipped", "rejected_stale"):
+            raise ValidationError("Comparison promotion must be promoted, skipped or rejected_stale.")
+        async with self.session() as session:
+            record = await session.get(RunComparisonModel, (run_id, source_id))
+            if record is None or record.owner_id != owner_id:
+                raise ResourceNotFoundError("Run comparison was not found.", entity="comparison")
+            if record.promotion != "pending":
+                raise ConflictError("Comparison promotion is already decided.",
+                                    code="comparison_promotion_decided")
+            record.promotion, record.promoted_at = promotion, promoted_at
+            await session.flush()
+            return self.comparison_contract(record)

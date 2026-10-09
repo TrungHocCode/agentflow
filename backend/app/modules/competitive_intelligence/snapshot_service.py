@@ -112,6 +112,21 @@ class SnapshotService:
     async def get_change(self, change_id: str, owner_id: str) -> ChangeCandidate:
         return await self.snapshots.get_change(change_id, owner_id)
 
+    async def list_comparisons(self, run_id: str, owner_id: str) -> list[RunSourceComparison]:
+        return await self.snapshots.list_comparisons(run_id, owner_id)
+
+    async def latest_baseline(self, source_id: str, owner_id: str) -> SourceSnapshot | None:
+        return await self.snapshots.latest_baseline(source_id, owner_id)
+
+    async def promote(self, snapshot: SourceSnapshot, run_id: str,
+                      expected_snapshot_id: str | None) -> str:
+        return await self.snapshots.promote_baseline(snapshot, run_id, expected_snapshot_id)
+
+    async def set_promotion(self, run_id: str, source_id: str, owner_id: str, promotion: str,
+                            decided_at: datetime) -> RunSourceComparison:
+        return await self.snapshots.set_comparison_promotion(run_id, source_id, owner_id, promotion,
+                                                             decided_at)
+
     async def list_changes(self, watchlist_id: str, owner_id: str, limit: int,
                            offset: int) -> tuple[list[ChangeCandidate], int]:
         return (await self.snapshots.list_changes_for_watchlist(watchlist_id, owner_id, limit, offset),

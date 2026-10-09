@@ -24,6 +24,7 @@ from app.modules.runs.events import (
     RunEventPublisher,
 )
 from app.modules.runs.models import RunDocument
+from app.modules.runs.observers import RunCompletedObserver, TaskCompletedObserver
 from app.modules.runs.ports import RunRepository
 from app.modules.conversations.ports import ConversationRepository
 from app.modules.catalog.ports import CatalogRepository
@@ -88,6 +89,8 @@ class RunService:
         artifact_storage: ArtifactStorage | None = None,
         conversation_repository: ConversationRepository | None = None,
         catalog_repository: CatalogRepository | None = None,
+        task_observers: list[TaskCompletedObserver] | None = None,
+        run_observers: list[RunCompletedObserver] | None = None,
     ) -> None:
         self.run_repository = run_repository
         self.workflow_repository = workflow_repository
@@ -98,6 +101,8 @@ class RunService:
         self.artifact_storage = artifact_storage
         self.conversation_repository = conversation_repository
         self.catalog_repository = catalog_repository
+        self.task_observers = list(task_observers or [])
+        self.run_observers = list(run_observers or [])
 
     async def save_run_doc(self, document: RunDocument) -> None:
         budget = current_budget()
@@ -894,6 +899,12 @@ class RunService:
                         await self.save_run_doc(run_doc)
                         for event in events:
                             await self._record_event_object(event)
+                        hook_events = await self._notify_task_completed(run_doc, node_output)
+                        if hook_events:
+                            run_doc.updated_at = datetime.now(timezone.utc)
+                            await self.save_run_doc(run_doc)
+                            for event in hook_events:
+                                await self._record_event_object(event)
 
             all_finished = bool(run_doc.plan) and all(
                 task.status in ("done", "partial", "failed", "skipped", "interrupted")
@@ -954,6 +965,10 @@ class RunService:
             self._finalize_execution_metrics(run_doc)
             run_doc.updated_at = datetime.now(timezone.utc)
             await self.save_run_doc(run_doc)
+            if run_doc.status == "completed":
+                await self._notify_run_completed(run_doc)
+                run_doc.updated_at = datetime.now(timezone.utc)
+                await self.save_run_doc(run_doc)
             logger.info(
                 "Workflow run reached terminal state",
                 extra={
@@ -1321,6 +1336,55 @@ class RunService:
                 )
             )
         return events
+
+    async def _notify_task_completed(
+        self, run_doc: RunDocument, node_output: Dict[str, Any]
+    ) -> List[ExecutionEvent]:
+        """Offer terminal task outputs to observers; hook failures never break the run."""
+        events: List[ExecutionEvent] = []
+        if not self.task_observers:
+            return events
+        values = node_output.get("result_storage")
+        items = values if isinstance(values, list) else ([values] if values else [])
+        by_id = {task.id: task for task in run_doc.plan}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                task_id = int(item.get("task_id"))
+            except (TypeError, ValueError):
+                continue
+            if item.get("status", "done") not in ("done", "partial") or task_id not in by_id:
+                continue
+            task = by_id[task_id]
+            for observer in self.task_observers:
+                try:
+                    followups = await observer.on_task_completed(run_doc, task, item.get("status", "done"))
+                except Exception as exc:
+                    run_doc.logs.append(f"[observers] Task hook failed for task {task_id}: "
+                                        f"{type(exc).__name__}.")
+                    logger.error("Task completed observer failed",
+                                 exc_info=(type(exc), exc, exc.__traceback__),
+                                 extra={"run_id": run_doc.run_id})
+                    continue
+                if followups:
+                    run_doc.plan = self._merge_plan(run_doc.plan, followups)
+                    events.append(ExecutionEvent(run_id=run_doc.run_id, type="task_ready", phase="execute",
+                                                 status="running", label="observer",
+                                                 payload={"plan": [self._task_data(task)
+                                                                   for task in followups]}))
+        return events
+
+    async def _notify_run_completed(self, run_doc: RunDocument) -> None:
+        """Offer completed runs to observers; hook failures never rewrite terminal state."""
+        for observer in self.run_observers:
+            try:
+                await observer.on_run_completed(run_doc)
+            except Exception as exc:
+                run_doc.logs.append(f"[observers] Run hook failed: {type(exc).__name__}.")
+                logger.error("Run completed observer failed",
+                             exc_info=(type(exc), exc, exc.__traceback__),
+                             extra={"run_id": run_doc.run_id})
 
     @staticmethod
     def _finalize_execution_metrics(run_doc: RunDocument) -> None:

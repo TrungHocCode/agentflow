@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from app.modules.competitive_intelligence.models import (
@@ -59,6 +60,8 @@ class SnapshotRepository(Protocol):
     async def list_changes_for_watchlist(self, watchlist_id: str, owner_id: str, limit: int,
                                          offset: int) -> list[ChangeCandidate]: ...
     async def count_changes_for_watchlist(self, watchlist_id: str, owner_id: str) -> int: ...
+    async def set_comparison_promotion(self, run_id: str, source_id: str, owner_id: str, promotion: str,
+                                       promoted_at: datetime | None) -> RunSourceComparison: ...
 
 
 class InvestigationRepository(Protocol):

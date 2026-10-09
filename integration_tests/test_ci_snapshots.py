@@ -201,7 +201,7 @@ class TestCIRealSnapshots(unittest.IsolatedAsyncioTestCase):
                     "SELECT status,current_revision_id FROM ci_watchlists WHERE id=:id"), {"id": watchlist_id})).one()
                 self.assertEqual(tuple(row), ("active", revision_id))
                 version = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(version, "0009_ci_briefs")
+                self.assertEqual(version, "0010_ci_comparison_promotion")
         finally:
             async with engine.begin() as connection:
                 await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))

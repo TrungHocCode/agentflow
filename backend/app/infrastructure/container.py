@@ -52,6 +52,7 @@ from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.brief_service import BriefService
+from app.modules.competitive_intelligence.loop_hooks import CILoopHooks
 
 
 def build_execution_port() -> ExecutionPort:
@@ -129,7 +130,7 @@ def build_conversation_service(session: AsyncSession | None = None) -> Conversat
 def build_run_service(session: AsyncSession | None = None) -> RunService:
     """Compose RunService without leaking concrete adapters into the module."""
 
-    return RunService(
+    service = RunService(
         run_repository=PostgresRunRepository(session),
         workflow_repository=PostgresWorkflowRepository(session) if session else None,
         execution_port=build_execution_port(),
@@ -140,6 +141,18 @@ def build_run_service(session: AsyncSession | None = None) -> RunService:
         conversation_repository=PostgresConversationRepository(session),
         catalog_repository=PostgresCatalogRepository(session),
     )
+    hooks = build_ci_loop_hooks(service)
+    service.task_observers.append(hooks)
+    service.run_observers.append(hooks)
+    return service
+
+
+def build_ci_loop_hooks(run_service: RunService) -> CILoopHooks:
+    """Compose CI live-loop hooks over durable snapshot/round/brief and research storage."""
+    snapshots = PostgresSnapshotRepository(blobs=SnapshotFileStore())
+    briefs = BriefService(PostgresBriefRepository(), snapshots, BriefFileStore(), run_service)
+    return CILoopHooks(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshots), briefs,
+                       PostgresResearchRepository(), LocalArtifactStorage())
 
 
 def build_research_result_service(session: AsyncSession | None = None) -> ResearchResultService:
