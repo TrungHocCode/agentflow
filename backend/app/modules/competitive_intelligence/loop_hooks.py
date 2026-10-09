@@ -137,7 +137,7 @@ class CILoopHooks:
         if decision != "accepted":
             return []
         start_id = max([task.id for task in (run.plan or [])] + [0]) + 1
-        return await self.investigations.materialize(stored, start_id, run.user_id)
+        return await self.investigations.materialize_tasks(stored, start_id, run.user_id)
 
     async def on_run_completed(self, run) -> None:
         """Promote eligible pointers by CAS, record final promotion states, then build the brief."""
