@@ -115,6 +115,9 @@ class SnapshotService:
     async def list_comparisons(self, run_id: str, owner_id: str) -> list[RunSourceComparison]:
         return await self.snapshots.list_comparisons(run_id, owner_id)
 
+    async def latest_baseline(self, source_id: str, owner_id: str) -> SourceSnapshot | None:
+        return await self.snapshots.latest_baseline(source_id, owner_id)
+
     async def promote(self, snapshot: SourceSnapshot, run_id: str,
                       expected_snapshot_id: str | None) -> str:
         return await self.snapshots.promote_baseline(snapshot, run_id, expected_snapshot_id)
