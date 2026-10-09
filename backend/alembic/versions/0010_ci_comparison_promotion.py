@@ -17,18 +17,23 @@ FORWARD = """CREATE OR REPLACE FUNCTION ci_guard_snapshot_history() RETURNS trig
         END IF;
         RETURN NEW;
       END IF;
-      IF TG_TABLE_NAME = 'ci_fetch_outcomes' AND OLD.snapshot_id IS NULL AND NEW.snapshot_id IS NOT NULL
-         AND NEW.id = OLD.id AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id THEN
-        RETURN NEW;
+      IF TG_TABLE_NAME = 'ci_fetch_outcomes' THEN
+        IF OLD.snapshot_id IS NULL AND NEW.snapshot_id IS NOT NULL
+           AND NEW.id = OLD.id AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id THEN
+          RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'CI snapshot history is immutable';
       END IF;
-      IF TG_TABLE_NAME = 'ci_run_comparisons' AND OLD.promotion = 'pending'
-         AND NEW.promotion IN ('promoted','skipped','rejected_stale')
-         AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id AND NEW.owner_id = OLD.owner_id
-         AND NEW.outcome = OLD.outcome AND NEW.quality = OLD.quality
-         AND NEW.baseline_snapshot_id IS NOT DISTINCT FROM OLD.baseline_snapshot_id
-         AND NEW.current_snapshot_id IS NOT DISTINCT FROM OLD.current_snapshot_id
-         AND NEW.decided_at = OLD.decided_at THEN
-        RETURN NEW;
+      IF TG_TABLE_NAME = 'ci_run_comparisons' THEN
+        IF OLD.promotion = 'pending' AND NEW.promotion IN ('promoted','skipped','rejected_stale')
+           AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id AND NEW.owner_id = OLD.owner_id
+           AND NEW.outcome = OLD.outcome AND NEW.quality = OLD.quality
+           AND NEW.baseline_snapshot_id IS NOT DISTINCT FROM OLD.baseline_snapshot_id
+           AND NEW.current_snapshot_id IS NOT DISTINCT FROM OLD.current_snapshot_id
+           AND NEW.decided_at = OLD.decided_at THEN
+          RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'CI snapshot history is immutable';
       END IF;
       RAISE EXCEPTION 'CI snapshot history is immutable';
     END $$"""
@@ -43,9 +48,12 @@ BACKWARD = """CREATE OR REPLACE FUNCTION ci_guard_snapshot_history() RETURNS tri
         END IF;
         RETURN NEW;
       END IF;
-      IF TG_TABLE_NAME = 'ci_fetch_outcomes' AND OLD.snapshot_id IS NULL AND NEW.snapshot_id IS NOT NULL
-         AND NEW.id = OLD.id AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id THEN
-        RETURN NEW;
+      IF TG_TABLE_NAME = 'ci_fetch_outcomes' THEN
+        IF OLD.snapshot_id IS NULL AND NEW.snapshot_id IS NOT NULL
+           AND NEW.id = OLD.id AND NEW.run_id = OLD.run_id AND NEW.source_id = OLD.source_id THEN
+          RETURN NEW;
+        END IF;
+        RAISE EXCEPTION 'CI snapshot history is immutable';
       END IF;
       RAISE EXCEPTION 'CI snapshot history is immutable';
     END $$"""
