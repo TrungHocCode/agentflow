@@ -76,7 +76,7 @@ class TestCIRealLoop(unittest.IsolatedAsyncioTestCase):
         self.service = IntelligenceService(self.repository, self.runs)
         briefs = BriefService(PostgresBriefRepository(), snapshots, BriefFileStore(root=self.tmp.name),
                               self.runs)
-        self.hooks = CILoopHooks(snapshots, investigations, briefs,
+        self.hooks = CILoopHooks(self.snapshot_service, investigations, briefs,
                                  PostgresResearchRepository(self.session),
                                  LocalArtifactStorage(root=self.tmp.name))
         self.request = CreateWatchlist.model_validate({"name": "Loop competitors", "config": {
