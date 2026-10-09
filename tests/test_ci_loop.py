@@ -209,6 +209,16 @@ class TestObserverPlumbing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.status, "completed")
         self.assertTrue(any("hook failed" in str(log) for log in run.logs))
 
+    def test_migration_chain_links_0009_to_0010(self) -> None:
+        import importlib.util
+        path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend", "alembic",
+                                             "versions", "0010_ci_comparison_promotion.py"))
+        spec = importlib.util.spec_from_file_location("migration_0010", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.down_revision, "0009_ci_briefs")
+        self.assertEqual(module.revision, "0010_ci_comparison_promotion")
+
 
 if __name__ == "__main__":
     unittest.main()
