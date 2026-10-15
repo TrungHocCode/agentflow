@@ -19,8 +19,6 @@ class ScheduleModel(Base):
     day_of_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     next_due_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (CheckConstraint("cadence IN ('daily','weekly')", name="ck_ci_schedule_cadence"),
                       Index("ix_ci_schedules_due", "active", "next_due_at"))
 
@@ -35,7 +33,6 @@ class NotificationModel(Base):
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
     read_at: Mapped[Any | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
     __table_args__ = (
         CheckConstraint("kind IN ('run_completed','run_failed','brief_ready','schedule_skipped',"
                         "'schedule_blocked','schedule_fired')", name="ck_ci_notification_kind"),

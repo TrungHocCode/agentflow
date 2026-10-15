@@ -35,6 +35,7 @@ def upgrade() -> None:
         sa.Column("body", sa.String(2000), nullable=False, server_default=""),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint("kind IN ('run_completed','run_failed','brief_ready','schedule_skipped',"
                            "'schedule_blocked','schedule_fired')", name="ck_ci_notification_kind"))
     op.create_index("ix_ci_notifications_owner", "ci_notifications", ["owner_id", "read_at", "created_at"])
