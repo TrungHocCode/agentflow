@@ -62,6 +62,10 @@ export async function createWatchlist(payload) {
   return ciRequest('/watchlists', json('POST', payload));
 }
 
+export async function recommendWatchlists(prompt) {
+  return ciRequest('/watchlists/recommendations', json('POST', { prompt }));
+}
+
 export async function updateWatchlist(watchlistId, payload) {
   return ciRequest(`/watchlists/${enc(watchlistId)}`, json('PATCH', payload));
 }
