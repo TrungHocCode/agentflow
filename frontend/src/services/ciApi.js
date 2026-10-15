@@ -148,6 +148,26 @@ export async function listInvestigationRounds(runId) {
   return ciRequest(`/runs/${enc(runId)}/investigation-rounds`);
 }
 
+export async function listSchedules(watchlistId) {
+  return ciRequest(`/watchlists/${enc(watchlistId)}/schedules`);
+}
+
+export async function createSchedule(watchlistId, payload) {
+  return ciRequest(`/watchlists/${enc(watchlistId)}/schedules`, json('POST', payload));
+}
+
+export async function updateSchedule(watchlistId, scheduleId, payload) {
+  return ciRequest(`/watchlists/${enc(watchlistId)}/schedules/${enc(scheduleId)}`, json('PATCH', payload));
+}
+
+export async function listNotifications(limit = 50, unreadOnly = false) {
+  return ciRequest(`/notifications?limit=${limit}&unread_only=${unreadOnly}`);
+}
+
+export async function markNotificationRead(notificationId) {
+  return ciRequest(`/notifications/${enc(notificationId)}/read`, { method: 'POST' });
+}
+
 export function saveBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');

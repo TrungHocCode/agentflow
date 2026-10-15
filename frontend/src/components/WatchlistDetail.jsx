@@ -19,6 +19,7 @@ import ChangeDetail from './ChangeDetail';
 import ChangeFeed from './ChangeFeed';
 import EmptyState from './EmptyState';
 import { OutcomeBadge } from './OutcomeBadge';
+import ScheduleSection from './ScheduleSection';
 
 function runStateForBadge(status) {
   if (status === 'completed') return 'no_change';
@@ -256,6 +257,11 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card className="p-4">
+        <p className="mb-2 text-sm font-medium">Schedules</p>
+        <ScheduleSection watchlistId={watchlistId} />
       </Card>
 
       <Card className="p-4">

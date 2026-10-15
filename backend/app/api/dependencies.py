@@ -18,6 +18,7 @@ from app.infrastructure.container import (
     build_snapshot_service,
     build_investigation_service,
     build_brief_service,
+    build_scheduling_service,
 )
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
@@ -35,6 +36,7 @@ from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.brief_service import BriefService
+from app.modules.competitive_intelligence.scheduling_service import SchedulingService
 
 
 async def get_intelligence_service(db: AsyncSession = Depends(get_db)) -> IntelligenceService:
@@ -51,6 +53,10 @@ async def get_investigation_service() -> InvestigationService:
 
 async def get_brief_service(db: AsyncSession = Depends(get_db)) -> BriefService:
     return build_brief_service(db)
+
+
+async def get_scheduling_service() -> SchedulingService:
+    return build_scheduling_service()
 
 
 async def get_current_user_id(

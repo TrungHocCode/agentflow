@@ -7,13 +7,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
-    get_brief_service, get_current_user_id, get_investigation_service, get_snapshot_service,
+    get_brief_service, get_current_user_id, get_investigation_service, get_scheduling_service,
+    get_snapshot_service,
 )
 from app.modules.competitive_intelligence.brief_contracts import BuildBriefRequest, IntelligenceBrief
 from app.modules.competitive_intelligence.brief_service import BriefService
 from app.modules.competitive_intelligence.investigation_contracts import InvestigationRound
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.models import Page, Pagination
+from app.modules.competitive_intelligence.schedule_contracts import Notification
+from app.modules.competitive_intelligence.scheduling_service import SchedulingService
 from app.modules.competitive_intelligence.snapshot_contracts import (
     ChangeCandidate, SourceSnapshot, SnapshotContent,
 )
@@ -92,3 +95,19 @@ async def get_change(change_id: UUID, service: SnapshotService = Depends(get_sna
 async def list_rounds(run_id: UUID, service: InvestigationService = Depends(get_investigation_service),
                       owner: str = Depends(get_current_user_id)) -> list[InvestigationRound]:
     return await service.list_rounds(run_id, owner)
+
+
+@router.get("/notifications", response_model=Page[Notification])
+async def list_notifications(limit: int = Query(50, ge=1, le=100), unread_only: bool = Query(False),
+                             service: SchedulingService = Depends(get_scheduling_service),
+                             owner: str = Depends(get_current_user_id)) -> Page[Notification]:
+    items, _, total = await service.list_notifications(owner, limit, unread_only)
+    return Page[Notification](items=items, pagination=Pagination(limit=limit, offset=0, total=total))
+
+
+@router.post("/notifications/{notification_id}/read", response_model=Notification)
+async def mark_notification_read(notification_id: UUID,
+                                 service: SchedulingService = Depends(get_scheduling_service),
+                                 owner: str = Depends(get_current_user_id)) -> Notification:
+    from datetime import datetime, timezone
+    return await service.mark_notification_read(str(notification_id), owner, datetime.now(timezone.utc))

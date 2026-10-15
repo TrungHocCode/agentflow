@@ -45,6 +45,7 @@ from app.infrastructure.postgres.intelligence_repository import PostgresIntellig
 from app.infrastructure.postgres.intelligence_snapshot_repository import PostgresSnapshotRepository
 from app.infrastructure.postgres.intelligence_investigation_repository import PostgresInvestigationRepository
 from app.infrastructure.postgres.intelligence_brief_repository import PostgresBriefRepository
+from app.infrastructure.postgres.intelligence_schedule_repository import PostgresScheduleRepository
 from app.infrastructure.artifacts.snapshot_blobs import SnapshotFileStore
 from app.infrastructure.artifacts.brief_blobs import BriefFileStore
 from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
@@ -52,6 +53,7 @@ from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.brief_service import BriefService
+from app.modules.competitive_intelligence.scheduling_service import SchedulingService
 from app.modules.competitive_intelligence.loop_hooks import CILoopHooks
 
 
@@ -181,3 +183,8 @@ def build_brief_service(session: AsyncSession) -> BriefService:
     """Compose brief assembly/rendering over durable brief and snapshot storage."""
     return BriefService(PostgresBriefRepository(), PostgresSnapshotRepository(blobs=SnapshotFileStore()),
                         BriefFileStore(), build_run_service(session))
+
+
+def build_scheduling_service(session: AsyncSession | None = None) -> SchedulingService:
+    """Compose schedule firing over durable schedules and the approved start path."""
+    return SchedulingService(PostgresScheduleRepository(), build_intelligence_service(session))
