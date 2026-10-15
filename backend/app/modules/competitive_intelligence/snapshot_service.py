@@ -115,6 +115,10 @@ class SnapshotService:
     async def list_comparisons(self, run_id: str, owner_id: str) -> list[RunSourceComparison]:
         return await self.snapshots.list_comparisons(run_id, owner_id)
 
+    async def list_candidates(self, run_id: str, owner_id: str,
+                              source_id: str | None = None) -> list[ChangeCandidate]:
+        return await self.snapshots.list_candidates(run_id, owner_id, source_id)
+
     async def latest_baseline(self, source_id: str, owner_id: str) -> SourceSnapshot | None:
         return await self.snapshots.latest_baseline(source_id, owner_id)
 
