@@ -18,6 +18,12 @@ def collection_allowed(value: str) -> bool:
     return scope is None or normalized_url(value) in scope
 
 
+def same_site(candidate_host: str, reference_host: str) -> bool:
+    """One host equals the other or lives under it; lookalike suffixes do not match."""
+    left, right = candidate_host.lower().rstrip("."), reference_host.lower().rstrip(".")
+    return left == right or left.endswith(f".{right}") or right.endswith(f".{left}")
+
+
 def scoped_collection() -> bool:
     return _SCOPE.get() is not None
 

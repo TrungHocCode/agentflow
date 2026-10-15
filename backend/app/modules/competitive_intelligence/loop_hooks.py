@@ -16,7 +16,7 @@ from app.modules.competitive_intelligence.investigation_coordinator import cover
 from app.modules.competitive_intelligence.models import InvestigationBudget, WatchlistConfig, digest
 from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
 from app.modules.competitive_intelligence.snapshot_policy import promotion_plan
-from app.shared.collection_scope import normalized_url
+from app.shared.collection_scope import normalized_url, same_site
 
 COLLECTION_ROLE = "source_researcher"
 
@@ -89,6 +89,17 @@ class CILoopHooks:
             documents.append({"source_url": url, "text": text})
         return documents
 
+    @staticmethod
+    def _same_site_entry(mapping: dict[str, dict], source_url: str) -> dict | None:
+        """Match redirect-resolved hosts (e.g. www.) back to their approved entry."""
+        from urllib.parse import urlsplit
+        host = (urlsplit(source_url).hostname or "").lower()
+        for approved_url, entry in mapping.items():
+            approved_host = (urlsplit(approved_url).hostname or "").lower()
+            if host and approved_host and same_site(host, approved_host):
+                return entry
+        return None
+
     async def on_task_completed(self, run, task: Task, status: str) -> list[Task]:
         """Capture researcher fetches, compare, record, and append one accepted round at most."""
         scope = self.ci_scope(run)
@@ -99,6 +110,8 @@ class CILoopHooks:
         changed: list[ChangeCandidate] = []
         for document in await self._source_texts(run.run_id, task.id):
             entry = mapping.get(normalized_url(document["source_url"]))
+            if entry is None:
+                entry = self._same_site_entry(mapping, document["source_url"])
             if entry is None:
                 continue
             now = datetime.now(timezone.utc)

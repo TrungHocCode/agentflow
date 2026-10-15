@@ -24,6 +24,7 @@ from app.execution.tools.network_policy import (
     MAX_TRANSIENT_ATTEMPTS,
     transient_backoff,
     validate_external_url,
+    validate_redirect_target,
 )
 
 
@@ -122,7 +123,10 @@ def _fetch_static_page(url: str, headers: dict[str, str]) -> tuple[Any, str]:
         if not location:
             return response, current_url
 
-        next_url, redirect_error = validate_external_url(urljoin(current_url, location))
+        # Same-site hops skip scope-exact approval; anything else keeps full validation.
+        next_url, redirect_error = validate_redirect_target(current_url, location)
+        if redirect_error or not next_url:
+            next_url, redirect_error = validate_external_url(urljoin(current_url, location))
         if redirect_error or not next_url:
             raise StaticFetchError(
                 "blocked",
