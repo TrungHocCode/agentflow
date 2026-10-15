@@ -168,6 +168,14 @@ export async function markNotificationRead(notificationId) {
   return ciRequest(`/notifications/${enc(notificationId)}/read`, { method: 'POST' });
 }
 
+export async function getTimeline(watchlistId, limit = 50) {
+  return ciRequest(`/watchlists/${enc(watchlistId)}/timeline?limit=${limit}`);
+}
+
+export async function askHistory(watchlistId, question) {
+  return ciRequest(`/watchlists/${enc(watchlistId)}/ask`, json('POST', { question }));
+}
+
 export function saveBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');
