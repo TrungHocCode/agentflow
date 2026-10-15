@@ -8,7 +8,7 @@ import socket
 import time
 from urllib.parse import urlparse
 
-from app.shared.collection_scope import collection_allowed, scoped_collection
+from app.shared.collection_scope import collection_allowed, same_site, scoped_collection
 
 
 MAX_TRANSIENT_ATTEMPTS = 2
@@ -19,6 +19,45 @@ def transient_backoff(attempt: int) -> None:
     """Apply a short bounded exponential backoff between transient attempts."""
 
     time.sleep(min(0.15 * (2**attempt), 0.5))
+
+
+def _check_host_safety(host: str, port: int | None) -> str | None:
+    """Reject local/private destinations; returns an error message or None."""
+    if host in {"localhost", "localhost.localdomain", "metadata.google.internal"} or host.endswith(".localhost"):
+        return "Private and local network targets are blocked."
+    if _is_private_address(host) or _host_resolves_private(host, port):
+        return "Private and local network targets are blocked."
+    return None
+
+
+def validate_redirect_target(current_url: str, location: str) -> tuple[str | None, str | None]:
+    """Follow same-site redirects without requiring scope-exact approval per hop.
+
+    The initial fetch still requires an exactly approved URL; redirect hops only need to
+    stay on the same site, plus the usual SSRF defenses. Cross-site redirects keep the
+    full exact-scope validation of the caller.
+    """
+    from urllib.parse import urljoin
+
+    candidate = urljoin(current_url, location or "").strip()
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None, "URL must be an absolute HTTP(S) URL."
+    if parsed.username or parsed.password:
+        return None, "URLs with embedded credentials are not allowed."
+    try:
+        port = parsed.port
+    except ValueError:
+        return None, "URL contains an invalid port."
+    host = parsed.hostname.lower().rstrip(".")
+    current_host = (urlparse(current_url).hostname or "").lower().rstrip(".")
+    if not same_site(host, current_host):
+        return None, "Redirect leaves the approved site."
+    if scoped_collection() or os.getenv("AGENTFLOW_ALLOW_PRIVATE_NETWORK") != "1":
+        failure = _check_host_safety(host, port)
+        if failure is not None:
+            return None, failure
+    return candidate, None
 
 
 def _is_private_address(value: str) -> bool:

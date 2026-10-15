@@ -114,6 +114,22 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tasks, [])
         self.hooks.snapshots.capture.assert_not_awaited()
 
+    async def test_www_redirect_resolves_to_approved_entry(self) -> None:
+        snapshot = MagicMock()
+        snapshot.id = uuid4()
+        self.hooks.snapshots.capture = AsyncMock(return_value=(MagicMock(), snapshot))
+        comparison = MagicMock()
+        comparison.outcome = "no_change"
+        self.hooks.snapshots.compare_source = AsyncMock(return_value=(comparison, []))
+        self.hooks.snapshots.finalize_source = AsyncMock(return_value=comparison)
+        self.hooks.research.list_results = AsyncMock(
+            return_value=[self.document("https://www.rival.invalid/pricing")])
+        tasks = await self.hooks.on_task_completed(self.run, researcher_task(), "done")
+        self.assertEqual(tasks, [])
+        kwargs = self.hooks.snapshots.capture.call_args.kwargs
+        self.assertEqual(kwargs["requested_url"], "https://rival.invalid/pricing")
+        self.assertEqual(kwargs["final_url"], "https://www.rival.invalid/pricing")
+
     async def test_no_change_or_rejected_round_appends_nothing(self) -> None:
         snapshot = MagicMock()
         snapshot.id = uuid4()
