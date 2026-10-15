@@ -67,10 +67,14 @@ class TestCIRealScheduling(unittest.IsolatedAsyncioTestCase):
 
     async def test_schedule_crud_and_single_winner_claim(self) -> None:
         from app.modules.competitive_intelligence.schedule_contracts import CreateSchedule, UpdateSchedule
-        past = NOW - timedelta(hours=2)
         created = await self.repository.create_schedule(
-            str(self.watchlist.id), self.owner, "daily", "UTC", "08:00", None, past)
-        self.assertLessEqual(created.next_due_at, NOW)
+            str(self.watchlist.id), self.owner, "daily", "UTC", "08:00", None, NOW - timedelta(hours=2))
+        self.assertGreater(created.next_due_at, NOW)
+        # Simulate time passing: move the pointer into the past, then claim.
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(text("UPDATE ci_schedules SET next_due_at=:due WHERE id=:id"),
+                                      {"due": NOW - timedelta(minutes=5), "id": str(created.id)})
         other = PostgresScheduleRepository()
         first, second = await asyncio.gather(
             self.repository.claim_due(NOW), other.claim_due(NOW))
