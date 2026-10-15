@@ -96,6 +96,7 @@ class PostgresScheduleRepository:
             record.next_due_at = next_occurrence(now, record.cadence, record.timezone, record.run_at,
                                                  record.day_of_week)
             await session.flush()
+            await session.refresh(record)
             return self.schedule_contract(record)
 
     async def claim_due(self, now: datetime, limit: int = 10) -> list[Schedule]:
@@ -115,6 +116,7 @@ class PostgresScheduleRepository:
             record.next_due_at = next_occurrence(now, record.cadence, record.timezone, record.run_at,
                                                  record.day_of_week)
             await session.flush()
+            await session.refresh(record)
             return self.schedule_contract(record)
 
     async def notify(self, owner_id: str, kind: str, title: str, body: str = "",
