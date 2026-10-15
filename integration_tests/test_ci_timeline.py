@@ -70,8 +70,8 @@ class TestCIRealTimelineQA(unittest.IsolatedAsyncioTestCase):
         self.service = IntelligenceService(self.repository, self.runs)
         briefs = BriefService(PostgresBriefRepository(), snapshots, BriefFileStore(root=self.tmp.name),
                               self.runs)
-        timeline = TimelineService(snapshots, investigations, briefs, self.service)
-        self.qa = HistoryQA(timeline, snapshots, self.service)
+        timeline = TimelineService(self.snapshot_service, investigations, briefs, self.service)
+        self.qa = HistoryQA(timeline, self.snapshot_service, self.service)
         self.request = CreateWatchlist.model_validate({"name": "QA competitors", "config": {
             "goal": "Assess pricing changes", "dimensions": ["pricing"],
             "workflow_version_id": self.version,
