@@ -12,6 +12,9 @@ from app.infrastructure.postgres.models.competitive_intelligence_snapshots impor
 )
 from app.infrastructure.postgres.models.competitive_intelligence_investigation import RoundModel
 from app.infrastructure.postgres.models.competitive_intelligence_brief import BriefModel
+from app.infrastructure.postgres.models.competitive_intelligence_scheduling import (
+    NotificationModel, ScheduleModel,
+)
 from app.infrastructure.postgres.models.conversation import (
     ConversationMessageModel,
     ConversationModel,
