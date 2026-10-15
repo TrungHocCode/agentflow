@@ -7,8 +7,10 @@ from urllib.parse import urlsplit
 from app.core.config import settings
 from app.modules.competitive_intelligence.models import (
     CreateWatchlist, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
-    UpdateWatchlist,
-    Watchlist, digest,
+    UpdateWatchlist, Watchlist, digest, public_url,
+)
+from app.modules.competitive_intelligence.setup_recommend import (
+    MAX_RECOMMENDED_PRODUCTS, MAX_RECOMMENDED_SOURCES, SetupRecommendation,
 )
 from app.modules.competitive_intelligence.ports import IntelligenceRepository, SetupPlanner
 from app.modules.conversations.ports import ConversationRepository
@@ -64,6 +66,31 @@ class IntelligenceService:
     async def update(self, identity: str, request: UpdateWatchlist, owner_id: str) -> Watchlist:
         self.validate_budget(request)
         return await self.repository.update(identity, owner_id, request)
+
+    async def recommend(self, prompt: str, owner_id: str) -> SetupRecommendation:
+        """Return unverified candidates; nothing here is persisted or approved."""
+        if self.planner is None:
+            raise ValidationError("Setup recommendation inference is unavailable.")
+        raw = await self.planner.recommend(prompt)
+        warnings = list(raw.warnings)
+        products = []
+        kept_sources = 0
+        for product in raw.products[:MAX_RECOMMENDED_PRODUCTS]:
+            sources = []
+            for source in product.sources:
+                if kept_sources >= MAX_RECOMMENDED_SOURCES:
+                    break
+                try:
+                    public_url(source.url)
+                except ValueError:
+                    warnings.append(f"Dropped syntactically invalid URL: {source.url[:120]}.")
+                    continue
+                sources.append(source)
+                kept_sources += 1
+            products.append(product.model_copy(update={"sources": sources}))
+        if len(raw.products) > MAX_RECOMMENDED_PRODUCTS:
+            warnings.append(f"Truncated to {MAX_RECOMMENDED_PRODUCTS} products; refine the description.")
+        return raw.model_copy(update={"products": products, "warnings": warnings[:16]})
 
     async def propose(self, conversation_id: str, owner_id: str) -> CreateWatchlist:
         if self.conversations is None or self.planner is None:
