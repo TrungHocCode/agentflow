@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import (
-    get_brief_service, get_current_user_id, get_investigation_service, get_scheduling_service,
-    get_snapshot_service,
+    get_brief_service, get_current_user_id, get_history_qa, get_investigation_service,
+    get_scheduling_service, get_snapshot_service, get_timeline_service,
 )
 from app.modules.competitive_intelligence.brief_contracts import BuildBriefRequest, IntelligenceBrief
 from app.modules.competitive_intelligence.brief_service import BriefService
+from app.modules.competitive_intelligence.history_qa import HistoryQA
 from app.modules.competitive_intelligence.investigation_contracts import InvestigationRound
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.models import Page, Pagination
@@ -21,6 +22,8 @@ from app.modules.competitive_intelligence.snapshot_contracts import (
     ChangeCandidate, SourceSnapshot, SnapshotContent,
 )
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
+from app.modules.competitive_intelligence.timeline_contracts import AskRequest, HistoryAnswer, TimelineEvent
+from app.modules.competitive_intelligence.timeline_service import TimelineService
 
 router = APIRouter(tags=["Competitive Intelligence"])
 
@@ -95,6 +98,20 @@ async def get_change(change_id: UUID, service: SnapshotService = Depends(get_sna
 async def list_rounds(run_id: UUID, service: InvestigationService = Depends(get_investigation_service),
                       owner: str = Depends(get_current_user_id)) -> list[InvestigationRound]:
     return await service.list_rounds(run_id, owner)
+
+
+@router.get("/watchlists/{watchlist_id}/timeline", response_model=list[TimelineEvent])
+async def get_timeline(watchlist_id: UUID, limit: int = Query(50, ge=1, le=200),
+                       service: TimelineService = Depends(get_timeline_service),
+                       owner: str = Depends(get_current_user_id)) -> list[TimelineEvent]:
+    return await service.competitor_timeline(owner, watchlist_id, None, limit)
+
+
+@router.post("/watchlists/{watchlist_id}/ask", response_model=HistoryAnswer)
+async def ask_history(watchlist_id: UUID, request: AskRequest,
+                      service: HistoryQA = Depends(get_history_qa),
+                      owner: str = Depends(get_current_user_id)) -> HistoryAnswer:
+    return await service.ask(owner, watchlist_id, request.question)
 
 
 @router.get("/notifications", response_model=Page[Notification])

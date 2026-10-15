@@ -54,6 +54,8 @@ from app.modules.competitive_intelligence.snapshot_service import SnapshotServic
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.brief_service import BriefService
 from app.modules.competitive_intelligence.scheduling_service import SchedulingService
+from app.modules.competitive_intelligence.timeline_service import TimelineService
+from app.modules.competitive_intelligence.history_qa import HistoryQA
 from app.modules.competitive_intelligence.loop_hooks import CILoopHooks
 
 
@@ -188,3 +190,19 @@ def build_brief_service(session: AsyncSession) -> BriefService:
 def build_scheduling_service(session: AsyncSession | None = None) -> SchedulingService:
     """Compose schedule firing over durable schedules and the approved start path."""
     return SchedulingService(PostgresScheduleRepository(), build_intelligence_service(session))
+
+
+def build_timeline_service(session: AsyncSession | None = None) -> TimelineService:
+    """Compose timeline assembly over snapshot, round, brief and watchlist storage."""
+    snapshots = PostgresSnapshotRepository(blobs=SnapshotFileStore())
+    intelligence = build_intelligence_service(session)
+    return TimelineService(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshots),
+                           BriefService(PostgresBriefRepository(), snapshots, BriefFileStore(),
+                                        build_run_service(session)), intelligence)
+
+
+def build_history_qa(session: AsyncSession | None = None) -> HistoryQA:
+    """Compose structured history Q&A over the timeline and snapshot retrieval."""
+    timeline = build_timeline_service(session)
+    snapshots = PostgresSnapshotRepository(blobs=SnapshotFileStore())
+    return HistoryQA(timeline, snapshots, timeline.intelligence)
