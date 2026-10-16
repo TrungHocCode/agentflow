@@ -24,9 +24,25 @@ COLLECTION_ROLE = "source_researcher"
 class CILoopHooks:
     """Domain observer for CI runs; no-ops on runs without frozen CI scope."""
 
-    def __init__(self, snapshots, investigations, briefs, research, artifacts) -> None:
+    def __init__(self, snapshots, investigations, briefs, research, artifacts,
+                 agent_profiles=None) -> None:
         self.snapshots, self.investigations, self.briefs = snapshots, investigations, briefs
         self.research, self.artifacts = research, artifacts
+        self.agent_profiles = agent_profiles
+
+    async def _task_role(self, task: Task) -> str | None:
+        """Resolve the task's agent role. Runtime tasks may carry a catalog UUID in
+        agent_id/node (workflow-seeded), while round tasks carry the role name."""
+        identifier = task.agent_id or task.node
+        if not identifier:
+            return None
+        if identifier == COLLECTION_ROLE:
+            return identifier
+        if self.agent_profiles is not None:
+            profile = await self.agent_profiles.get_agent(str(identifier))
+            if profile is not None:
+                return profile.name
+        return str(identifier)
 
     @staticmethod
     def ci_scope(run) -> dict | None:
@@ -103,7 +119,9 @@ class CILoopHooks:
     async def on_task_completed(self, run, task: Task, status: str) -> list[Task]:
         """Capture researcher fetches, compare, record, and append one accepted round at most."""
         scope = self.ci_scope(run)
-        if scope is None or (task.agent_id or task.node) != COLLECTION_ROLE:
+        if scope is None:
+            return []
+        if await self._task_role(task) != COLLECTION_ROLE:
             return []
         frozen = scope.get("baselines", {}) or {}
         mapping = self._source_map(scope)

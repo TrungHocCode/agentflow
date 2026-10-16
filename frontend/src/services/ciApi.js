@@ -184,7 +184,8 @@ const COLLECT_TASK_DEFINITION = {
       node: 'source_researcher',
       tool_names: ['news_crawler'],
       description: 'Collect approved public sources',
-      status: 'pending'
+      status: 'pending',
+      config: { ci_collection: true }
     }
   ]
 };
