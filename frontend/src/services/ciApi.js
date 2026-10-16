@@ -176,6 +176,33 @@ export async function askHistory(watchlistId, question) {
   return ciRequest(`/watchlists/${enc(watchlistId)}/ask`, json('POST', { question }));
 }
 
+const COLLECT_TASK_DEFINITION = {
+  tasks: [
+    {
+      id: 1,
+      task_key: 'collect',
+      node: 'source_researcher',
+      tool_names: ['news_crawler'],
+      description: 'Collect approved public sources',
+      status: 'pending'
+    }
+  ]
+};
+
+export async function createCollectionWorkflow(name) {
+  const workflow = await ciRequest('/workflows', json('POST', {
+    name: `CI collection for ${name}`,
+    description: 'Static seed: collect approved public sources for competitive intelligence runs',
+    definition: COLLECT_TASK_DEFINITION
+  }));
+  const version = await ciRequest(`/workflows/${enc(workflow.id)}/versions`, json('POST', {
+    definition: COLLECT_TASK_DEFINITION
+  }));
+  return ciRequest(`/workflows/${enc(workflow.id)}/versions/${enc(version.id)}/publish`, {
+    method: 'POST'
+  });
+}
+
 export function saveBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');
