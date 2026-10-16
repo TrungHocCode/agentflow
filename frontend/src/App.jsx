@@ -10,10 +10,9 @@ import SettingsView from './components/SettingsView';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
 import { ConfirmDialog } from './components/ui/confirm-dialog';
+import { useCatalogs } from './hooks/useCatalogs';
 
 import { 
-  getCatalogTools, 
-  getCatalogAgents, 
   getConversations,
   getRuns,
   getRunEvents,
@@ -127,15 +126,12 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('watchlists');
-  const [backendStatus, setBackendStatus] = useState(false);
   const [authUser, setAuthUser] = useState(() => {
     if (!localStorage.getItem('agentflow_access_token')) return null;
     try { return JSON.parse(localStorage.getItem('agentflow_user') || 'null'); } catch { return null; }
   });
 
-  // Catalogs
-  const [tools, setTools] = useState([]);
-  const [agents, setAgents] = useState([]);
+  const { tools, agents, backendStatus } = useCatalogs();
 
   // Conversational & Execution State
   const [messages, setMessages] = useState([]);
@@ -302,45 +298,6 @@ export default function App() {
     connect();
     return unsubscribe;
   }, [handleRunStreamEvent]);
-
-  // Load catalogs on mount
-  useEffect(() => {
-    async function loadCatalogs() {
-      try {
-        const [toolsData, agentsData] = await Promise.all([
-          getCatalogTools(),
-          getCatalogAgents()
-        ]);
-        setTools(toolsData || []);
-        setAgents(agentsData || []);
-        setBackendStatus(true);
-      } catch (err) {
-        console.warn('Backend API connection warning:', err);
-        setBackendStatus(false);
-        // Fallback mock data if API server is not running yet
-        setTools([
-          {
-            name: 'news_crawler',
-            description: 'Extracts article content and renders JavaScript pages when needed.'
-          },
-          { name: 'text_summarizer', description: 'Extracts concise bullet points from text.' },
-          { name: 'markdown_report_generator', description: 'Compiles formatted markdown reports to workspace_data/reports/.' },
-          { name: 'python_executor', description: 'Executes Python code in a safe subprocess.' },
-          { name: 'database_query', description: 'Queries SQLite database tables.' },
-          { name: 'email_sender', description: 'Sends mock emails to recipients.' },
-          { name: 'http_request', description: 'Sends HTTP GET/POST requests.' },
-          { name: 'web_search', description: 'Searches the web for relevant context.' }
-        ]);
-        setAgents([
-          { name: 'news_crawler', tool_names: ['news_crawler', 'web_search', 'http_request'] },
-          { name: 'text_summarizer', tool_names: ['text_summarizer', 'file_reader'] },
-          { name: 'markdown_report_generator', tool_names: ['markdown_report_generator', 'file_writer'] }
-        ]);
-      }
-    }
-
-    loadCatalogs();
-  }, []);
 
   useEffect(() => () => {
     if (conversationStreamRef.current) conversationStreamRef.current();
