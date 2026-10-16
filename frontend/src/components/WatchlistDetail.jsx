@@ -104,17 +104,23 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
     setAction('run');
     setError('');
     try {
-      const revision = watchlist.current_revision;
+      // Editing the watchlist to attach a workflow version creates a new revision,
+      // so always re-read the current revision before approving or starting.
+      let current = await getWatchlist(watchlistId);
+      let revision = current.current_revision;
       let workflowVersionId = revision?.config?.workflow_version_id;
       if (!workflowVersionId) {
-        const version = await createCollectionWorkflow(watchlist.name);
+        const version = await createCollectionWorkflow(current.name);
         workflowVersionId = version.id;
         await updateWatchlist(watchlistId, {
-          name: watchlist.name,
-          description: watchlist.description || '',
+          name: current.name,
+          description: current.description || '',
           expected_revision_id: revision.id,
           config: { ...revision.config, workflow_version_id: workflowVersionId }
         });
+        current = await getWatchlist(watchlistId);
+        revision = current.current_revision;
+        workflowVersionId = revision?.config?.workflow_version_id || workflowVersionId;
       }
       if (revision.approval_status !== 'approved') {
         await approveRevision(watchlistId, revision.id, workflowVersionId);
@@ -347,7 +353,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
               <span>{revisionLabel(revision)}</span>
               <ApprovalBadge status={revision?.approval_status} />
               <span className="flex-1" />
-              {!approved && (
+              {!approved && revision?.config?.workflow_version_id && (
                 <Button type="button" variant="outline" onClick={handleApprove} disabled={action === 'approve'}>
                   {action === 'approve' ? 'Approving…' : 'Approve current revision'}
                 </Button>
