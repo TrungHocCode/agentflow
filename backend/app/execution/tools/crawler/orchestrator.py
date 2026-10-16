@@ -403,6 +403,15 @@ def crawl_url(
             if isinstance(response_url, str) and response_url:
                 final_url = response_url
             content_type = _response_content_type(response)
+            raw_headers = getattr(response, "headers", {})
+            raw_ctype = str(raw_headers.get("content-type", "")) if isinstance(raw_headers, Mapping) else ""
+            if "charset" not in raw_ctype.lower():
+                # requests falls back to ISO-8859-1 without a declared charset, which
+                # corrupts non-ASCII text; modern pages are UTF-8.
+                try:
+                    response.encoding = "utf-8"
+                except Exception:
+                    pass
             raw_content = getattr(response, "content", None)
             static_duration = round((perf_counter() - static_started) * 1000)
 
@@ -472,6 +481,12 @@ def crawl_url(
                         and (
                             status_can_render
                             or candidate["challenge_detected"]
+                            # Client-rendered pages (SPA) often return a usable-looking but
+                            # incomplete static shell; render them unless quality is high.
+                            or (
+                                looks_client_rendered(html)
+                                and candidate["quality_score"] < 0.4
+                            )
                             or (
                                 candidate["quality_score"] < MIN_QUALITY_SCORE
                                 and extracted_length < 400
