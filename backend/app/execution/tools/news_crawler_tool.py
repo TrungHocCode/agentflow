@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from html import unescape
 from html.parser import HTMLParser
@@ -60,6 +61,44 @@ BOILERPLATE_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
+# Embedded structured data (JSON-LD, __NEXT_DATA__, application/json) often holds
+# the facts a client-rendered page shows, so extract its meaningful scalars.
+JSON_SCRIPT_TYPES = {"application/ld+json", "application/json"}
+JSON_FACT_KEYS = {
+    "name", "title", "price", "amount", "description", "currency", "plan", "product",
+    "offer", "value", "label", "text", "sku", "category", "feature", "tier", "billing",
+}
+PRICE_PATTERN = re.compile(r"[$€£]\s?\d")
+MAX_EMBEDDED_FACTS = 400
+MAX_EMBEDDED_TEXT_CHARS = 8000
+
+
+def embedded_json_facts(payload: Any, max_items: int = MAX_EMBEDDED_FACTS) -> list[str]:
+    """Collect bounded, meaningful scalars from embedded JSON without keeping the raw blob."""
+
+    facts: list[str] = []
+
+    def walk(node: Any, key: str | None, depth: int) -> None:
+        if len(facts) >= max_items or depth > 12:
+            return
+        if isinstance(node, dict):
+            for child_key, child in node.items():
+                walk(child, str(child_key).lower(), depth + 1)
+        elif isinstance(node, list):
+            for child in node[:50]:
+                walk(child, key, depth + 1)
+        elif node is None or isinstance(node, bool):
+            return
+        else:
+            text = str(node).strip()
+            if not text or len(text) > 300:
+                return
+            if key in JSON_FACT_KEYS or PRICE_PATTERN.search(text):
+                facts.append(text)
+
+    walk(payload, None, 0)
+    return facts
+
 
 class NewsCrawlerInput(BaseModel):
     url: str = Field(description="The web page URL to crawl.")
@@ -105,10 +144,17 @@ class HTMLContentExtractor(HTMLParser):
         self._current_text: list[str] = []
         self._current_link: dict[str, str] | None = None
         self._current_link_text: list[str] = []
+        self.embedded_data: list[str] = []
+        self._script_json: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         attrs_map = {key.lower(): value or "" for key, value in attrs}
+
+        if tag == "script" and not self._skip_depth:
+            if attrs_map.get("type", "").lower() in JSON_SCRIPT_TYPES:
+                self._script_json = []
+                return
 
         if self._skip_depth:
             if tag not in VOID_TAGS:
@@ -143,6 +189,10 @@ class HTMLContentExtractor(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
+        if tag == "script" and self._script_json is not None:
+            self._capture_embedded_json("".join(self._script_json))
+            self._script_json = None
+            return
         if self._skip_depth:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
@@ -175,6 +225,9 @@ class HTMLContentExtractor(HTMLParser):
                 break
 
     def handle_data(self, data: str) -> None:
+        if self._script_json is not None:
+            self._script_json.append(data)
+            return
         if self._skip_depth:
             return
         if self._in_title:
@@ -201,6 +254,19 @@ class HTMLContentExtractor(HTMLParser):
     @staticmethod
     def _normalize_text(value: str) -> str:
         return " ".join(unescape(value).split())
+
+    def _capture_embedded_json(self, text: str) -> None:
+        text = text.strip()
+        if not text or len(text) > 500_000:
+            return
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return
+        for fact in embedded_json_facts(payload):
+            if len(self.embedded_data) >= MAX_EMBEDDED_FACTS:
+                break
+            self.embedded_data.append(fact)
 
 
 def normalize_news_url(raw_url: str) -> tuple[str | None, str | None]:
@@ -423,6 +489,13 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
         body = fallback_body
         markdown = fallback_body
         paragraphs = [fallback_body]
+    embedded_text = HTMLContentExtractor._normalize_text(" ".join(parser.embedded_data))
+    if embedded_text:
+        # Embedded structured data is high-signal; keep it even when it is short.
+        embedded_text = embedded_text[:MAX_EMBEDDED_TEXT_CHARS]
+        body = f"{body}\n\n{embedded_text}".strip()
+        markdown = f"{markdown}\n\n{embedded_text}".strip()
+        paragraphs = [*paragraphs, embedded_text]
     links = _build_listing_items(parser, url)
     warnings: list[str] = []
 
