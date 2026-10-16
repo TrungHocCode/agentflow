@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ChatStudio from './components/ChatStudio';
-import FlowCanvas from './components/FlowCanvas';
-import CatalogBrowser from './components/CatalogBrowser';
 import ExecutionTracker from './components/ExecutionTracker';
 import Intelligence from './components/Intelligence';
+import ChangesView from './components/ChangesView';
+import BriefsHistoryView from './components/BriefsHistoryView';
+import SettingsView from './components/SettingsView';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
 import { ConfirmDialog } from './components/ui/confirm-dialog';
@@ -125,7 +126,7 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('studio');
+  const [activeTab, setActiveTab] = useState('watchlists');
   const [backendStatus, setBackendStatus] = useState(false);
   const [authUser, setAuthUser] = useState(() => {
     if (!localStorage.getItem('agentflow_access_token')) return null;
@@ -1069,16 +1070,25 @@ export default function App() {
                 setIsResultsOpen(true);
               }}
               onViewRunDetails={() => setActiveTab('runs')}
-              onWatchlistCreated={() => setActiveTab('intelligence')}
+              onWatchlistCreated={() => setActiveTab('watchlists')}
             />
           )}
 
-          {activeTab === 'canvas' && (
-            <FlowCanvas plan={activePlan} />
+          {activeTab === 'changes' && (
+            <ChangesView />
           )}
 
-          {activeTab === 'catalog' && (
-            <CatalogBrowser tools={tools} agents={agents} />
+          {activeTab === 'briefs' && (
+            <BriefsHistoryView
+              onOpenRun={(run) => {
+                setCurrentRun(run);
+                setActiveTab('runs');
+              }}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <SettingsView plan={activePlan} tools={tools} agents={agents} />
           )}
 
           {activeTab === 'runs' && (
@@ -1097,7 +1107,7 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'intelligence' && <Intelligence />}
+          {activeTab === 'watchlists' && <Intelligence />}
         </main>
       </div>
       <ConfirmDialog
