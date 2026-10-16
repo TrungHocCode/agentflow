@@ -5,7 +5,8 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Spinner } from './ui/spinner';
-import { OutcomeBadge } from './OutcomeBadge';
+import { StatusBadge } from './OutcomeBadge';
+import { revisionLabel } from '../lib/labels';
 
 export default function WatchlistList({ onSelect, onCreate }) {
   const [items, setItems] = useState([]);
@@ -66,11 +67,11 @@ export default function WatchlistList({ onSelect, onCreate }) {
                   <span>
                     <span className="block font-medium">{watchlist.name}</span>
                     <span className="block text-sm text-muted-foreground">
-                      Revision {watchlist.current_revision?.revision_number} ·{' '}
+                      {revisionLabel(watchlist.current_revision)} ·{' '}
                       {watchlist.current_revision?.approval_status}
                     </span>
                   </span>
-                  <OutcomeBadge outcome={watchlist.status === 'active' ? 'baseline_created' : 'unavailable'} />
+                  <StatusBadge status={watchlist.status} />
                 </button>
               </Card>
             </li>

@@ -18,15 +18,10 @@ import BriefView from './BriefView';
 import ChangeDetail from './ChangeDetail';
 import ChangeFeed from './ChangeFeed';
 import EmptyState from './EmptyState';
-import { OutcomeBadge } from './OutcomeBadge';
+import { ApprovalBadge, StatusBadge } from './OutcomeBadge';
 import ScheduleSection from './ScheduleSection';
 import TimelineAndAsk from './TimelineAndAsk';
-
-function runStateForBadge(status) {
-  if (status === 'completed') return 'no_change';
-  if (status === 'failed' || status === 'cancelled') return status === 'failed' ? 'unavailable' : 'partial';
-  return 'baseline_created';
-}
+import { dateLabel, revisionLabel, runLabel } from '../lib/labels';
 
 export default function WatchlistDetail({ watchlistId, onBack }) {
   const [watchlist, setWatchlist] = useState(null);
@@ -168,6 +163,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
           Back
         </Button>
         <h2 className="text-lg font-semibold">{watchlist.name}</h2>
+        <StatusBadge status={watchlist.status} />
       </div>
       {error && (
         <Alert variant="destructive">
@@ -191,9 +187,8 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
           <ul className="flex flex-col gap-2">
             {runs.map((run) => (
               <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="font-mono text-xs">{run.run_id.slice(0, 8)}</span>
-                <OutcomeBadge outcome={runStateForBadge(run.status)} />
-                <span className="text-muted-foreground">{run.status}</span>
+                <span>{runLabel(run)}</span>
+                <StatusBadge status={run.status} />
                 <span className="flex-1" />
                 {['queued', 'running', 'pending'].includes(run.status) && (
                   <Button
@@ -251,8 +246,8 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                   className="flex w-full items-center gap-2 text-left text-sm"
                   onClick={() => handleOpenBrief(brief.id)}
                 >
-                  <OutcomeBadge outcome={brief.outcome} />
-                  <span className="text-muted-foreground">{brief.created_at}</span>
+                  <StatusBadge status={brief.quality} />
+                  <span className="text-muted-foreground">{dateLabel(brief.created_at)}</span>
                 </button>
               </li>
             ))}
@@ -275,9 +270,8 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         <ul className="flex flex-col gap-1 text-sm">
           {revisions.map((item) => (
             <li key={item.id} className="flex items-center gap-2">
-              <span className="font-mono text-xs">r{item.revision_number}</span>
-              <OutcomeBadge outcome={item.approval_status === 'approved' ? 'baseline_created' : 'partial'} />
-              <span className="text-muted-foreground">{item.approval_status}</span>
+              <span>{revisionLabel(item)}</span>
+              <ApprovalBadge status={item.approval_status} />
             </li>
           ))}
         </ul>

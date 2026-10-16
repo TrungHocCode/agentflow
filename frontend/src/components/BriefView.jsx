@@ -5,6 +5,7 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { OutcomeBadge, QualityBadge, VerificationBadge } from './OutcomeBadge';
+import { dateLabel, sourceLabel } from '../lib/labels';
 
 export default function BriefView({ brief }) {
   const [downloading, setDownloading] = useState(false);
@@ -28,7 +29,7 @@ export default function BriefView({ brief }) {
       <div className="flex flex-wrap items-center gap-2">
         <OutcomeBadge outcome={brief.outcome} />
         <QualityBadge quality={brief.quality} />
-        <span className="text-sm text-muted-foreground">{brief.created_at}</span>
+        <span className="text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
         <span className="flex-1" />
         <Button type="button" variant="outline" onClick={handleDownload} disabled={downloading}>
           <Download data-icon="inline-start" /> {downloading ? 'Downloading…' : 'Download Markdown'}
@@ -48,7 +49,7 @@ export default function BriefView({ brief }) {
         <ul className="flex flex-col gap-1 text-sm">
           {(brief.source_coverage || []).map((entry) => (
             <li key={entry.source_id} className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-xs">{entry.source_id.slice(0, 8)}</span>
+              <span>{sourceLabel(entry)}</span>
               <OutcomeBadge outcome={entry.outcome} />
               <QualityBadge quality={entry.quality} />
               <span className="text-muted-foreground">{(entry.reason_codes || []).join(', ')}</span>
