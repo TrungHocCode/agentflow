@@ -200,7 +200,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                     Cancel
                   </Button>
                 )}
-                {run.status === 'completed' && (
+                {run.status === 'completed' && !briefs.some((brief) => brief.run_id === run.run_id) && (
                   <Button
                     type="button"
                     variant="outline"
@@ -236,7 +236,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
             <BriefView brief={selectedBrief} />
           </div>
         ) : briefs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No briefs yet. Build one from a completed run.</p>
+          <p className="text-sm text-muted-foreground">No briefs yet. A brief is prepared automatically when a run completes.</p>
         ) : (
           <ul className="flex flex-col gap-2">
             {briefs.map((brief) => (
