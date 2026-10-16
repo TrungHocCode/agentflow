@@ -38,10 +38,10 @@ const RUN_STATUS = {
   abandoned: { label: 'Stopped', tone: 'skipped' }
 };
 
-const PROMPT_SUGGESTIONS = [
-  'Find the top stories on Hacker News, summarize them and produce a Markdown report.',
-  'Compare LLM models by benchmark, preferring official sources.',
-  'Research a technology topic and present findings with tables and charts.'
+const EXAMPLE_PROMPTS = [
+  'I make TaskFlow, a team task manager. Track pricing of Todoist and ClickUp.',
+  'Track release notes and enterprise features for Notion and Asana.',
+  'Watch pricing changes for our analytics competitors.'
 ];
 
 function groupMessages(messages) {
@@ -162,12 +162,13 @@ export default function ChatStudio({
           ) : messages.length === 0 ? (
             <div className="chat-empty">
               <div className="chat-empty__mark" aria-hidden="true"><MessageSquareText /></div>
-              <h2>What would you like to explore today?</h2>
+              <h2>Set up competitor tracking</h2>
               <p>
-                Start with a question or a research goal. You will see the plan before allowing agents to proceed.
+                Describe your product and the rivals you want to track. AgentFlow drafts a watchlist and a plan
+                you can review before anything runs.
               </p>
-              <div className="prompt-suggestions" aria-label="Suggested questions">
-                {PROMPT_SUGGESTIONS.map((suggestion) => (
+              <div className="prompt-suggestions" aria-label="Example prompts">
+                {EXAMPLE_PROMPTS.map((suggestion) => (
                   <Button
                     key={suggestion}
                     type="button"
@@ -180,9 +181,8 @@ export default function ChatStudio({
                     <ArrowRight aria-hidden="true" />
                   </Button>
                 ))}
-                </div>
-                <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
               </div>
+            </div>
           ) : (
             messageGroups.map((group, groupIndex) => (
               <MessageGroup key={`${group.sender}-${groupIndex}`} className="chat-message-group">
@@ -246,6 +246,10 @@ export default function ChatStudio({
                 })}
               </MessageGroup>
             ))
+          )}
+
+          {messages.some(message => message.sender === 'user') && !runStatus && (
+            <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
           )}
 
           {isProcessing && !isStreaming && !hasStreamingAssistantMessage && (

@@ -8,6 +8,7 @@ import ExecutionTracker from './components/ExecutionTracker';
 import Intelligence from './components/Intelligence';
 import AuthScreen from './components/AuthScreen';
 import RunResultsDrawer from './components/RunResultsDrawer';
+import { ConfirmDialog } from './components/ui/confirm-dialog';
 
 import { 
   getCatalogTools, 
@@ -30,23 +31,6 @@ import {
   subscribeRunSSEStream,
   logout as logoutUser
 } from './services/api';
-
-const APPROVAL_COMMANDS = new Set([
-  'ok',
-  'yes',
-  'approve',
-  'run',
-  'go',
-  'start',
-  'proceed',
-  'execute',
-  'confirm'
-]);
-
-const isApprovalCommand = (text) => {
-  const normalized = text.trim().toLowerCase().replace(/[.!?]+$/g, '').trim();
-  return APPROVAL_COMMANDS.has(normalized);
-};
 
 const ACTIVE_CONVERSATION_KEY = 'agentflow_active_conversation_id';
 const ACTIVE_RUN_KEY = 'agentflow_active_run_id';
@@ -159,6 +143,7 @@ export default function App() {
   const [currentRun, setCurrentRun] = useState(null);
   const [conversationRun, setConversationRun] = useState(null);
   const [isResultsOpen, setIsResultsOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState(null);
   const [resultsSource, setResultsSource] = useState('conversation');
   const [activePlan, setActivePlan] = useState([]);
   const [draftPlan, setDraftPlan] = useState([]);
@@ -683,15 +668,6 @@ export default function App() {
       setMessages(prev => [...prev, { sender: 'user', text: textPrompt }]);
     }
 
-    // Only a standalone confirmation command may approve a pending plan.
-    const isApprovalMessage = isApprovalCommand(textPrompt);
-
-    if (!startsNewConversation && draftPlan.length > 0 && isApprovalMessage) {
-      setMessages(prev => [...prev, { sender: 'supervisor', text: 'The plan is approved. You can follow progress in the chat and open the results once the workflow completes.', duration: '0.1' }]);
-      await handleApprovePlan();
-      return;
-    }
-
     const turnId = createConversationTurnId();
     let awaitingConversationStream = false;
     try {
@@ -867,7 +843,6 @@ export default function App() {
             .filter(message => message.sender === 'user')
             .map(message => message.text)
             .filter(Boolean)
-            .filter(message => !isApprovalCommand(message))
             .join('\n\n');
           const run = await createWorkflowRun(
             workflow.id,
@@ -994,15 +969,23 @@ export default function App() {
     }
   };
 
-  const handleDeleteConversation = async () => {
+  const handleDeleteConversation = () => {
     if (!conversationId || isDeletingConversation || (isProcessing && !isStreaming)) return;
     const linkedRun = conversationRun;
     const linkedRunIsActive = Boolean(linkedRun && ACTIVE_RUN_STATUSES.has(linkedRun.status));
-    const warning = linkedRunIsActive
-          ? 'The conversation will be permanently deleted. A running workflow will not be cancelled and can still be tracked in Run history. Continue?'
-      : 'Permanently delete this conversation and its messages?';
-    if (!window.confirm(warning)) return;
+    setConfirmDialog({
+      title: 'Delete conversation',
+      description: linkedRunIsActive
+        ? 'The conversation will be permanently deleted. A running workflow will not be cancelled and can still be tracked in Run history.'
+        : 'Permanently delete this conversation and its messages?',
+      confirmLabel: 'Delete',
+      tone: 'destructive',
+      onConfirm: () => performDeleteConversation(linkedRun, linkedRunIsActive)
+    });
+  };
 
+  const performDeleteConversation = async (linkedRun, linkedRunIsActive) => {
+    setConfirmDialog(null);
     setIsDeletingConversation(true);
     try {
       await deleteConversation(conversationId);
@@ -1117,6 +1100,11 @@ export default function App() {
           {activeTab === 'intelligence' && <Intelligence />}
         </main>
       </div>
+      <ConfirmDialog
+        open={Boolean(confirmDialog)}
+        {...(confirmDialog || {})}
+        onCancel={() => setConfirmDialog(null)}
+      />
       <RunResultsDrawer
         open={isResultsOpen}
         onClose={() => setIsResultsOpen(false)}

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { createWatchlist, recommendWatchlists } from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
@@ -6,7 +7,6 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Textarea } from './ui/textarea';
 
 function lastUserText(messages) {
   const mine = (messages || []).filter((message) => message.sender === 'user');
@@ -15,8 +15,10 @@ function lastUserText(messages) {
   return typeof text === 'string' ? text : '';
 }
 
+// Turns the latest chat message into a reviewable watchlist draft; the chat input
+// is the only place the user types, so there is no separate setup form.
 export default function ChatWatchlistProposal({ messages, onCreated }) {
-  const [prompt, setPrompt] = useState(() => lastUserText(messages));
+  const prompt = lastUserText(messages);
   const [recommendation, setRecommendation] = useState(null);
   const [picks, setPicks] = useState({});
   const [urls, setUrls] = useState({});
@@ -25,6 +27,8 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [createdId, setCreatedId] = useState(null);
+
+  if (!prompt) return null;
 
   function sourceKey(productIndex, sourceIndex) {
     return `${productIndex}:${sourceIndex}`;
@@ -35,8 +39,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     return picks[productIndex];
   }
 
-  async function handleSuggest(event) {
-    event.preventDefault();
+  async function handleSuggest() {
     setLoading(true);
     setError('');
     try {
@@ -100,22 +103,20 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
 
   return (
     <Card className="p-3" data-testid="chat-proposal">
-      <form onSubmit={handleSuggest} className="flex flex-col gap-2">
-        <Label htmlFor="chat-proposal-prompt">Describe your product and rivals to track</Label>
-        <Textarea
-          id="chat-proposal-prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          placeholder="I make TaskFlow. Track pricing of Todoist and ClickUp."
-        />
-        <div>
-          <Button type="submit" variant="outline" disabled={loading || !prompt.trim()}>
-            {loading ? 'Suggesting…' : 'Suggest watchlist'}
-          </Button>
-        </div>
-      </form>
+      <div className="flex items-center gap-2">
+        <Sparkles aria-hidden="true" />
+        <p className="text-sm font-medium">Turn this chat into a watchlist</p>
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">
+        AgentFlow will draft products, sources and criteria from what you wrote. Review everything before creating.
+      </p>
+      <div className="mt-2">
+        <Button type="button" variant="outline" onClick={handleSuggest} disabled={loading || !prompt}>
+          {loading ? 'Suggesting…' : 'Suggest watchlist'}
+        </Button>
+      </div>
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mt-2">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
