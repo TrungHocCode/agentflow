@@ -1,13 +1,34 @@
-import { BookOpenText, Clock3, GitMerge, MessageSquareText, Radar, Wrench } from 'lucide-react';
+import { BookOpenText, FileText, GitCompare, MessageSquareText, Radar, Settings } from 'lucide-react';
 import { Button } from './ui/button';
 
-const NAV_ITEMS = [
-  { id: 'studio', label: 'Research', icon: MessageSquareText },
-  { id: 'intelligence', label: 'Intelligence', icon: Radar },
-  { id: 'canvas', label: 'Workflow', icon: GitMerge },
-  { id: 'catalog', label: 'Tools', icon: Wrench },
-  { id: 'runs', label: 'History', icon: Clock3 }
+const PRIMARY_ITEMS = [
+  { id: 'watchlists', label: 'Watchlists', icon: Radar },
+  { id: 'changes', label: 'Changes', icon: GitCompare },
+  { id: 'briefs', label: 'Briefs & History', icon: FileText },
+  { id: 'settings', label: 'Settings', icon: Settings }
 ];
+
+const SECONDARY_ITEMS = [
+  { id: 'studio', label: 'Assistant', icon: MessageSquareText }
+];
+
+function NavButton({ item, activeTab, setActiveTab }) {
+  const isActive = activeTab === item.id;
+  const Icon = item.icon;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="sidebar-link"
+      data-active={isActive}
+      aria-current={isActive ? 'page' : undefined}
+      onClick={() => setActiveTab(item.id)}
+    >
+      <Icon data-icon="inline-start" />
+      {item.label}
+    </Button>
+  );
+}
 
 export default function Sidebar({ activeTab, setActiveTab }) {
   return (
@@ -15,29 +36,24 @@ export default function Sidebar({ activeTab, setActiveTab }) {
       <div>
         <p className="sidebar-section-label">Workspace</p>
         <nav className="sidebar-nav">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
-            const isActive = activeTab === id;
-            return (
-              <Button
-                key={id}
-                type="button"
-                variant="ghost"
-                className="sidebar-link"
-                data-active={isActive}
-                aria-current={isActive ? 'page' : undefined}
-                onClick={() => setActiveTab(id)}
-              >
-                <Icon data-icon="inline-start" />
-                {label}
-              </Button>
-            );
-          })}
+          {PRIMARY_ITEMS.map((item) => (
+            <NavButton key={item.id} item={item} activeTab={activeTab} setActiveTab={setActiveTab} />
+          ))}
+        </nav>
+      </div>
+
+      <div>
+        <p className="sidebar-section-label">Assistant</p>
+        <nav className="sidebar-nav">
+          {SECONDARY_ITEMS.map((item) => (
+            <NavButton key={item.id} item={item} activeTab={activeTab} setActiveTab={setActiveTab} />
+          ))}
         </nav>
       </div>
 
       <div className="sidebar-note">
         <BookOpenText aria-hidden="true" />
-        <span>Ask a question, review the plan, then receive a sourced research report.</span>
+        <span>Track competitor sources, review changes, and read the brief.</span>
       </div>
     </aside>
   );
