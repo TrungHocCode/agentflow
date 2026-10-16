@@ -805,8 +805,11 @@ class WorkerAgent(BaseAgent):
                     model=metric.get("model"), started_at=metric["started_at"], completed_at=metric["completed_at"]))
             final_result = processor.bundle.model_dump(mode="json")
             if status != "failed":
+                metadata = state.get("metadata") or {}
+                is_ci_run = bool(metadata.get("ci_scope")) or "competitive_intelligence" in (metadata.get("input_data") or {})
+                ci_collection = bool((current_task.config or {}).get("ci_collection")) or is_ci_run
                 if not processor.bundle.claims:
-                    if (current_task.config or {}).get("ci_collection"):
+                    if ci_collection:
                         status = "partial"
                         error_msg = "Sources were collected for this CI run; no evidence claims were extracted."
                     else:
