@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Play } from 'lucide-react';
-import { cancelRun, getRunDetails } from '../services/api';
+import { cancelRun, subscribeRunSSEStream } from '../services/api';
 import {
   approveRevision,
   buildBrief,
@@ -69,20 +69,36 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
     };
   }, [watchlistId, refreshKey]);
 
-  // Poll active runs so progress reflects without SSE wiring.
+  const activeRunId = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status))?.run_id || null;
+
+  // Stream the active run's progress instead of polling.
   useEffect(() => {
-    const active = runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status));
-    if (!active) return undefined;
-    const timer = window.setInterval(async () => {
-      try {
-        const updated = await Promise.all(runs.map((run) => getRunDetails(run.run_id)));
-        setRuns(updated);
-      } catch {
-        // Keep last known state; next tick retries.
+    if (!activeRunId) return undefined;
+    let terminal = false;
+    const unsubscribe = subscribeRunSSEStream(
+      activeRunId,
+      (event) => {
+        const status = event.status || event.payload?.status;
+        const isTerminal = ['run_completed', 'run_failed', 'run_interrupted'].includes(event.type);
+        if (isTerminal) {
+          const nextStatus = event.status
+            || (event.type === 'run_failed' ? 'failed' : event.type === 'run_interrupted' ? 'interrupted' : 'completed');
+          setRuns((previous) => previous.map((run) => run.run_id === activeRunId ? { ...run, status: nextStatus } : run));
+        } else if (status === 'queued' || status === 'running') {
+          setRuns((previous) => previous.map((run) => run.run_id === activeRunId ? { ...run, status } : run));
+        }
+        if (isTerminal && !terminal) {
+          terminal = true;
+          setRefreshKey((key) => key + 1);
+        }
+      },
+      () => {
+        // Fall back to a refresh if the stream drops while the run is active.
+        if (!terminal) setRefreshKey((key) => key + 1);
       }
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [runs]);
+    );
+    return () => unsubscribe();
+  }, [activeRunId, refreshKey]);
 
   async function handleRunNow() {
     setAction('run');

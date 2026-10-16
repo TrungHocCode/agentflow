@@ -6,6 +6,16 @@ const FINISHED_STATUSES = new Set([
   'done', 'success', 'completed', 'partial', 'failed', 'skipped', 'cancelled', 'interrupted'
 ]);
 
+// CI pipeline phase per agent role, for compact progress labels.
+const CI_PHASE_BY_AGENT = {
+  source_researcher: 'Collecting',
+  synthesis_agent: 'Synthesizing',
+  product_analyst: 'Investigating',
+  competitive_analyst: 'Investigating',
+  evidence_verifier: 'Verifying',
+  report_agent: 'Preparing brief'
+};
+
 function getTaskId(task, index) {
   return String(task?.id ?? `task-${index + 1}`);
 }
@@ -127,6 +137,8 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
                   const agentName = task?.node && task.node !== 'worker'
                     ? displayAgentName(task.node)
                     : 'Research agent';
+                  const phase = CI_PHASE_BY_AGENT[String(task?.node || '').toLowerCase()];
+                  const agentLabel = phase ? `${phase} · ${agentName}` : agentName;
 
                   return (
                     <article
@@ -142,7 +154,7 @@ export default function WorkflowProgressGraph({ tasks, runStatus }) {
                         {task?.description || `Step ${index + 1}`}
                       </p>
                       <div className="workflow-node__meta">
-                        <span><Bot size={13} aria-hidden="true" /> {agentName}</span>
+                        <span><Bot size={13} aria-hidden="true" /> {agentLabel}</span>
                         {dependencies.length > 0 && (
                           <span className="workflow-node__dependencies">
                             After steps {dependencyNumbers.join(', ')}
