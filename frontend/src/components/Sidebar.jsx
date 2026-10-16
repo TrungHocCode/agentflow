@@ -2,18 +2,18 @@ import { BookOpenText, Clock3, GitMerge, MessageSquareText, Radar, Wrench } from
 import { Button } from './ui/button';
 
 const NAV_ITEMS = [
-  { id: 'studio', label: 'Nghiên cứu', icon: MessageSquareText },
+  { id: 'studio', label: 'Research', icon: MessageSquareText },
   { id: 'intelligence', label: 'Intelligence', icon: Radar },
-  { id: 'canvas', label: 'Quy trình', icon: GitMerge },
-  { id: 'catalog', label: 'Công cụ', icon: Wrench },
-  { id: 'runs', label: 'Lịch sử', icon: Clock3 }
+  { id: 'canvas', label: 'Workflow', icon: GitMerge },
+  { id: 'catalog', label: 'Tools', icon: Wrench },
+  { id: 'runs', label: 'History', icon: Clock3 }
 ];
 
 export default function Sidebar({ activeTab, setActiveTab }) {
   return (
-    <aside className="workspace-sidebar" aria-label="Điều hướng chính">
+    <aside className="workspace-sidebar" aria-label="Primary navigation">
       <div>
-        <p className="sidebar-section-label">Không gian làm việc</p>
+        <p className="sidebar-section-label">Workspace</p>
         <nav className="sidebar-nav">
           {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
             const isActive = activeTab === id;
@@ -37,7 +37,7 @@ export default function Sidebar({ activeTab, setActiveTab }) {
 
       <div className="sidebar-note">
         <BookOpenText aria-hidden="true" />
-        <span>Đặt câu hỏi, xem lại kế hoạch rồi nhận báo cáo nghiên cứu có nguồn.</span>
+        <span>Ask a question, review the plan, then receive a sourced research report.</span>
       </div>
     </aside>
   );
