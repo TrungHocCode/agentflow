@@ -52,7 +52,8 @@ VOID_TAGS = {
     "track",
     "wbr",
 }
-TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote"}
+TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote",
+                   "td", "th", "dt", "dd", "caption"}
 BOILERPLATE_MARKERS = re.compile(
     r"(?:^|[-_\s])(?:breadcrumb|cookie|consent|advert|ads|social|share|related|comments?|sidebar|"
     r"pagination|subscribe|popup|modal|promo|menu)(?:$|[-_\s])",
@@ -416,7 +417,9 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
     )
     body = "\n\n".join(paragraphs)
     fallback_body = HTMLContentExtractor._normalize_text(" ".join(parser.fallback_text))
-    if len(body) < MIN_ARTICLE_TEXT_LENGTH and len(fallback_body) >= MIN_ARTICLE_TEXT_LENGTH:
+    # Block-level extraction can miss content rendered in generic containers (e.g. pricing
+    # cards inside <div>/<span>); use the full visible text when it is substantially richer.
+    if len(fallback_body) >= MIN_ARTICLE_TEXT_LENGTH and len(fallback_body) > len(body) * 1.3:
         body = fallback_body
         markdown = fallback_body
         paragraphs = [fallback_body]
