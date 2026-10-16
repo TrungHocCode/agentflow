@@ -1089,6 +1089,7 @@ export default function App() {
                 setIsResultsOpen(true);
               }}
               onViewRunDetails={() => setActiveTab('runs')}
+              onWatchlistCreated={() => setActiveTab('intelligence')}
             />
           )}
 

@@ -16,6 +16,7 @@ import {
   XCircle
 } from 'lucide-react';
 import StructuredText from './StructuredText';
+import ChatWatchlistProposal from './ChatWatchlistProposal';
 import WorkflowProgressGraph from './WorkflowProgressGraph';
 import { Attachment, AttachmentAction, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentMedia, AttachmentTitle } from './ui/attachment';
 import { Badge } from './ui/badge';
@@ -76,7 +77,8 @@ export default function ChatStudio({
   activeTurnId,
   activePlan,
   runStatus,
-  runId
+  runId,
+  onWatchlistCreated
 }) {
   const [inputPrompt, setInputPrompt] = useState('');
   const [liveThinkingSeconds, setLiveThinkingSeconds] = useState(0);
@@ -178,8 +180,9 @@ export default function ChatStudio({
                     <ArrowRight aria-hidden="true" />
                   </Button>
                 ))}
+                </div>
+                <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
               </div>
-            </div>
           ) : (
             messageGroups.map((group, groupIndex) => (
               <MessageGroup key={`${group.sender}-${groupIndex}`} className="chat-message-group">
