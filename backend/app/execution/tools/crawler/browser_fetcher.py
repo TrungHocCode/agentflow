@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from urllib.parse import urlparse
 
-from app.execution.tools.network_policy import MAX_REDIRECTS, validate_external_url
-from app.shared.collection_scope import scoped_collection
+from app.execution.tools.network_policy import MAX_REDIRECTS, validate_external_url, validate_redirect_target
 
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -49,9 +48,6 @@ class BrowserFetchError(RuntimeError):
 def render_page(url: str) -> RenderedPage:
     """Render one page with Chromium while applying outbound URL safeguards."""
 
-    if scoped_collection():
-        raise BrowserFetchError("ci_browser_scope_unsupported",
-                                "Browser fallback is disabled for exact-URL approved collection.")
     if os.getenv("AGENTFLOW_CRAWLER_BROWSER_ENABLED", "true").lower() in {"0", "false", "no"}:
         raise BrowserFetchError("browser_disabled", "Browser fallback is disabled by configuration.")
 
@@ -126,7 +122,12 @@ def render_page(url: str) -> RenderedPage:
                     host_key = (parsed.scheme, (parsed.hostname or "").lower(), port)
                     is_allowed = validated_hosts.get(host_key)
                     if is_allowed is None:
-                        _, error = validate_external_url(request.url)
+                        if request.is_navigation_request():
+                            _, error = validate_external_url(request.url)
+                        else:
+                            # Sub-resources (bundles, XHR) may live on the same site; keep
+                            # them bounded to the approved site plus SSRF checks.
+                            _, error = validate_redirect_target(safe_url, request.url)
                         is_allowed = error is None
                         validated_hosts[host_key] = is_allowed
                     if not is_allowed:
@@ -171,7 +172,7 @@ def render_page(url: str) -> RenderedPage:
 
                 page.wait_for_timeout(settle_ms)
                 final_url = page.url or safe_url
-                final_url, final_url_error = validate_external_url(final_url)
+                final_url, final_url_error = validate_redirect_target(safe_url, final_url)
                 if final_url_error or not final_url:
                     raise BrowserFetchError(
                         "browser_final_url_blocked",
