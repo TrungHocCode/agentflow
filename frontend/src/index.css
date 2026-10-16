@@ -514,6 +514,9 @@ h1, h2, h3, h4 {
 
 /* Page structure shared by the research, catalog, flow and run screens. */
 .page-frame { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 1.1rem; overflow: auto; padding: clamp(1rem, 2vw, 1.75rem); }
+/* Flex children (e.g. Card, which sets overflow:hidden) would otherwise shrink to a
+   zero automatic minimum and clip their content instead of letting the page scroll. */
+.page-frame > * { flex-shrink: 0; }
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
 .page-heading__copy { min-width: 0; }
 .page-eyebrow { margin-bottom: 0.35rem; color: var(--accent-emerald); font-size: 0.68rem; font-weight: 750; letter-spacing: 0.12em; text-transform: uppercase; }
