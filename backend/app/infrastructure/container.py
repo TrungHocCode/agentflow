@@ -153,10 +153,13 @@ def build_run_service(session: AsyncSession | None = None) -> RunService:
 
 def build_ci_loop_hooks(run_service: RunService) -> CILoopHooks:
     """Compose CI live-loop hooks over durable snapshot/round/brief and research storage."""
-    snapshots = PostgresSnapshotRepository(blobs=SnapshotFileStore())
-    briefs = BriefService(PostgresBriefRepository(), snapshots, BriefFileStore(), run_service)
-    return CILoopHooks(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshots), briefs,
-                       PostgresResearchRepository(), LocalArtifactStorage(),
+    snapshot_repository = PostgresSnapshotRepository(blobs=SnapshotFileStore())
+    # The live loop drives domain operations (capture/compare/promote), so it needs
+    # the snapshot service, not the raw repository.
+    snapshots = SnapshotService(snapshot_repository)
+    briefs = BriefService(PostgresBriefRepository(), snapshot_repository, BriefFileStore(), run_service)
+    return CILoopHooks(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshot_repository),
+                       briefs, PostgresResearchRepository(), LocalArtifactStorage(),
                        agent_profiles=PostgresAgentProfileProvider())
 
 

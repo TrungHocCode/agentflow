@@ -70,6 +70,17 @@ class TestLoopScope(unittest.TestCase):
         self.assertIsNone(CILoopHooks.ci_scope(scoped))
 
 
+class TestLoopWiring(unittest.TestCase):
+    def test_live_loop_receives_snapshot_service(self) -> None:
+        """The hook drives domain operations, so it must get the service, not the repository."""
+        from app.infrastructure.container import build_ci_loop_hooks
+
+        hooks = build_ci_loop_hooks(MagicMock())
+        self.assertTrue(hasattr(hooks.snapshots, "capture"))
+        self.assertTrue(hasattr(hooks.snapshots, "compare_source"))
+        self.assertTrue(hasattr(hooks.snapshots, "promote"))
+
+
 class TestTaskHook(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.hooks = hooks_fixture()
