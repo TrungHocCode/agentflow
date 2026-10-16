@@ -1,5 +1,12 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 from pydantic import Field, model_validator
+
+# Resolve relative artifact paths against the repository root so the API and the
+# background worker agree regardless of their working directory.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
@@ -71,6 +78,14 @@ class Settings(BaseSettings):
             raise ValueError("Output reservation and safety margin must leave a usable input context.")
         if self.RESEARCH_MAP_OUTPUT_TOKENS > self.LLM_OUTPUT_TOKENS:
             raise ValueError("Map output must fit inside the reserved LLM output budget.")
+        return self
+
+    @model_validator(mode="after")
+    def resolve_artifact_root(self) -> "Settings":
+        root = Path(self.ARTIFACT_ROOT)
+        if not root.is_absolute():
+            root = _REPO_ROOT / root
+        self.ARTIFACT_ROOT = str(root)
         return self
 
     class Config:

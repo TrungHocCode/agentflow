@@ -5,6 +5,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
@@ -143,6 +144,27 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         tasks = await self.hooks.on_task_completed(self.run, researcher_task(), "done")
         self.assertEqual(tasks, [])
         self.hooks.investigations.propose_round.assert_not_awaited()
+
+    async def test_catalog_uuid_task_resolves_role_and_captures(self) -> None:
+        """A workflow-seeded task carries the catalog UUID, not the role name."""
+        provider = AsyncMock()
+        provider.get_agent = AsyncMock(return_value=SimpleNamespace(name="source_researcher"))
+        self.hooks.agent_profiles = provider
+        snapshot = MagicMock()
+        snapshot.id = uuid4()
+        self.hooks.snapshots.capture = AsyncMock(return_value=(MagicMock(), snapshot))
+        comparison = MagicMock()
+        comparison.outcome = "no_change"
+        self.hooks.snapshots.compare_source = AsyncMock(return_value=(comparison, []))
+        self.hooks.snapshots.finalize_source = AsyncMock(return_value=comparison)
+        self.hooks.research.list_results = AsyncMock(
+            return_value=[self.document("https://rival.invalid/pricing")])
+        agent_uuid = str(uuid4())
+        task = Task(id=1, node=agent_uuid, agent_id=agent_uuid, tool_names=["news_crawler"],
+                    description="Collect", status="done")
+        await self.hooks.on_task_completed(self.run, task, "done")
+        provider.get_agent.assert_awaited_with(agent_uuid)
+        self.hooks.snapshots.capture.assert_awaited()
 
 
 class TestRunHook(unittest.IsolatedAsyncioTestCase):

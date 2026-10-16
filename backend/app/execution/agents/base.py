@@ -806,8 +806,12 @@ class WorkerAgent(BaseAgent):
             final_result = processor.bundle.model_dump(mode="json")
             if status != "failed":
                 if not processor.bundle.claims:
-                    status = "failed"
-                    error_msg = "No validated source-backed evidence was collected; search results alone are insufficient."
+                    if (current_task.config or {}).get("ci_collection"):
+                        status = "partial"
+                        error_msg = "Sources were collected for this CI run; no evidence claims were extracted."
+                    else:
+                        status = "failed"
+                        error_msg = "No validated source-backed evidence was collected; search results alone are insufficient."
                 elif processor.bundle.status != "complete":
                     status = "partial"
                     error_msg = "Evidence extraction is partial; inspect chunk coverage and warnings."
