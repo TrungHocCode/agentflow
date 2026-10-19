@@ -7,3 +7,10 @@ frontend/dist/
 frontend/.vite/
 .zcode
 workspace_data/
+
+# Subagent scratch output (audit logs, diffs, workflow scripts) is local-only.
+.pi/audit/
+
+# Local dev process logs.
+api.log
+worker.log

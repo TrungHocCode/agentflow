@@ -122,6 +122,54 @@ Quy trình thêm Tool / Agent / API Endpoint được định nghĩa dưới d�
 - `/add-agent` → `.agent/workflows/add-agent.md`
 - `/add-api-endpoint` → `.agent/workflows/add-api-endpoint.md`
 
+## Subagent Routing
+
+Roster định nghĩa trong `.pi/agents/`, model routing trong `.pi/settings.json`, tổng quan trong `.pi/SUBAGENTS.md`. Section này **authorize** việc delegate: agent được phép tự route task sang subagent theo bảng dưới đây mà không cần hỏi lại từng lần.
+
+Parent agent giữ quyền cuối: quyết định synthesis, tự apply fix, và không để subagent tự spawn tiếp subagent.
+
+### Route theo loại task
+
+| Task | Agent |
+| --- | --- |
+| Task nhỏ, một file, đọc là ra | Parent tự làm — không delegate |
+| "X ở đâu / hoạt động thế nào" | `recon` |
+| "Nên thiết kế thế nào" / đổi contract, `State`, module boundary | `plan-architect` |
+| Sửa `backend/app/**` | `py-writer` |
+| Sửa `frontend/**` | `frontend-writer` |
+| Test mới hoặc test đỏ | `test-writer` |
+| Rename, lint fix, danh sách finding đã liệt kê | `fix-runner` |
+| Review bất kỳ diff | `review-correctness` |
+
+### Review fanout cộng thêm
+
+Luôn thêm vào `review-correctness` khi diff chạm đúng vùng:
+
+| Diff chạm | Thêm agent |
+| --- | --- |
+| `execution/**` hoặc ranh giới giữa các module | `review-contract` |
+| Tools, crawler, HTTP, file IO, auth, secrets | `review-security` |
+| Thêm LLM call, vòng lặp, query mới | `review-performance` |
+| `frontend/**` | `review-ui` |
+| Có claim về test coverage | `review-tests` |
+
+### Flow chuẩn
+
+```
+Backend feature:  recon → plan-architect → py-writer → test-writer
+                  → review-correctness + review-contract + review-tests → fix-runner
+Frontend:         recon → frontend-writer → review-ui → review-correctness
+Cleanup rõ ràng:  fix-runner → review-correctness
+```
+
+### Ranh giới bắt buộc
+
+- Chỉ `test-writer` được sửa `tests/**` và `integration_tests/**`; không nới assertion để lấy green.
+- Writer không đụng `workspace_data/`, `.venv/`, `node_modules/`, `dist/`, `docs/`; không commit, không push.
+- Reviewer là read-only, phải cite `path:line` kèm proof; chỉ nêu lệnh test, không chạy full suite.
+- Writer escalate quyết định product/architecture/scope chưa được duyệt qua `contact_supervisor` thay vì tự quyết.
+- Mọi lane phải tuân thủ hai-phase execution, `State` reducer, registry pattern, `<tool_output>` wrapping, `workspace_data/` sandbox, và network guard của unit suite.
+
 ## State Schema Reference
 
 ```python

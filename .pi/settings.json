@@ -1,0 +1,25 @@
+{
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "subagents": {
+    "defaultModel": "opencode-go/gpt-6-luna",
+    "defaultThinking": "medium",
+    "agentOverrides": {
+      "scout": { "model": "opencode-go/gpt-6-luna", "thinking": "low" },
+      "worker": { "model": "opencode-go/kimi-k2.7-code", "thinking": "high" },
+      "reviewer": { "model": "opencode-go/qwen3.8-max", "thinking": "high" },
+      "oracle": { "model": "opencode-go/deepseek-v4-pro", "thinking": "high" },
+      "recon": { "model": "opencode-go/gpt-6-luna", "thinking": "low" },
+      "fix-runner": { "model": "opencode-go/gpt-6-luna", "thinking": "low" },
+      "py-writer": { "model": "opencode-go/kimi-k2.7-code", "thinking": "high" },
+      "test-writer": { "model": "opencode-go/deepseek-v4.1-flash", "thinking": "high" },
+      "frontend-writer": { "model": "opencode-go/gpt-6-luna", "thinking": "high" },
+      "review-correctness": { "model": "opencode-go/qwen3.8-max", "thinking": "high" },
+      "review-contract": { "model": "opencode-go/deepseek-v4-pro", "thinking": "high" },
+      "review-security": { "model": "opencode-go/glm-5.3", "thinking": "high" },
+      "review-tests": { "model": "opencode-go/gpt-6-luna", "thinking": "medium" },
+      "review-performance": { "model": "opencode-go/kimi-k2.7-code", "thinking": "medium" },
+      "review-ui": { "model": "opencode-go/gpt-6-luna", "thinking": "medium" },
+      "plan-architect": { "model": "opencode-go/deepseek-v4-pro", "thinking": "high" }
+    }
+  }
+}
