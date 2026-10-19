@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import ValidationError
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.execution.agents.base import WorkerAgent
 from app.execution.context_budget import ContextBudgetExceeded, guard_structured_context
 from app.execution.research_contracts import (
@@ -21,7 +21,8 @@ from app.execution.research_presentation import EvidenceReport, render_evidence_
 from app.execution.research_reduction import EvidenceReducer
 from app.execution.research_validation import source_spans, validate_candidate
 from app.execution.run_budget import (
-    RunBudget, RunBudgetExceeded, RunNoLongerActive, bounded_invoke, bounded_operation, run_budget_scope,
+    MAX_ACTIVE_CHECK_INTERVAL_SECONDS, RunBudget, RunBudgetExceeded, RunNoLongerActive, bounded_invoke,
+    bounded_operation, run_budget_scope,
 )
 from app.execution.state import Task
 from app.execution.tools.contracts import SourceMetadata, success_result, failure_result
@@ -41,6 +42,24 @@ def claim(identity: str = "e1", subject: str = "Alpha") -> EvidenceClaim:
                          source_url="https://fixture.invalid/docs", claim=excerpt, excerpt=excerpt,
                          start_offset=0, end_offset=len(excerpt), subject=subject,
                          metric="context length", value_text="262,144", unit="tokens")
+
+
+class _FakeClock:
+    """Deterministic replacement for the ``monotonic`` callable used by run budgets.
+
+    Tests advance it explicitly, so active-check throttling assertions never depend on
+    wall-clock scheduling.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.start = start
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
 
 
 class TestCIPhaseOneContracts(IsolatedAsyncioTestCase):
@@ -239,6 +258,129 @@ class TestCIPhaseOneContracts(IsolatedAsyncioTestCase):
         with run_budget_scope(RunBudget(10, 10000, 10, check)), self.assertRaises(RunNoLongerActive):
             await bounded_operation(slow)
 
+    async def test_active_check_interval_throttles_repeated_status_reads(self) -> None:
+        clock = _FakeClock()
+        checks = AsyncMock()
+        budget = RunBudget(10, 10000, 10, checks, active_check_interval_seconds=1.0)
+        with patch("app.execution.run_budget.monotonic", clock):
+            await budget.ensure_active()
+            await budget.ensure_active()
+            clock.advance(0.9)
+            await budget.ensure_active()
+            self.assertEqual(checks.await_count, 1)
+            clock.advance(0.2)
+            await budget.ensure_active()
+            await budget.ensure_active()
+            self.assertEqual(checks.await_count, 2)
+
+    async def test_active_check_interval_still_runs_the_first_check(self) -> None:
+        clock = _FakeClock()
+        checks = AsyncMock()
+        budget = RunBudget(10, 10000, 10, checks,
+                           active_check_interval_seconds=MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+        with patch("app.execution.run_budget.monotonic", clock):
+            await budget.ensure_active()
+        self.assertEqual(checks.await_count, 1)
+
+    async def test_zero_active_check_interval_checks_on_every_call(self) -> None:
+        clock = _FakeClock()
+        checks = AsyncMock()
+        budget = RunBudget(10, 10000, 10, checks, active_check_interval_seconds=0.0)
+        with patch("app.execution.run_budget.monotonic", clock):
+            for _ in range(4):
+                await budget.ensure_active()
+        self.assertEqual(checks.await_count, 4)
+
+    async def test_active_check_without_callback_is_a_noop(self) -> None:
+        budget = RunBudget(1, 100, 10)
+        self.assertIsNone(await budget.ensure_active())
+        self.assertIsNone(budget.check_active)
+
+    def test_negative_active_check_interval_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            RunBudget(1, 100, 10, None, -1.0)
+
+    def test_active_check_interval_boundaries_are_accepted(self) -> None:
+        """The ceiling is inclusive: only values strictly above it are rejected."""
+        for interval in (0.0, 1.0, MAX_ACTIVE_CHECK_INTERVAL_SECONDS):
+            with self.subTest(interval=interval):
+                budget = RunBudget(1, 100, 10, None, interval)
+                self.assertEqual(budget.active_check_interval_seconds, interval)
+
+    def test_non_finite_or_out_of_range_active_check_intervals_are_rejected(self) -> None:
+        """``inf`` must be rejected: ``now - last < inf`` is always true.
+
+        An infinite interval would allow exactly one active check per budget lifetime, so
+        cancellation would never be observed again for that run; the constructor fails
+        fast instead. ``nan`` is rejected for the same reason (every comparison with it is
+        false, so the throttle silently stops working).
+        """
+        for interval in (2.5, -1.0, float("inf"), float("nan")):
+            with self.subTest(interval=interval):
+                with self.assertRaises(ValueError):
+                    RunBudget(1, 100, 10, None, interval)
+
+    async def test_cancellation_is_detected_past_the_active_check_interval(self) -> None:
+        clock = _FakeClock()
+        active = True
+        async def check() -> None:
+            if not active:
+                raise RunNoLongerActive("cancelled")
+        async def work() -> str:
+            nonlocal active
+            active = False
+            clock.advance(2.0)
+            return "finished"
+        with patch("app.execution.run_budget.monotonic", clock):
+            # The budget must be constructed INSIDE the patch. ``RunBudget.started`` samples
+            # ``monotonic()`` in ``__init__``: built outside, it records real machine uptime
+            # (e.g. 484132.7) while the fake clock starts at 1000.0. ``reserve()`` then sees
+            # 1000.0 - 484132.7 >= 10 on a long-uptime host (passes), but 1000.0 - 5 >= 10 on
+            # a freshly booted CI VM, raising RunBudgetExceeded instead of RunNoLongerActive.
+            # RunBudgetExceeded is not a RunNoLongerActive subclass, so the test errors on CI
+            # while passing locally.
+            budget = RunBudget(10, 10000, 10, check, active_check_interval_seconds=1.0)
+            self.assertEqual(budget.started, clock.start)  # fake clock, not real uptime
+            with run_budget_scope(budget), self.assertRaises(RunNoLongerActive) as raised:
+                await bounded_operation(work)
+        self.assertEqual(raised.exception.code, "run_cancelled")
+        self.assertNotIsInstance(raised.exception, RunBudgetExceeded)
+
+    def test_budget_snapshot_excludes_tuning_knob_and_keeps_interval_attribute(self) -> None:
+        """The persisted ``metadata["run_budget"]`` record is cumulative accounting only.
+
+        It is read back as an audit record, so it must not grow tuning knobs: the active-check
+        interval stays on the instance attribute and out of the snapshot.
+        """
+        budget = RunBudget(2, 100, 5, None, MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+        snapshot = budget.snapshot()
+        self.assertNotIn("active_check_interval_seconds", snapshot)
+        self.assertEqual(budget.active_check_interval_seconds, MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+        self.assertEqual(set(snapshot), {"calls", "reserved_estimated_tokens", "max_calls",
+                                         "max_estimated_tokens", "max_seconds", "elapsed_seconds",
+                                         "counting_method"})
+
+    def test_config_ceiling_matches_the_library_ceiling(self) -> None:
+        """Config and library bounds must not drift apart.
+
+        No environment variable is read or mutated: the field value is injected directly so
+        the assertion holds whatever the ambient ``.env`` says.
+        """
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None,
+                     RUN_ACTIVE_CHECK_INTERVAL_SECONDS=MAX_ACTIVE_CHECK_INTERVAL_SECONDS + 0.5)
+        accepted = Settings(_env_file=None,
+                            RUN_ACTIVE_CHECK_INTERVAL_SECONDS=MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+        self.assertEqual(accepted.RUN_ACTIVE_CHECK_INTERVAL_SECONDS, MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+
+    def test_configured_active_check_interval_is_accepted_by_the_budget(self) -> None:
+        """The production default must pass library validation at construction time."""
+        configured = settings.RUN_ACTIVE_CHECK_INTERVAL_SECONDS
+        self.assertGreaterEqual(configured, 0.0)
+        self.assertLessEqual(configured, MAX_ACTIVE_CHECK_INTERVAL_SECONDS)
+        budget = RunBudget(1, 100, 10, None, configured)  # must not raise ValueError
+        self.assertEqual(budget.active_check_interval_seconds, configured)
+
     async def test_run_deadline_persists_failure_and_duplicate_does_not_erase_budget(self) -> None:
         repository = PostgresRunRepository()
         run = RunDocument(run_id="ci-budget-fixture", flow_id="fixture", user_id="owner", status="queued",
@@ -284,3 +426,65 @@ class TestCIPhaseOneContracts(IsolatedAsyncioTestCase):
             if not execution.done():
                 execution.cancel()
             await asyncio.gather(execution, return_exceptions=True)
+
+    async def test_queued_run_throttles_status_reads_across_poll_ticks(self) -> None:
+        """P0 regression: a long node must not re-read run status on every 250 ms tick.
+
+        The fake execution port waits 0.6 s of real time before ending, so ``bounded_stream``
+        performs at least three 0.25 s poll iterations plus the unconditional pre-loop check:
+        four ``ensure_active`` attempts. A naive implementation would issue four status reads.
+
+        The throttle is measured with a FROZEN ``monotonic`` for the whole call, so the
+        assertion is independent of how long the run takes on a stalled runner: every attempt
+        after the first sees ``now - last == 0.0 < 1.0`` and is suppressed. Arithmetic of the
+        exact bound: repository reads are 1 budget-setup snapshot read in
+        ``execute_queued_run`` plus 1 active check = 2 total, so ``get_calls - 1 == 1``.
+        """
+        poll_seconds = 0.6
+        poll_interval_seconds = 1.0
+        frozen_clock = _FakeClock()
+
+        class PollingExecution:
+            async def execute_run(self, run_id: str, state: dict):
+                await asyncio.sleep(poll_seconds)
+                for chunk in ():
+                    yield chunk
+
+        class CountingRunRepository(PostgresRunRepository):
+            def __init__(self) -> None:
+                super().__init__()
+                self.get_calls = 0
+
+            async def get(self, run_id: str, user_id: str | None = None) -> RunDocument | None:
+                self.get_calls += 1
+                return await super().get(run_id, user_id)
+
+        class CountingRunBudget(RunBudget):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self.active_check_attempts = 0
+                created.append(self)
+
+            async def ensure_active(self) -> None:
+                self.active_check_attempts += 1
+                await super().ensure_active()
+
+        created: list[CountingRunBudget] = []
+        repository = CountingRunRepository()
+        run = RunDocument(run_id="throttled-active-check-fixture", flow_id="fixture", user_id="owner",
+                          status="queued",
+                          plan=[Task(id=1, node="worker", status="done", description="slow node")])
+        await repository.save(run)
+        service = RunService(repository, None, PollingExecution())
+        with patch.object(settings, "RUN_ACTIVE_CHECK_INTERVAL_SECONDS", poll_interval_seconds), \
+                patch("app.modules.runs.service.RunBudget", CountingRunBudget), \
+                patch("app.execution.run_budget.monotonic", frozen_clock):
+            result = await service.execute_queued_run(run.run_id)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(created), 1)
+        attempts = created[0].active_check_attempts
+        active_reads = repository.get_calls - 1  # minus the budget-setup snapshot read
+        self.assertEqual(created[0].started, frozen_clock.start)
+        self.assertGreaterEqual(attempts, 4)
+        self.assertEqual(active_reads, 1)
+        self.assertLess(active_reads, attempts)

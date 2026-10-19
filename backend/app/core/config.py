@@ -7,6 +7,12 @@ from pydantic import Field, model_validator
 # background worker agree regardless of their working directory.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# Upper bound for the run-budget active-check throttle. Cooperative cancellation is
+# detected within this interval plus one 0.25s poll tick, so it stays below the
+# documented 2s cancellation bound. Owned by core so the config field and the
+# execution-side validator cannot drift apart.
+MAX_ACTIVE_CHECK_INTERVAL_SECONDS = 2.0
+
 
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
@@ -45,6 +51,12 @@ class Settings(BaseSettings):
     MAX_RUN_DURATION: int = Field(default=3600, ge=1, le=86400)
     MAX_RUN_LLM_CALLS: int = Field(default=64, ge=1, le=4096)
     MAX_RUN_ESTIMATED_TOKENS: int = Field(default=262144, ge=1024, le=16777216)
+    # Throttle status re-reads from PostgreSQL during long inference calls.
+    # Cooperative cancellation is detected within this interval plus one 0.25s poll tick,
+    # so the ceiling stays at 2.0s to keep the documented cancellation bound honest.
+    RUN_ACTIVE_CHECK_INTERVAL_SECONDS: float = Field(
+        default=1.0, ge=0.0, le=MAX_ACTIVE_CHECK_INTERVAL_SECONDS
+    )
     MAX_TASK_CONCURRENCY: int = 1
     MAX_REQUEST_BODY_BYTES: int = 1_048_576
     MAX_WORKFLOW_STEPS: int = 50

@@ -2,14 +2,28 @@
 
 import asyncio
 import json
+import math
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from time import monotonic
 from typing import Any, AsyncGenerator
 
-from app.core.config import settings
+from app.core.config import MAX_ACTIVE_CHECK_INTERVAL_SECONDS, settings
 from app.execution.context_budget import estimate_tokens, request_estimate
+
+
+__all__ = [
+    "MAX_ACTIVE_CHECK_INTERVAL_SECONDS",
+    "RunBudget",
+    "RunBudgetExceeded",
+    "RunNoLongerActive",
+    "bounded_invoke",
+    "bounded_operation",
+    "bounded_stream",
+    "current_budget",
+    "run_budget_scope",
+]
 
 
 class RunBudgetExceeded(ValueError):
@@ -25,12 +39,27 @@ class RunBudget:
 
     This is an admission estimate, not provider token usage. No reservation is refunded after
     cancellation/failure; accepted runs are not automatically replayed after process loss.
+
+    The optional ``check_active`` callback is throttled by ``active_check_interval_seconds``
+    so long-running bounded operations can still detect cancellation without re-reading run
+    status from PostgreSQL on every poll tick. The interval is capped at
+    ``MAX_ACTIVE_CHECK_INTERVAL_SECONDS`` because cooperative cancellation is detected within
+    the interval plus one 0.25s poll tick.
     """
 
     def __init__(self, max_calls: int, max_tokens: int, max_seconds: float,
-                 check_active: Callable[[], Awaitable[None]] | None = None) -> None:
+                 check_active: Callable[[], Awaitable[None]] | None = None,
+                 active_check_interval_seconds: float = 0.0) -> None:
+        if (not math.isfinite(active_check_interval_seconds)
+                or not 0.0 <= active_check_interval_seconds <= MAX_ACTIVE_CHECK_INTERVAL_SECONDS):
+            raise ValueError(
+                "active_check_interval_seconds must be a finite value between 0 and "
+                f"{MAX_ACTIVE_CHECK_INTERVAL_SECONDS} seconds."
+            )
         self.max_calls, self.max_tokens, self.max_seconds = max_calls, max_tokens, max_seconds
         self.check_active = check_active
+        self.active_check_interval_seconds = active_check_interval_seconds
+        self._last_active_check: float | None = None
         self.started = monotonic()
         self.calls = 0
         self.reserved_tokens = 0
@@ -46,6 +75,19 @@ class RunBudget:
                 raise RunBudgetExceeded("Run inference call/token admission budget exhausted.")
             self.calls += 1
             self.reserved_tokens += estimated_tokens
+
+    async def ensure_active(self) -> None:
+        """Await the cancellation callback, throttled to the configured interval."""
+        if self.check_active is None:
+            return
+        now = monotonic()
+        if (
+            self._last_active_check is not None
+            and now - self._last_active_check < self.active_check_interval_seconds
+        ):
+            return
+        self._last_active_check = now
+        await self.check_active()
 
     def snapshot(self) -> dict[str, Any]:
         return {"calls": self.calls, "reserved_estimated_tokens": self.reserved_tokens,
@@ -75,8 +117,7 @@ async def bounded_operation(factory: Callable[[], Awaitable[Any]], estimated_tok
     budget = current_budget()
     if budget is None:
         return await factory()
-    if budget.check_active:
-        await budget.check_active()
+    await budget.ensure_active()
     budget.reserve(estimated_tokens, inference)
     operation = asyncio.ensure_future(factory())
     try:
@@ -85,8 +126,7 @@ async def bounded_operation(factory: Callable[[], Awaitable[Any]], estimated_tok
             if remaining <= 0:
                 raise RunBudgetExceeded("Run wall-clock budget exhausted.")
             done, _ = await asyncio.wait({operation}, timeout=min(remaining, 0.25))
-            if budget.check_active:
-                await budget.check_active()
+            await budget.ensure_active()
             if done:
                 return operation.result()
     finally:

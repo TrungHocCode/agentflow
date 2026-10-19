@@ -769,9 +769,13 @@ class RunService:
         snapshot = await self.get_run(run_id)
         frozen = snapshot.input_data.get("competitive_intelligence", {}) if snapshot and snapshot.watchlist_id else {}
         limits = frozen.get("config", {}).get("budget", {})
-        budget = RunBudget(min(settings.MAX_RUN_LLM_CALLS, limits.get("max_llm_calls", settings.MAX_RUN_LLM_CALLS)),
+        budget = RunBudget(
+            min(settings.MAX_RUN_LLM_CALLS, limits.get("max_llm_calls", settings.MAX_RUN_LLM_CALLS)),
             min(settings.MAX_RUN_ESTIMATED_TOKENS, limits.get("max_total_tokens", settings.MAX_RUN_ESTIMATED_TOKENS)),
-            min(settings.MAX_RUN_DURATION, limits.get("max_duration_seconds", settings.MAX_RUN_DURATION)), check_active)
+            min(settings.MAX_RUN_DURATION, limits.get("max_duration_seconds", settings.MAX_RUN_DURATION)),
+            check_active,
+            active_check_interval_seconds=settings.RUN_ACTIVE_CHECK_INTERVAL_SECONDS,
+        )
         urls = frozen.get("approved_urls") if snapshot and snapshot.watchlist_id else None
         with bind_context(run_id=run_id), artifact_scope(run_id), run_budget_scope(budget), collection_scope(urls):
             result = await self._execute_queued_run(run_id)
