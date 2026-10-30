@@ -73,6 +73,40 @@ services:
       db-init:
         condition: service_completed_successfully
 
+  scheduler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_CRAWLER_BROWSER: "true"
+    container_name: agentflow_scheduler
+    restart: always
+    command: ["python", "-m", "app.workers.schedule_worker"]
+    environment:
+      - POSTGRES_URL=postgresql+asyncpg://agentflow:agentflow_password@postgres:5432/agentflow_db
+      - MONGO_URL=mongodb://agentflow:agentflow_password@mongodb:27017/agentflow_runs?authSource=admin
+      - ENABLE_MONGODB=false
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
+      - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
+      - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
+      - ARTIFACT_ROOT=/app/workspace_data
+      - MAX_RUN_DURATION=${MAX_RUN_DURATION:-3600}
+      - MAX_RUN_LLM_CALLS=${MAX_RUN_LLM_CALLS:-64}
+      - MAX_RUN_ESTIMATED_TOKENS=${MAX_RUN_ESTIMATED_TOKENS:-262144}
+      - AUTH_SIGNING_SECRET=${AUTH_SIGNING_SECRET:?Set AUTH_SIGNING_SECRET in .env before starting Compose}
+      - AGENTFLOW_CRAWLER_BROWSER_ENABLED=true
+    volumes:
+      - artifacts_data:/app/workspace_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+
   db-init:
     build:
       context: .

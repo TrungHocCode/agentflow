@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from integration_tests.environment import require_integration_environment
 
@@ -25,8 +25,10 @@ from app.infrastructure.postgres.workflow_repository import PostgresWorkflowRepo
 from app.modules.competitive_intelligence.models import CreateWatchlist
 from app.modules.competitive_intelligence.scheduling_service import SchedulingService
 from app.modules.competitive_intelligence.service import IntelligenceService
+from app.modules.runs.models import RunDocument
 from app.modules.workflows.contract import normalize_workflow_definition
 from app.modules.workflows.validator import validate_workflow_references
+from app.shared.errors import ConflictError
 
 NOW = datetime(2026, 10, 9, tzinfo=timezone.utc)
 
@@ -88,6 +90,56 @@ class TestCIRealScheduling(unittest.IsolatedAsyncioTestCase):
             UpdateSchedule(active=False), NOW)
         self.assertFalse(updated.active)
         self.assertEqual(await self.repository.claim_due(NOW + timedelta(days=30)), [])
+
+    async def _due_schedule(self):
+        """Create one due schedule and deactivate this owner's other schedules."""
+        schedule = await self.repository.create_schedule(
+            str(self.watchlist.id), self.owner, "daily", "UTC", "08:00", None, NOW)
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    text("UPDATE ci_schedules SET active=false WHERE owner_id=:owner"),
+                    {"owner": self.owner},
+                )
+                await session.execute(
+                    text("UPDATE ci_schedules SET active=true, next_due_at=:due WHERE id=:id"),
+                    {"due": NOW - timedelta(minutes=5), "id": str(schedule.id)},
+                )
+        return schedule
+
+    async def test_tick_fires_once_then_skips_overlap_and_blocks_unapproved(self) -> None:
+        approved = self.watchlist.model_copy(update={
+            "current_revision": self.watchlist.current_revision.model_copy(
+                update={"approval_status": "approved"}),
+        })
+        run = RunDocument(run_id=str(uuid4()), flow_id="f", user_id=self.owner,
+                          workflow_version_id=self.version, status="queued", plan=[])
+        intelligence = AsyncMock()
+        intelligence.get = AsyncMock(return_value=approved)
+        intelligence.start = AsyncMock(return_value=run)
+        self.service.intelligence = intelligence
+
+        schedule = await self._due_schedule()
+        reports = await self.service.tick(NOW)
+        self.assertEqual(reports, [{"schedule_id": str(schedule.id), "outcome": "fired",
+                                    "run_id": run.run_id}])
+        intelligence.start.assert_awaited_once()
+        self.assertEqual(await self.service.tick(NOW), [])
+
+        schedule = await self._due_schedule()
+        intelligence.start = AsyncMock(side_effect=ConflictError(
+            "Active run.", code="watchlist_run_active"))
+        reports = await self.service.tick(NOW)
+        self.assertEqual(reports[0]["outcome"], "skipped")
+        self.assertIn("already active", reports[0]["reason"])
+
+        schedule = await self._due_schedule()
+        intelligence.get = AsyncMock(return_value=self.watchlist)
+        intelligence.start = AsyncMock()
+        reports = await self.service.tick(NOW)
+        self.assertEqual(reports[0]["outcome"], "blocked")
+        self.assertIn("not approved", reports[0]["reason"])
+        intelligence.start.assert_not_awaited()
 
     async def test_notifications_round_trip_and_isolation(self) -> None:
         stored = await self.repository.notify(self.owner, "schedule_fired", "Run started.",
