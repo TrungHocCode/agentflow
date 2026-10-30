@@ -249,7 +249,7 @@ class TestToolLab(unittest.TestCase):
         side_effect=lambda url: (url, None),
     )
     @patch("app.execution.tools.news_crawler_tool.crawl_url")
-    def test_listing_fails_if_no_linked_article_has_usable_body(self, mock_crawl, _mock_validate):
+    def test_listing_keeps_parent_content_when_no_linked_article_is_usable(self, mock_crawl, _mock_validate):
         listing_url = "https://example.com/news"
         listing_result = json.dumps({
             "ok": True,
@@ -273,9 +273,10 @@ class TestToolLab(unittest.TestCase):
 
         result = run_tool("news_crawler", {"url": listing_url, "max_articles": 1})
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.error.code, "no_articles_extracted")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status, "success")
         self.assertEqual(result.data["articles"][0]["status"], "not_article")
+        self.assertTrue(any("selected link" in warning for warning in result.metadata["warnings"]))
 
     def test_summarizer_prefers_crawled_article_text_over_listing_text(self):
         crawler_result = {
