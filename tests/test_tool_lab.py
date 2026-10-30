@@ -276,7 +276,7 @@ class TestToolLab(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.status, "success")
         self.assertEqual(result.data["articles"][0]["status"], "not_article")
-        self.assertTrue(any("selected link" in warning for warning in result.metadata["warnings"]))
+        self.assertTrue(any("selected link" in warning for warning in result.metadata.warnings))
 
     def test_summarizer_prefers_crawled_article_text_over_listing_text(self):
         crawler_result = {

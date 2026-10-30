@@ -23,13 +23,15 @@ def nav_pricing_page() -> str:
 
 
 def link_farm_index() -> str:
+    # Links in plain divs (like HN table cells), not <li>: they must not become
+    # text blocks, otherwise the page looks like an article with 12 paragraphs.
     items = "".join(
-        f'<li><a href="https://example.com/story-{index}">A fairly long and descriptive story title '
-        f"number {index} about local benchmarks</a></li>"
+        f'<div class="story"><a href="https://example.com/story-{index}">A fairly long and descriptive story title '
+        f"number {index} about local benchmarks</a><span>42 points by someone 3 hours ago</span></div>"
         for index in range(12)
     )
     return ("<html><head><title>News index</title></head><body>"
-            f"<ul>{items}</ul><p>Short index preamble.</p></body></html>")
+            f"{items}<p>Short index preamble.</p></body></html>")
 
 
 class TestListingClassification(unittest.TestCase):
