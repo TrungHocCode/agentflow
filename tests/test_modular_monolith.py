@@ -551,7 +551,7 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
                     if line.startswith("data: ")
                 )
             )
-            async for event in service.stream_run_events(document.run_id)
+            async for event in service.stream_run_events(document.run_id, document.user_id)
         ]
 
         self.assertTrue(events)

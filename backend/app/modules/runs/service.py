@@ -36,7 +36,7 @@ from app.modules.results.models import EvidenceRecord, ResultRecord
 from app.modules.results.ports import ArtifactStorage, ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
-from app.shared.errors import ConflictError, PersistenceError, ValidationError
+from app.shared.errors import ConflictError, PersistenceError, ResourceNotFoundError, ValidationError
 from app.shared.events import ExecutionEvent
 from app.shared.execution_metrics import (
     merge_execution_timings,
@@ -1079,12 +1079,20 @@ class RunService:
                 )
         return run_doc
 
+    async def _require_owned_run(self, run_id: str, user_id: str) -> RunDocument:
+        run_doc = await self.get_run(run_id, user_id=user_id)
+        if run_doc is None:
+            raise ResourceNotFoundError(f"Run {run_id} was not found.", entity="run")
+        return run_doc
+
     async def list_run_events(
         self,
         run_id: str,
+        user_id: str,
         after_event_id: str | None = None,
         limit: int = 200,
     ) -> List[ExecutionEvent]:
+        await self._require_owned_run(run_id, user_id)
         list_events = getattr(self.run_repository, "list_events", None)
         if list_events is None:
             return []
@@ -1094,12 +1102,14 @@ class RunService:
             limit=limit,
         )
 
-    async def list_run_results(self, run_id: str, limit: int = 200):
+    async def list_run_results(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_results(run_id, limit)
 
-    async def list_run_evidence(self, run_id: str, limit: int = 200):
+    async def list_run_evidence(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_evidence(run_id, limit)
@@ -1109,12 +1119,14 @@ class RunService:
             return None
         return await self.research_repository.get_evidence(evidence_id, run_id)
 
-    async def list_run_artifacts(self, run_id: str, limit: int = 200):
+    async def list_run_artifacts(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_artifacts(run_id, limit)
 
-    async def get_run_artifact(self, run_id: str, artifact_id: str):
+    async def get_run_artifact(self, run_id: str, artifact_id: str, user_id: str):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return None
         return await self.research_repository.get_artifact(artifact_id, run_id)
@@ -1122,21 +1134,12 @@ class RunService:
     async def stream_run_events(
         self,
         run_id: str,
+        user_id: str,
         after_event_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Observe persisted and live events; never starts execution."""
 
-        run_doc = await self.get_run(run_id)
-        if not run_doc:
-            yield self._sse_event(
-                run_id,
-                "error",
-                phase="run",
-                status="failed",
-                payload={"message": f"Run {run_id} not found"},
-                message=f"Run {run_id} not found",
-            )
-            return
+        run_doc = await self._require_owned_run(run_id, user_id)
 
         seen_ids: set[str] = set()
         if after_event_id is None:
@@ -1150,6 +1153,7 @@ class RunService:
 
         persisted_events = await self.list_run_events(
             run_id,
+            user_id,
             after_event_id=after_event_id,
         )
         for event in persisted_events:
@@ -1186,9 +1190,9 @@ class RunService:
                 )
             return
 
-        latest = await self.get_run(run_id)
+        latest = await self.get_run(run_id, user_id=user_id)
         if latest and latest.status in TERMINAL_RUN_STATUSES:
-            trailing = await self.list_run_events(run_id)
+            trailing = await self.list_run_events(run_id, user_id)
             for event in trailing:
                 if event.event_id not in seen_ids:
                     seen_ids.add(event.event_id)
@@ -1208,8 +1212,8 @@ class RunService:
                         timeout=1.0,
                     )
                 except asyncio.TimeoutError:
-                    latest = await self.get_run(run_id)
-                    trailing = await self.list_run_events(run_id)
+                    latest = await self.get_run(run_id, user_id=user_id)
+                    trailing = await self.list_run_events(run_id, user_id)
                     for trailing_event in trailing:
                         if trailing_event.event_id not in seen_ids:
                             seen_ids.add(trailing_event.event_id)
