@@ -3,6 +3,7 @@ import subprocess
 import os
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
+from app.core.config import settings
 from app.execution.tools.base import ToolRegistry
 
 
@@ -17,13 +18,15 @@ class PythonExecutorInput(BaseModel):
 @tool("python_executor", args_schema=PythonExecutorInput)
 def python_executor(code: str) -> str:
     """
-    Executes Python code in a safe subprocess and returns stdout/stderr.
-    Use this for calculations, data analysis, or running scripts.
+    Executes Python code in a subprocess without an OS/container sandbox.
+
+    The environment is allowlisted, but only timeouts and output caps constrain
+    execution; do not treat this as a security isolation boundary.
     """
     try:
         if not code or len(code) > MAX_CODE_CHARS:
             return f"Error: Code must be between 1 and {MAX_CODE_CHARS} characters."
-        workspace_dir = os.path.join(os.getcwd(), "workspace_data")
+        workspace_dir = settings.ARTIFACT_ROOT
         os.makedirs(workspace_dir, exist_ok=True)
         res = subprocess.run(
             [sys.executable, "-c", code],
@@ -31,7 +34,11 @@ def python_executor(code: str) -> str:
             text=True,
             timeout=EXECUTION_TIMEOUT_SECONDS,
             cwd=workspace_dir,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONIOENCODING": "utf-8",
+                "HOME": workspace_dir,
+            },
         )
         if res.returncode == 0:
             output = res.stdout if res.stdout else "Success (No output)."
