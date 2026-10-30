@@ -421,8 +421,7 @@ def _crawl_listing_articles(
 
     listing_data["articles"] = articles
     listing_data["article_count"] = success_count
-    has_failed_articles = success_count < len(selected_items)
-    if has_failed_articles:
+    if success_count < len(selected_items):
         warnings.append(
             f"Could not extract article content from {len(selected_items) - success_count} selected link(s)."
         )
@@ -435,18 +434,22 @@ def _crawl_listing_articles(
     })
 
     if success_count == 0:
-        result = failure_result(
-            "empty",
-            code="no_articles_extracted",
-            message="The listing was found, but none of the selected links produced usable article text.",
-            tool_name="news_crawler",
-            source=listing_result.source,
-            metadata=metadata,
-        ).model_copy(update={"data": listing_data})
-        return result.to_json()
+        # Child link failures are observations about the links, not about the
+        # parent page: keep the parent verdict and record them as warnings.
+        warnings.append(
+            "None of the selected links produced usable article text; "
+            "the listing content above is still returned."
+        )
+    metadata = listing_result.metadata.model_dump(exclude_none=True)
+    metadata.update({
+        "followed_link_count": len(selected_items),
+        "article_count": success_count,
+        "article_mode": article_mode,
+        "warnings": list(dict.fromkeys(warnings)),
+    })
 
     has_partial_article = any(article.get("status") == "partial" for article in articles)
-    status = "partial" if has_failed_articles or has_partial_article else "success"
+    status = "partial" if has_partial_article else "success"
     return success_result(
         listing_data,
         tool_name="news_crawler",
@@ -499,8 +502,14 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
     links = _build_listing_items(parser, url)
     warnings: list[str] = []
 
+    # A nav menu is not a listing: require the page body to be mostly link text,
+    # and never call a page with a substantial semantic (<main>/<article>) region
+    # a listing. Raw link counts alone misfire on pricing/nav pages.
+    link_text_chars = sum(len(str(item.get("title") or "")) for item in links)
+    link_dense = bool(body) and link_text_chars > len(body) * 0.4
     is_listing = (_is_hacker_news_listing(url) and bool(links)) or (
         len(links) >= 10 and len(body) < 6000 and len(paragraphs) < 8
+        and not use_semantic_region and link_dense
     )
     if is_listing:
         data = {

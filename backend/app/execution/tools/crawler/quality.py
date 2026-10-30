@@ -19,6 +19,15 @@ CHALLENGE_MARKERS = (
     "challenge-platform",
     "captcha-delivery",
     "access denied |",
+    # Login-wall shells: matched against raw HTML, so these only ever mark a
+    # capture challenged; short challenged captures are blocked downstream while
+    # long pages merely report the flag for the verdict logic.
+    "already have an account?",
+    "continue with google",
+    "continue with apple",
+    "continue with phone",
+    "email or username",
+    "create your account",
 )
 CLIENT_RENDER_MARKERS = (
     'id="root"',

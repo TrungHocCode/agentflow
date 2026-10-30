@@ -305,7 +305,7 @@ def _candidate_result(
         candidate["content_type"],
     )
 
-    if challenge_detected and len(content) < 80 and item_count == 0:
+    if challenge_detected and len(content) < 500 and item_count == 0:
         result = failure_result(
             "blocked",
             code="access_challenge_detected",
