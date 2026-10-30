@@ -1,7 +1,5 @@
 """Composition helpers for wiring concrete adapters into application services."""
 
-import os
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.execution.adapters import LangGraphExecutionAdapter
@@ -78,7 +76,7 @@ def build_health_service() -> HealthService:
 def build_run_queue() -> RunCommandQueue:
     """Select the Redis queue or deterministic local queue."""
 
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.REPOSITORY_BACKEND == "memory":
         return get_in_memory_queue()
     return RedisRunCommandQueue()
 
@@ -86,7 +84,7 @@ def build_run_queue() -> RunCommandQueue:
 def build_event_publisher() -> RunEventPublisher:
     """Select live fan-out implementation for the current deployment."""
 
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.REPOSITORY_BACKEND == "memory":
         return get_in_memory_publisher()
     return RedisRunEventPublisher()
 
@@ -125,7 +123,7 @@ def build_conversation_service(session: AsyncSession | None = None) -> Conversat
         workflow_repository=PostgresWorkflowRepository(session),
         event_publisher=(
             get_in_memory_conversation_publisher()
-            if os.getenv("TESTING", "").lower() == "true"
+            if settings.REPOSITORY_BACKEND == "memory"
             else RedisConversationEventPublisher()
         ),
     )

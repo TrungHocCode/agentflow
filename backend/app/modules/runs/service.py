@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 import uuid
@@ -1896,7 +1895,7 @@ class RunService:
 
         agents_by_ref: Dict[str, Any] = {}
         tools_by_ref: Dict[str, Any] = {}
-        if self.catalog_repository is not None and os.getenv("TESTING", "").lower() != "true":
+        if self.catalog_repository is not None and settings.ENVIRONMENT.strip().lower() != "test":
             agents = await self.catalog_repository.list_agents(active_only=True)
             tools = await self.catalog_repository.list_tools(active_only=True)
             agents_by_ref = {

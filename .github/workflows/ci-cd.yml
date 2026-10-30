@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AGENTFLOW_INTEGRATION_TESTS: "1"
-      TESTING: "false"
+      ENVIRONMENT: "local"
       POSTGRES_URL: postgresql+asyncpg://agentflow_test:test_only_password@127.0.0.1:55432/agentflow_test
       REDIS_URL: redis://127.0.0.1:56379/15
       ENABLE_MONGODB: "false"

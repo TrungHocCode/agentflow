@@ -1,6 +1,5 @@
 """SQLAlchemy adapter for workflow persistence."""
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -8,6 +7,7 @@ from typing import Any, Dict, List
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.infrastructure.postgres.models import (
     FlowModel,
     WorkflowStepDependencyModel,
@@ -32,7 +32,7 @@ class PostgresWorkflowRepository(WorkflowRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def create(
         self,

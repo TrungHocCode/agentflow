@@ -1,4 +1,3 @@
-import os
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
@@ -11,7 +10,7 @@ class MongoDB:
 db_mongo = MongoDB()
 
 def get_mongo_db():
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.REPOSITORY_BACKEND == "memory":
         return None
     if db_mongo.client is None:
 

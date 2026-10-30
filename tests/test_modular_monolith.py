@@ -485,7 +485,7 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
                 "config": {"tool_names": ["web_search"]},
             }]
         })
-        with patch.dict(os.environ, {"TESTING": "false"}):
+        with patch.object(settings, "ENVIRONMENT", "local"):
             resolved = await validate_workflow_references(definition, TwoToolCatalog())
 
         self.assertEqual(resolved["steps"][0]["tool_names"], ["web_search"])

@@ -1,6 +1,5 @@
 """PostgreSQL adapter for durable run state and replayable events."""
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Sequence, TypeVar
@@ -8,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Sequence, TypeVar
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.postgres_client import AsyncSessionLocal
 from app.infrastructure.postgres.models import (
     RunEventModel,
@@ -39,7 +39,7 @@ class PostgresRunRepository(RunRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def _with_session(
         self,

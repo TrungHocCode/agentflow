@@ -1,11 +1,10 @@
 """FastAPI dependency composition for application services."""
 
-import os
-
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres_client import get_db
+from app.core.config import settings
 from app.infrastructure.container import (
     build_catalog_service,
     build_conversation_service,
@@ -77,7 +76,7 @@ async def get_current_user_id(
 ) -> str:
     """Resolve the authenticated user, retaining a test-only compatibility user."""
 
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.AUTH_MODE == "disabled":
         return DEFAULT_USER_ID
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -153,6 +152,6 @@ def get_artifact_storage() -> LocalArtifactStorage:
 def get_rate_limiter() -> RateLimiter:
     """Use a shared Redis limiter outside isolated tests."""
 
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.REPOSITORY_BACKEND == "memory":
         return NoopRateLimiter()
     return RedisRateLimiter()

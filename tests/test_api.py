@@ -82,7 +82,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertIn("databases", data)
 
     async def test_authentication_error_uses_standard_envelope_and_request_id(self):
-        with patch.dict(os.environ, {"TESTING": "false"}):
+        with patch.object(settings, "AUTH_MODE", "required"):
             response = await self.client.get("/api/v1/runs")
 
         self.assertEqual(response.status_code, 401)
@@ -101,7 +101,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 raise PersistenceError("Could not load user.")
 
         token = create_access_token("api-user", settings.AUTH_SIGNING_SECRET, 300)
-        with patch.dict(os.environ, {"TESTING": "false"}), patch(
+        with patch.object(settings, "AUTH_MODE", "required"), patch(
             "app.api.dependencies.build_auth_service",
             return_value=UnavailableIdentityService(),
         ):
@@ -146,7 +146,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         token = create_access_token("api-user", settings.AUTH_SIGNING_SECRET, 300)
 
         try:
-            with patch.dict(os.environ, {"TESTING": "false"}), patch(
+            with patch.object(settings, "AUTH_MODE", "required"), patch(
                 "app.api.dependencies.build_auth_service",
                 return_value=FakeAuthService(),
             ) as build_service:
@@ -229,7 +229,7 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
                 )
 
         try:
-            with patch.dict(os.environ, {"TESTING": "false"}), patch(
+            with patch.object(settings, "AUTH_MODE", "required"), patch(
                 "app.api.dependencies.build_auth_service",
                 return_value=FakeAuthService(),
             ):

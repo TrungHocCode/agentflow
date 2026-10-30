@@ -6,8 +6,9 @@ from urllib.parse import urlsplit
 
 def require_integration_environment() -> None:
     """Accept only the dedicated loopback test services; never infer defaults."""
-    if os.getenv("AGENTFLOW_INTEGRATION_TESTS") != "1" or os.getenv("TESTING", "").lower() != "false":
-        raise RuntimeError("Integration requires AGENTFLOW_INTEGRATION_TESTS=1 and TESTING=false.")
+    if (os.getenv("AGENTFLOW_INTEGRATION_TESTS") != "1"
+            or os.getenv("ENVIRONMENT", "").strip().lower() != "local"):
+        raise RuntimeError("Integration requires AGENTFLOW_INTEGRATION_TESTS=1 and ENVIRONMENT=local.")
     for name, scheme, port, path in (
         ("POSTGRES_URL", "postgresql+asyncpg", 55432, "/agentflow_test"),
         ("REDIS_URL", "redis", 56379, "/15"),

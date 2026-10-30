@@ -11,17 +11,17 @@ from test_support import isolated_workspace, use_test_adapters
 
 
 class TestHarnessSafety(unittest.TestCase):
-    def test_integration_rejects_missing_opt_in_and_test_bypass(self) -> None:
+    def test_integration_rejects_missing_opt_in_and_test_environment(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError):
                 require_integration_environment()
-        with patch.dict(os.environ, {"AGENTFLOW_INTEGRATION_TESTS": "1", "TESTING": "true"}):
+        with patch.dict(os.environ, {"AGENTFLOW_INTEGRATION_TESTS": "1", "ENVIRONMENT": "test"}):
             with self.assertRaises(RuntimeError):
                 require_integration_environment()
 
     def test_integration_accepts_only_dedicated_targets(self) -> None:
         safe = {
-            "AGENTFLOW_INTEGRATION_TESTS": "1", "TESTING": "false",
+            "AGENTFLOW_INTEGRATION_TESTS": "1", "ENVIRONMENT": "local",
             "POSTGRES_URL": "postgresql+asyncpg://test:test@127.0.0.1:55432/agentflow_test",
             "REDIS_URL": "redis://127.0.0.1:56379/15",
         }
@@ -57,9 +57,24 @@ class TestHarnessSafety(unittest.TestCase):
                 os.chdir(original)
 
     def test_test_switch_is_restored_by_cleanup(self) -> None:
-        with patch.dict(os.environ, {"TESTING": "false"}):
+        from app.core.config import settings
+
+        original = {
+            "AUTH_MODE": settings.AUTH_MODE,
+            "REPOSITORY_BACKEND": settings.REPOSITORY_BACKEND,
+        }
+        restored = {
+            "ENVIRONMENT": "local",
+            "AUTH_MODE": "required",
+            "REPOSITORY_BACKEND": "postgres",
+        }
+        with patch.dict(os.environ, restored):
             case = unittest.TestCase()
             use_test_adapters(case)
-            self.assertEqual(os.environ["TESTING"], "true")
+            self.assertEqual(os.environ["ENVIRONMENT"], "test")
+            self.assertEqual(settings.AUTH_MODE, "disabled")
+            self.assertEqual(settings.REPOSITORY_BACKEND, "memory")
             case.doCleanups()
-            self.assertEqual(os.environ["TESTING"], "false")
+            self.assertEqual(os.environ["ENVIRONMENT"], "local")
+            self.assertEqual(settings.AUTH_MODE, original["AUTH_MODE"])
+            self.assertEqual(settings.REPOSITORY_BACKEND, original["REPOSITORY_BACKEND"])

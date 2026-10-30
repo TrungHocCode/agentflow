@@ -1,6 +1,5 @@
 """Shared semantic validation for workflow authoring and execution boundaries."""
 
-import os
 from typing import Any, Dict, Iterable, Set
 
 from app.core.config import settings
@@ -107,7 +106,7 @@ async def validate_workflow_references(
 ) -> Dict[str, Any]:
     """Resolve active catalog IDs and enforce each agent's tool permission set."""
 
-    if catalog is None or os.getenv("TESTING", "").lower() == "true":
+    if catalog is None or settings.ENVIRONMENT.strip().lower() == "test":
         return definition
     normalized = normalize_workflow_definition(definition)
     agent_records = await catalog.list_agents(active_only=True)

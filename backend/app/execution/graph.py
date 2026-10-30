@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -91,7 +90,7 @@ async def supervisor_node(
     metadata = state.get("metadata") or {}
     use_llm = metadata.get("use_llm", False)
 
-    if not use_llm and os.getenv("TESTING", "").lower() != "true":
+    if not use_llm and settings.ENVIRONMENT.strip().lower() != "test":
         error_id = str(uuid.uuid4())
         logger.error(
             "Refusing synthetic planning outside the isolated test environment",
@@ -389,7 +388,7 @@ async def _execute_worker_node(
                 "logs": logs + ["[WorkerNode Error] Model or tool initialization failed."],
             }
 
-    if os.getenv("TESTING", "").lower() != "true":
+    if settings.ENVIRONMENT.strip().lower() != "test":
         error_id = str(uuid.uuid4())
         logger.error(
             "Refusing synthetic worker execution outside the isolated test environment",

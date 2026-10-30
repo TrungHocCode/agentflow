@@ -32,7 +32,7 @@ def main() -> int:
         stack.enter_context(isolated_workspace())
         if args.suite == "unit":
             stack.enter_context(patch.dict(os.environ, {
-                "TESTING": "true", "ENABLE_MONGODB": "false",
+                "ENVIRONMENT": "test", "ENABLE_MONGODB": "false",
                 "AGENTFLOW_RUN_LIVE_OLLAMA_TESTS": "0",
                 "AGENTFLOW_CRAWLER_BROWSER_ENABLED": "false",
                 "AUTH_SIGNING_SECRET": "unit-tests-only-not-a-deployment-secret",
@@ -52,6 +52,7 @@ def main() -> int:
                 stack.enter_context(patch(target, side_effect=blocked))
             suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
         else:
+            stack.enter_context(patch.dict(os.environ, {"ENVIRONMENT": "local"}))
             from integration_tests.environment import require_integration_environment
             require_integration_environment()
             suite = unittest.defaultTestLoader.discover(str(ROOT / "integration_tests"))
