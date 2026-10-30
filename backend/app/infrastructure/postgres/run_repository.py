@@ -394,6 +394,29 @@ class PostgresRunRepository(RunRepository):
             await self._rollback()
             raise PersistenceError("Could not list run events.") from exc
 
+    async def list_stale_active(self, updated_before: datetime) -> List[RunDocument]:
+        if self.use_memory:
+            return [
+                RunDocument(**data)
+                for data in _IN_MEMORY_RUNS.values()
+                if data.get("status") in {"queued", "running"}
+                and data.get("updated_at") < updated_before
+            ]
+
+        try:
+            result = await self._with_session(
+                lambda session: session.execute(
+                    select(RunModel).where(
+                        RunModel.status.in_(["queued", "running"]),
+                        RunModel.updated_at < updated_before,
+                    )
+                )
+            )
+            return [self._to_domain(record) for record in result.scalars().all()]
+        except Exception as exc:
+            await self._rollback()
+            raise PersistenceError("Could not list stale active runs.") from exc
+
     @staticmethod
     def _to_orm_values(document: RunDocument) -> Dict[str, Any]:
         values = document.model_dump()

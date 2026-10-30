@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.core.config import settings
@@ -136,6 +136,36 @@ class RunService:
         if user_id is not None:
             return [document for document in documents if document.user_id == user_id]
         return documents
+
+    async def mark_stale_runs_zombie(self, now: datetime) -> List[RunDocument]:
+        """Interrupt queued/running runs abandoned far beyond the duration budget."""
+
+        cutoff = now - timedelta(seconds=2 * settings.MAX_RUN_DURATION)
+        list_stale_active = getattr(self.run_repository, "list_stale_active", None)
+        if list_stale_active is None:
+            return []
+        interrupted: List[RunDocument] = []
+        for run_doc in await list_stale_active(cutoff):
+            if run_doc.status not in {"queued", "running"}:
+                continue
+            run_doc.status = "interrupted"
+            run_doc.error_code = "run_stale_interrupted"
+            run_doc.error_message = "Run exceeded the stale-run watchdog limit."
+            run_doc.updated_at = now
+            run_doc.logs.append("[RunService] Marked stale run as interrupted.")
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_doc.run_id,
+                "run_interrupted",
+                phase="execute",
+                status="interrupted",
+                payload={
+                    "message": run_doc.error_message,
+                    "code": run_doc.error_code,
+                },
+            )
+            interrupted.append(run_doc)
+        return interrupted
 
     async def create_run(
         self,

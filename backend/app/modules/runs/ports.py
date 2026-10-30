@@ -52,3 +52,7 @@ class RunRepository(Protocol):
         limit: int = 200,
     ) -> List[ExecutionEvent]:
         ...
+
+    async def list_stale_active(self, updated_before: datetime) -> List[RunDocument]:
+        """Return queued/running runs whose last update predates the cutoff."""
+        ...
