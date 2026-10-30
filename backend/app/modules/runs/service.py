@@ -1920,7 +1920,11 @@ class RunService:
     ) -> Dict[str, Any]:
         """Freeze model routing, prompts, step bindings and active tool metadata for replay."""
 
-        from app.execution.agents.resolver import AGENT_RUNTIME_GUIDANCE, DEFAULT_AGENT_PROFILES
+        from app.execution.agents.resolver import (
+            AGENT_RUNTIME_GUIDANCE,
+            DEFAULT_AGENT_PROFILES,
+            GLOBAL_RUNTIME_GUIDANCE,
+        )
         from app.execution.model_router import model_name_for
 
         agents_by_ref: Dict[str, Any] = {}
@@ -1973,7 +1977,7 @@ class RunService:
                 if task.tool_names
                 else "No tools are available for this task; do not attempt tool calls."
             )
-            prompt_sections = [profile["system_prompt"]]
+            prompt_sections = [GLOBAL_RUNTIME_GUIDANCE, profile["system_prompt"]]
             runtime_guidance = AGENT_RUNTIME_GUIDANCE.get(profile["name"])
             if runtime_guidance:
                 prompt_sections.append(runtime_guidance)
