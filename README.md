@@ -1,137 +1,144 @@
 # AgentFlow
 
-**A local-first multi-agent platform evolving toward evidence-backed competitive intelligence.**
+**A local-first competitive intelligence platform: watch approved competitor sources, detect what changed, and produce evidence-linked briefs.**
 
-AgentFlow's product direction is to help founders and product teams understand how competitors' products change, compare those changes with their own product, and identify relevant opportunities and risks. Its existing foundation combines a conversational planner, user-approved workflows, a deterministic execution engine, local LLMs through Ollama, source collection, and downloadable research artifacts.
+AgentFlow helps founders, product managers, and small product teams answer one question on repeat: *what changed in these competing products, what supports it, and why does it matter to us?* You define a watchlist (your own product, competitors, and the exact public pages you allow), approve a revision, and run it manually or on a schedule. The platform fetches the sources, captures and diffs snapshots deterministically, investigates meaningful changes with bounded multi-agent rounds, and renders a typed brief you can download as Markdown. Inference runs locally through Ollama.
 
-> **Project status:** active personal-project prototype in a domain refactor. The workflow/research foundation and backend APIs for approved watchlists and versioned product profiles exist. Cross-run snapshots, change detection, adaptive investigation and competitive briefs are still planned; the complete competitive-intelligence experience is not available yet. AgentFlow is not a production-ready hosted service.
+> **Project status:** active personal-project prototype on `dev`. The competitive-intelligence vertical slice works end to end — watchlist → approve revision → scheduled/manual run → researcher fetch → snapshot capture/normalize → deterministic diff → coordinator rounds → baseline promotion → typed brief + Markdown download. Merged on dev: PRs #43–#56 and #65–#69; migrations 0001–0011; unit suite 411 tests passing (4 documented skips).
+>
+> Release acceptance is still a **manual, human-gated** step: live-source/model quality, human review time, backup/restore drill, and measured quality/latency thresholds are not signed off. A two-run live trial (Oct 2026, `qwen3:4b`) completed in ~20–30 s/run — `baseline_created` then `no_change`, 0 false removals — with partial task coverage; provider token usage is unavailable from local Ollama, so token numbers are estimates. AgentFlow is not a production-ready hosted service.
 
 ## Contents
 
-- [Why AgentFlow](#why-agentflow)
-- [Competitive intelligence: the target experience](#competitive-intelligence-the-target-experience)
+- [What works today](#what-works-today)
+- [Architecture at a glance](#architecture-at-a-glance)
 - [Agent roles](#agent-roles)
-- [What it does](#what-it-does)
-- [How it works](#how-it-works)
 - [Technology](#technology)
-- [Run locally](#run-locally)
 - [Run with Docker Compose](#run-with-docker-compose)
-- [Verify the installation](#verify-the-installation)
-- [Evaluate research runs](#evaluate-research-runs)
+- [Run locally for development](#run-locally-for-development)
+- [Testing](#testing)
+- [Evaluation](#evaluation)
 - [Repository layout](#repository-layout)
+- [Documentation](#documentation)
 - [Current scope and limitations](#current-scope-and-limitations)
 - [Contributing](#contributing)
 - [Security](#security)
 
-## Why AgentFlow
+## What works today
 
-Product teams repeatedly check competitor pricing pages, feature documentation, integrations and release notes. Detecting an edit is only the beginning: they also need to establish what changed, whether the evidence supports it, and why it matters to their customers.
+The competitive-intelligence vertical slice, end to end:
 
-AgentFlow targets founders, product managers and small teams. The intended output is a traceable competitive brief, not another copy of crawled text or an absolute claim that one product is "better." Comparisons need explicit criteria, customer segments, observation dates and evidence.
+1. **Set up a watchlist.** In the Chat (Assistant) tab, describe your products and sources and accept a setup proposal — candidate products and sources carry explicit provenance labels (`model_knowledge` / `user_supplied`) and are never silently approved — or use the manual watchlist form. A watchlist holds your own product, competitor products, comparison criteria, and the exact approved public URLs.
+2. **Approve a revision.** Any edit creates a new unapproved revision. Approving pins goals, product profile versions, criteria, source scope, and budgets, and attaches the immutable collection workflow. Chat text can never approve a run; one active run per watchlist with owner-scoped idempotency.
+3. **Run manually or on a schedule.** *Run now* starts a run against the current approved revision; daily/weekly schedules are fired by a server-side scheduler (no browser required) and outcomes land in the in-app notification center.
+4. **Collect and compare.** The source researcher fetches approved URLs with a static-first crawler — same-site redirect tolerance, listing vs. article classification, login-wall detection — with browser fallback behind `AGENTFLOW_CRAWLER_BROWSER_ENABLED`. Snapshots are captured and normalized, then a deterministic section-aware diff against pinned baselines produces change candidates. A failed fetch is never a removal.
+5. **Investigate.** A code-owned coordinator plans bounded rounds of researcher / verifier / analyst / report tasks within the approved scope and budget. Rounds are validated and persisted by code before execution and append to the live plan without mutating the approved workflow.
+6. **Conclude.** A completed run promotes eligible baselines via compare-and-swap and builds a typed brief — per-source coverage, findings with before/after evidence, conflicts, limitations, advisory actions — rendered deterministically to downloadable Markdown. Outcomes are explicit and independent of run lifecycle status: `baseline_created`, `no_change`, `changes_detected`, `partial`, `rebaseline_required`, or `unavailable` (a failed run shows as `failed` with scope and baselines unchanged).
 
-Local inference avoids a required per-token cloud-model bill and keeps model processing on the configured host. It does not mean zero operating cost or fully offline research: websites are still external, and speed and quality depend on hardware, model size, quantization and context. Evidence collection must not disclose private product profiles or strategy through search queries.
+In the app:
 
-## Competitive intelligence: the target experience
-
-The following is the planned manual MVP, not a walkthrough of the current UI:
-
-1. Create an own-product profile and competitor profiles, including target users, features, pricing and approved public sources.
-2. Review the comparison goal, criteria, source scope and execution budget before approving a workflow.
-3. Capture a first baseline. An initial capture alone cannot establish that a product improved.
-4. Run again to compare compatible source snapshots and investigate meaningful additions, removals or modifications.
-5. Verify important claims, compare them with the user's product, and produce a downloadable brief with citations, limitations and advisory actions.
-
-Product history will be immutable rather than overwritten. Publication, launch, effective, observation and fetch dates are distinct; unknown dates stay unknown. A failed fetch is not a removed feature. A change is not automatically an improvement.
-
-| Capability | Availability |
+| Surface | Contents |
 | --- | --- |
-| Authentication, conversations and workflow review | Existing foundation |
-| Queued runs, authorized agent tools, SSE progress and artifacts | Existing foundation |
-| Own-product and competitor profiles with immutable historical versions | Backend API; no business UI yet |
-| Approved watchlists and frozen manual run admission | Backend API; no business UI yet |
-| Durable snapshots and cross-run baselines | Planned |
-| Change detection, bounded investigation and evidence verification | Planned |
-| Product comparison and structured competitive briefs | Planned |
-| Scheduled monitoring | Deferred until the manual flow is validated |
+| Chat / Assistant | Setup proposals, research/workflow conversation, plan review and approval, run progress nodes |
+| Watchlists (Intelligence) | Watchlist list and detail with Overview / Changes / Briefs / Settings; change feed and detail; brief view + Markdown download; *Run now*, approve, cancel |
+| Watchlist Settings | Schedules (daily/weekly), timeline, structured history Q&A |
+| Briefs & History | Cross-watchlist brief list and run history |
+| Header | In-app notification center for run outcomes |
+| Advanced surfaces | Workflow editor, agent/tool catalogs, execution tracker, technical logs |
 
-## Agent roles
+Timeline and Q&A are structured-first (no vector search): temporal questions answer from the timeline, factual questions from latest baseline spans, summaries from brief aggregation, with keyword fallback over briefs/findings. Every factual claim cites a resolvable snapshot span; unknown answers return "not observed" and are never invented.
 
-These are target responsibilities, not six agents already wired into the application:
+## Architecture at a glance
 
-| Role | Responsibility | Proposed tool capabilities |
-| --- | --- | --- |
-| Supervisor / Coordinator | Clarify goals, propose a plan, resolve evidence gaps within approved scope | Read profiles, product history, source catalog and investigation state |
-| Source Researcher | Find and collect approved public evidence | Search, single/batch crawl, HTTP fetch, bounded snapshot reads |
-| Product Analyst | Extract product facts and interpret detected changes | Read profiles/history, change candidates, snapshots and evidence |
-| Evidence Verifier | Check support, contradictions, dates and conditions | Read evidence/snapshots; scoped additional search or collection |
-| Competitive Analyst | Assess gaps, strengths and impact for the target customer | Read verified findings, product profiles/history and comparison criteria |
-| Report Agent | Present the analysis without inventing new facts | Read comparison results/evidence; deterministic report and conditional chart rendering |
-
-The backend owns permissions, storage, diffs, arithmetic, validation, budgets and task scheduling. Agents cannot grant themselves tool access. Not every run invokes every role; missing evidence can trigger bounded follow-up investigation, while no-change runs may need no analytical LLM call.
-
-## What it does
-
-- **Configure competitive intelligence through the API:** create an unapproved watchlist, version own/competitor profiles, review exact source scope and criteria, approve its current revision with a published workflow, and submit a manual run. Edits require the expected revision and create a new unapproved revision; history is retained.
-- **Keep CI collection scoped:** CI runs permit explicitly approved exact URLs and public GET only, not arbitrary search, outbound writes or private-network access. Redirect targets must also be approved. Browser fallback is disabled for this strict collection policy. Declaring an official host is a reviewed owner assertion, not publisher verification.
-
-- **Plan in chat:** describe a research task and receive a proposed workflow; clarify or edit it before execution. This is the existing generic flow, not yet a product-profile setup flow.
-- **Keep approval in the loop:** review and approve a workflow before its run begins.
-- **Execute dependency-aware workflows:** tasks are ordered by their dependencies; the current dispatcher runs one ready task at a time, so parallel task execution is not implemented yet.
-
-CI configuration endpoints are under `/api/v1/watchlists`: create/list/read/update/archive, revision history and approval, products/sources, immutable product profile history, and manual run submission/history. `/watchlists/proposals` derives a bounded draft from an owned persisted conversation; it neither saves nor approves it. API schemas are available at `/docs` and `/openapi.json` while the backend is running.
-
-CI run admission freezes goals, product profile versions, criteria, source configuration and tightened budgets. One active run per watchlist is enforced in PostgreSQL; owner-scoped idempotency returns the original run without requeueing it. Baseline references are explicitly null until snapshot support is implemented; these runs do **not** perform competitive change detection yet.
-- **Use role-specific agents and tools:** research, synthesis, reporting, and chart work are assigned to agents with authorized tools.
-- **Follow progress:** inspect task status and run events while work is executing.
-- **Keep results:** review research outputs and download generated artifacts such as Markdown reports and charts.
-- **Route inference by role:** model profiles are configured server-side; users do not select a model in the UI. Repository defaults and local operator overrides can differ.
-- **Manage personal work:** sign in, create conversations, and manage workflows and runs associated with the user.
-
-## How it works
-
-AgentFlow is a modular monolith with separate API and background-worker processes. It has two main phases:
-
-1. **Build:** the Supervisor discusses the request, proposes a workflow, and waits for user approval.
-2. **Execute:** a background worker claims the approved run. A code-based dispatcher schedules ready tasks; each assigned agent can call its authorized tools as needed. The browser observes progress through server-sent events (SSE).
+- **Modular monolith:** one FastAPI application with separate API, run-worker, and scheduler processes; React frontend in front.
+- **Data:** PostgreSQL is the source of truth (identity, conversations, watchlists/revisions, runs/tasks, snapshots, rounds, briefs, notifications); Redis coordinates the queue and realtime fan-out; large immutable files (snapshots, briefs, charts) live under `workspace_data/`.
+- **Build phase:** chat or form proposes a `WatchlistRevision`; the user approves it; run admission freezes the approved configuration and budgets.
+- **Run phase:** a background worker claims the queued run; a code-based dispatcher executes ready DAG tasks (currently one at a time); role agents call only whitelisted tools inside a ReAct loop with `<tool_output>` wrapping; coordinator rounds are code-owned, never raw model output executed directly.
+- **Inference and guardrails:** local Ollama with server-side model routing (chat/planner/worker profiles, no model picker in the UI); the backend owns diffs, arithmetic, ownership, budgets (`MAX_RUN_*`), scheduling, and permissions.
 
 ```mermaid
 flowchart LR
-    User[User in browser] -->|Chat, review, approve| API[FastAPI API]
-    API -->|Save workflows and run state| PG[(PostgreSQL)]
+    User[User in browser] -->|Chat, review, approve, Run now| API[FastAPI API]
+    API -->|Watchlists, runs, snapshots, briefs| PG[(PostgreSQL)]
     API -->|Queue run and publish events| Redis[(Redis)]
-    Browser[Browser progress view] -->|SSE subscription| API
-    Worker[Background worker] -->|Claim run and persist results| PG
+    Browser[Browser intelligence views] -->|SSE subscription| API
+    Worker[Run worker] -->|Claim run, fetch, diff, rounds, brief| PG
     Worker -->|Consume queue and publish progress| Redis
     Worker -->|Inference| Ollama[Ollama / local model]
-    Worker -->|Search and fetch sources| Web[External websites]
-    Worker -->|Reports and charts| Files[workspace_data artifacts]
+    Worker -->|Fetch approved sources| Web[External websites]
+    Worker -->|Snapshots, briefs, charts| Files[workspace_data artifacts]
+    Scheduler[Schedule worker] -->|Fire due daily/weekly runs| PG
 ```
 
 | Component | Responsibility |
 | --- | --- |
-| React frontend | Chat, workflow review, run progress, and result/artifact views |
-| FastAPI modular monolith | Authentication, conversations, workflows, runs, catalog, and API contracts |
-| Supervisor and LangGraph | Build-phase conversation and execution graph |
-| Background worker | Consume queued runs and execute task agents outside the HTTP request |
-| PostgreSQL | Users, conversations, workflows, run state, and durable event/result metadata |
+| React frontend | Chat/Assistant, intelligence workspace, run progress, results and downloads |
+| FastAPI modular monolith | Authentication, conversations, watchlists, runs, catalog, CI read APIs, contracts |
+| Background run worker | Claim queued runs and execute task agents outside the HTTP request |
+| Schedule worker | Fire due daily/weekly schedules exactly once (separate process) |
+| Code-owned CI pipeline | Snapshot capture/normalize, deterministic diff, baseline CAS promotion, coordinator rounds, brief assembly |
+| PostgreSQL | Users, conversations, workflows, runs, CI metadata, evidence, artifact metadata |
 | Redis | Run queue and realtime event distribution |
-| Local artifact storage | Generated reports, charts, and downloadable files under `workspace_data/` |
+| Local artifact storage | Snapshots, reports, charts, briefs under `workspace_data/` |
 | Ollama | Local LLM inference; model files are managed separately by Ollama |
 
-MongoDB and Mongo Express also start with the Compose stack for development experiments. Application-level MongoDB persistence is disabled, and the current run-persistence path does not require MongoDB.
+MongoDB and Mongo Express also start with the Compose stack for development experiments. Application-level MongoDB persistence is disabled (`ENABLE_MONGODB=false`), and the current run-persistence path does not require MongoDB.
+
+## Agent roles
+
+Nine roles are seeded into the agent catalog; the coordinator that plans investigation rounds is code-owned and never calls a model. Not every run invokes every role — a no-change run may need no analytical LLM call.
+
+| Role | Responsibility |
+| --- | --- |
+| Supervisor | Build-phase conversation, intent analysis, plan proposal |
+| Worker | Generic task execution with the task's authorized tools |
+| Source Researcher | Fetch and collect approved public evidence; report coverage gaps |
+| Product Analyst | Extract product facts from snapshots and candidates |
+| Evidence Verifier | Check support, contradictions, dates, and conditions (quotation-level) |
+| Competitive Analyst | Assess relevance against the own-product profile and criteria |
+| Synthesis Agent | Cross-source reconciliation for synthesis tasks |
+| Report Agent | Present validated analysis; deterministic Markdown/tables |
+| Chart Agent | Conditional charts for genuinely comparable structured data |
+
+The backend owns permissions, storage, diffs, arithmetic, validation, budgets, and task scheduling. Agents cannot grant themselves tool access; each role has an explicit tool whitelist.
 
 ## Technology
 
-- **Backend:** Python 3.11, FastAPI, SQLAlchemy, Pydantic
+- **Backend:** Python 3.11, FastAPI, SQLAlchemy, Pydantic, Alembic (migrations 0001–0011)
 - **Agent runtime:** LangChain, LangGraph, Ollama
 - **Frontend:** React 18, Vite
 - **Persistence and coordination:** PostgreSQL, Redis; local filesystem for artifacts
 - **Crawler:** static-first fetching with optional Playwright/Chromium fallback
-- **Development and CI:** Docker Compose, GitHub Actions, `unittest`, ESLint, Vite build
+- **Development and CI:** Docker Compose, GitHub Actions (unit + CI replay + integration + frontend), `unittest`, ESLint, Vitest
 
-## Run locally
+## Run with Docker Compose
 
-The recommended development setup runs PostgreSQL and Redis in Docker, with Ollama, the API, worker, and frontend running as local processes. This lets the backend reach Ollama at `localhost:11434` without container networking configuration.
+The Compose stack includes the frontend, API, run worker, database initialization, PostgreSQL, Redis, and MongoDB/Mongo Express development services:
+
+```powershell
+Copy-Item .env.example .env
+# Set a unique AUTH_SIGNING_SECRET in .env before starting.
+docker compose up --build
+```
+
+The `db-init` service applies Alembic migrations and seeds the agent/tool catalog before the API and worker start.
+
+| Surface | URL |
+| --- | --- |
+| Frontend | <http://localhost:5173> |
+| API / OpenAPI docs | <http://localhost:8000/docs> |
+| Mongo Express (dev) | <http://localhost:8081> |
+
+**Ollama is not included in the Compose stack.** For model-backed execution, the API and worker containers must reach your Ollama host: set `OLLAMA_BASE_URL` in `.env` to a host-reachable Ollama address and make sure Ollama accepts connections from Docker; Compose forwards that URL and the three model-profile settings to both services.
+
+Notes:
+
+- The API container runs with `AGENTFLOW_CRAWLER_BROWSER_ENABLED=false`; the worker container installs Chromium and runs with browser fallback enabled.
+- The CI schedule worker (`app.workers.schedule_worker`) is **not** a Compose service. If you use schedules, run it as an additional process (see below) against the same database.
+
+## Run locally for development
+
+The recommended development setup runs PostgreSQL and Redis in Docker, with Ollama, the API, worker, and frontend as local processes. This lets the backend reach Ollama at `localhost:11434` without container networking.
 
 ### Prerequisites
 
@@ -151,7 +158,7 @@ cd agentflow
 Copy-Item .env.example .env
 ```
 
-Edit `.env` and replace `AUTH_SIGNING_SECRET` with a unique random value before starting the application. Keep `.env` private; do not commit it.
+Edit `.env` and replace `AUTH_SIGNING_SECRET` with a unique random value before starting the application. Keep `.env` private; do not commit it (it is git-ignored).
 
 Create and activate the Python environment, then install the backend dependencies:
 
@@ -172,15 +179,15 @@ The sample configuration expects PostgreSQL on port `5433` and Redis on `6379`:
 docker compose up -d postgres redis
 ```
 
-Apply database migrations and seed the default catalog:
+Apply database migrations (Alembic 0001 → 0011) and seed the default agent/tool catalog:
 
 ```powershell
 python backend/app/db/init_db.py
 ```
 
-### 3. Start Ollama and download a model
+### 3. Start Ollama and choose models
 
-Start the Ollama application or run `ollama serve` in another terminal, then pull the models named in your configuration. For the repository defaults:
+Start the Ollama application or run `ollama serve` in another terminal, then pull the models named in your configuration:
 
 ```powershell
 ollama pull qwen3:0.6b
@@ -188,7 +195,22 @@ ollama pull qwen3:8b
 ollama list
 ```
 
-AgentFlow defaults to `http://localhost:11434`. Model routing is configured on the backend with `LLM_CHAT_MODEL`, `LLM_PLANNER_MODEL`, and `LLM_WORKER_MODEL` in `.env`; changing these values does not add a model picker to the user interface. The default router sends obvious short questions and small-talk to the chat profile, routes research/workflow requests to the planner profile, and assigns the worker profile to tool-using tasks. Ambiguous requests default to planning.
+Model routing is server-side and configured with environment variables — there is no model picker in the UI:
+
+| Variable | Repository default | Purpose |
+| --- | --- | --- |
+| `LLM_BASE_URL` | `http://localhost:11434` | Ollama endpoint |
+| `OLLAMA_BASE_URL` | (empty) | Optional override when API/worker run in Docker |
+| `LLM_CHAT_MODEL` | `qwen3:0.6b` | Short chat/small-talk profile |
+| `LLM_PLANNER_MODEL` | `qwen3:8b` | Planning/workflow requests |
+| `LLM_WORKER_MODEL` | `qwen3:8b` | Tool-using task execution |
+
+Two files can set these values — pydantic-settings reads only the `.env` in the process's working directory, so pick one place for your overrides:
+
+- **Root `.env`** (from `.env.example`): the main configuration; the commands below start processes from the repository root, and Docker Compose always uses it.
+- **`backend/.env`** (optional, git-ignored): local overrides auto-loaded when a process starts with `backend/` as its working directory — for example, the October 2026 live trial pinned `LLM_PLANNER_MODEL`/`LLM_WORKER_MODEL` to `qwen3:4b-instruct-2507-q4_K_M` there.
+
+Plain environment variables set in the shell take precedence over both files.
 
 ### 4. Start the API
 
@@ -196,14 +218,14 @@ From the repository root, in a new PowerShell terminal with the virtual environm
 
 ```powershell
 $env:PYTHONPATH = (Join-Path (Get-Location) "backend")
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-The interactive API documentation is available at <http://localhost:8000/docs>.
+The API listens on **8001** because the Vite dev server proxies `/api` to `http://localhost:8001` (`frontend/vite.config.js`). If you change the port, update that proxy target. The interactive API documentation is available at <http://localhost:8001/docs>. The Compose stack exposes the API on port 8000 instead.
 
 ### 5. Start the background worker
 
-Run the worker in a separate terminal. Keep it running while testing workflow execution; the API queues long-running work but does not execute it inside the request handler.
+Run the worker in a separate terminal. Keep it running while testing runs; the API queues long-running work but does not execute it inside the request handler.
 
 ```powershell
 $env:PYTHONPATH = (Join-Path (Get-Location) "backend")
@@ -212,7 +234,18 @@ python -m app.workers.run_worker
 
 You should see a log indicating that the AgentFlow execution worker started.
 
-### 6. Start the frontend
+### 6. (Optional) Start the schedule worker
+
+Scheduled daily/weekly watchlist runs are fired by a dedicated process that ticks once per minute and is independent of the browser and SSE:
+
+```powershell
+$env:PYTHONPATH = (Join-Path (Get-Location) "backend")
+python -m app.workers.schedule_worker
+```
+
+Without this process, manual runs still work; schedules simply do not fire.
+
+### 7. Start the frontend
 
 In another terminal:
 
@@ -222,21 +255,19 @@ npm ci
 npm run dev
 ```
 
-Open <http://localhost:5173>, register or sign in, create a research workflow in chat, review and approve it, then follow the run in the execution view. Vite proxies `/api` requests to the backend at `http://localhost:8000`.
+Open <http://localhost:5173>, register or sign in, create a watchlist (chat proposal or manual form), approve it, start a run, and follow progress in the intelligence workspace. Vite proxies `/api` requests to the backend on port 8001.
 
-Reports, charts, evidence storage, and downloads use `ARTIFACT_ROOT` (default: `workspace_data`, relative to the process working directory). Set the same absolute path for API and worker when starting them from different directories; both processes must have access to that location. Producers use unique staging paths (`reports/<run-scope>/<generation>/...`); `relative_path` is storage-root-relative. After owned artifact metadata is saved, staging files are released and downloads use the durable artifact copy.
+### Artifacts, crawler, and budgets
 
-Evidence-backed runs retain explicit subject/field coverage, source-processing outcomes and quotation lineage. Their report stage renders typed findings deterministically rather than invoking a final LLM rewrite. An observed field or matching quotation is **not** semantic verification; unanswered requirements remain unresolved. Older workflows without a requirement matrix do not establish request-level completeness.
+Reports, snapshots, evidence, and downloads use `ARTIFACT_ROOT` (default: `workspace_data`, resolved against the repository root so API and worker agree). Producers use unique staging paths; after owned artifact metadata is saved, downloads use the durable copy.
 
-Run-wide guardrails share `MAX_RUN_LLM_CALLS` (64), `MAX_RUN_ESTIMATED_TOKENS` (262144) and `MAX_RUN_DURATION` (3600 seconds) across ReAct and internal map/reduce. The token limit uses an input-size heuristic plus reserved output, including schemas, and is not exact Ollama usage. Failed inference calls retain their reservation; exhaustion is explicit and never automatically retried. Cancellation is cooperative: an in-process wrapper cannot forcibly stop blocking code already running in a thread or a remote server's computation.
-
-The crawler tries static HTTP fetching first. In automatic mode, it uses Chromium only when the extracted content is poor or the page appears to need client-side rendering. For local browser-based fallback, install Chromium once:
+The crawler tries static HTTP fetching first and uses Chromium only when content extraction is poor or the page needs client-side rendering. For local browser fallback, install Chromium once:
 
 ```powershell
 python -m playwright install chromium
 ```
 
-Static fetching can work without browser fallback. Browser rendering is bounded and does not bypass authentication, CAPTCHAs, or anti-bot protections. The browser settings below are read by the worker process:
+Static fetching works without browser fallback. Browser rendering is bounded and does not bypass authentication, CAPTCHAs, or anti-bot protections. These settings are read by the worker process:
 
 | Environment variable | Default | Purpose |
 | --- | ---: | --- |
@@ -246,84 +277,92 @@ Static fetching can work without browser fallback. Browser rendering is bounded 
 | `AGENTFLOW_CRAWLER_BROWSER_MAX_CONCURRENCY` | `1` | Maximum simultaneous browser pages per worker |
 | `AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS` | `2` | Maximum wait for an available browser slot |
 
-## Run with Docker Compose
+Run-wide guardrails share `MAX_RUN_LLM_CALLS` (64), `MAX_RUN_ESTIMATED_TOKENS` (262144), and `MAX_RUN_DURATION` (3600 s) across ReAct, map/reduce, and coordinator calls. Token admission uses a conservative estimate plus reserved output — not exact Ollama usage — and exhaustion is explicit and never auto-retried. Cancellation is cooperative.
 
-The Compose stack includes the frontend, API, worker, PostgreSQL, Redis, database initialization, and MongoDB/Mongo Express development services:
+## Testing
 
-```powershell
-Copy-Item .env.example .env
-# Set a unique AUTH_SIGNING_SECRET in .env before starting.
-docker compose up --build
-```
+| Command | What it does |
+| --- | --- |
+| `python scripts/run_tests.py unit` | Isolated unit suite (temporary workspace, mocked HTTP/DNS, no live model). Currently **411 tests, 4 documented skips**. |
+| `python scripts/run_tests.py integration` | Real PostgreSQL/Redis suite against disposable services only; see [integration test setup](integration_tests/README.md). Never point it at development data. |
+| `python scripts/run_ci_evaluation.py` | Deterministic CI scenario replay (10 fixed scenarios, no network/model); non-zero exit on any mismatch. Gated in CI. |
+| `cd frontend; npm run lint; npm test -- --run; npm run build` | Frontend lint, Vitest component tests, production build. |
 
-The frontend is served at <http://localhost:5173>, the API at <http://localhost:8000>, and Mongo Express at <http://localhost:8081>.
+`python -m unittest discover tests/` still works as legacy discovery, but it does not install the suite-level network guard — prefer `scripts/run_tests.py unit`.
 
-**Ollama is not included in the Compose stack.** For model-backed execution, the API and worker containers must be able to reach your Ollama host. The simplest working setup is the local-process workflow above. If you use the API and worker containers, set `OLLAMA_BASE_URL` in `.env` to a host-reachable Ollama address and make sure Ollama accepts connections from Docker; Compose forwards that URL and the three model-profile settings to both services.
+GitHub Actions runs the isolated unit suite, the CI scenario replay, and compile checks; a separate job runs the real PostgreSQL/Redis integration suite; a third runs frontend lint/test/build — all on pull requests to `dev` and `main`.
 
-## Verify the installation
+## Evaluation
 
-Run the backend unit tests from the repository root:
-
-```powershell
-python scripts/run_tests.py unit
-```
-
-Check frontend code and create a production build:
+The versioned [evaluation harness](evaluation/README.md) records one structured JSON file per run under git-ignored `workspace_data/evaluations/` and summarizes latency, throughput, coverage, and outcomes. Metric definitions and timing boundaries are in [evaluation/metrics.md](evaluation/metrics.md); research-quality metrics such as citation coverage are **manual** per-run observations, not automated scores.
 
 ```powershell
-cd frontend
-npm run lint
-npm run build
+# Record and finish an evaluation run
+python scripts/evaluation_runs.py new --case-id llm-benchmark-comparison --model qwen3:8b --quantization Q4_K_M --mode live
+python scripts/evaluation_runs.py finish <record.json> --execution-status completed --verdict needs_review --agentflow-run-id <run-id>
+python scripts/evaluation_runs.py validate <record.json>
+python scripts/evaluation_runs.py summary
+
+# Isolated Ollama latency/throughput benchmark (no prompt or completion content is stored)
+python scripts/benchmark_ollama.py --model qwen3:8b --requests 8 --concurrency 1 --output workspace_data/evaluations/ollama-qwen3.json
+
+# Summarize API latency/RPS from a redirected uvicorn stderr log
+python scripts/summarize_http_metrics.py workspace_data/api-http.jsonl --window-seconds 60
 ```
 
-The CI workflow separates isolated unit tests, real PostgreSQL/Redis migration and adapter integration tests,
-and frontend lint/build on pull requests to `dev` and `main`. See [integration test setup](integration_tests/README.md)
-for disposable local test services. The integration suite refuses development database targets and test-auth bypass.
-
-## Evaluate research runs
-
-Use the versioned [evaluation cases and metrics](evaluation/README.md) to compare research quality and runtime behavior across changes. The record tool saves one structured JSON file per run under ignored `workspace_data/evaluations/`, then summarizes latency, throughput, source/citation coverage, and outcomes:
-
-```powershell
-python scripts/evaluation_runs.py new --case-id llm-benchmark-comparison --model qwen3:8b --quantization Q4_K_M
-```
-
-The case chooses live or replay mode by default. Fill in measurements and evidence sources, mark the run's execution status/verdict, validate it, and generate the aggregate report as described in the evaluation guide.
+Per-call/per-task application metrics (LLM TTFT/ITL/tokens where the provider reports them, tool timings, budget consumption, critical path) are opt-in: set `ENABLE_EXECUTION_BENCHMARK_METRICS=true` in `backend/.env` and restart the API and worker. Keep it off for normal runs. The deterministic CI scenario replay (`scripts/run_ci_evaluation.py`) is separate from live evaluation — replay proves fixture behavior, not live model quality.
 
 ## Repository layout
 
 ```text
 agentflow/
 ├── backend/
+│   ├── alembic/            # Migrations 0001–0011
 │   └── app/
-│       ├── api/              # FastAPI routes and dependency wiring
-│       ├── execution/        # Supervisor, agents, LangGraph, tools, and state
-│       ├── infrastructure/   # PostgreSQL, Redis, artifact adapters
-│       ├── modules/          # Identity, conversations, workflows, runs, results
-│       └── workers/          # Background run worker
-├── frontend/                 # React + Vite application
-├── tests/                    # Backend unit tests (mocked dependencies)
-├── integration_tests/        # Dedicated real PostgreSQL/Redis tests
-├── workspace_data/           # Local generated artifacts (not source code)
+│       ├── api/            # FastAPI routers (~80 routes): auth, conversations, workflows,
+│       │                   # runs, watchlists, CI reads, catalog, health
+│       ├── modules/        # Business logic: identity, conversations, workflows, runs,
+│       │                   # competitive_intelligence (snapshots, rounds, briefs,
+│       │                   # schedules, timeline, Q&A, notifications), results
+│       ├── execution/      # LangGraph graph, 9 agent roles, tools (crawler, HTTP, search),
+│       │                   # research map/reduce, run budgets, benchmark metrics
+│       ├── infrastructure/ # PostgreSQL/Redis/artifact adapters, container wiring
+│       ├── workers/        # run_worker (queue) and schedule_worker (daily/weekly)
+│       └── db/             # init_db: Alembic upgrade + agent/tool catalog seed
+├── frontend/               # React + Vite: Chat/Assistant + Intelligence workspace
+├── evaluation/             # Evaluation contract, metrics definitions, CI scenario fixtures
+├── scripts/                # run_tests, run_ci_evaluation, evaluation_runs,
+│                           # benchmark_ollama, summarize_http_metrics
+├── tests/                  # Unit suite (isolated, mocked dependencies)
+├── integration_tests/      # Real PostgreSQL/Redis suite (disposable services)
+├── docs/                   # Private product/architecture docs (git-ignored)
+├── workspace_data/         # Generated artifacts, snapshots, evaluations (git-ignored)
 ├── docker-compose.yml
 └── requirements.txt
 ```
 
+## Documentation
+
+- **[docs/README.md](docs/README.md)** — index for the private product/architecture documentation: [PROJECT_CORE](docs/PROJECT_CORE.md) (product promise), [IMPLEMENTATION_ROADMAP](docs/IMPLEMENTATION_ROADMAP.md) (phases and gates), [architecture/](docs/architecture/) (baseline, requirements, data model, OpenAPI, security, testing, deployment), [STATUS](docs/STATUS.md) and [REQUIREMENTS_TRACEABILITY](docs/REQUIREMENTS_TRACEABILITY.md) (evidence). **Note:** `docs/` is git-ignored — these links resolve in a local checkout but not on GitHub.
+- **[AGENTS.md](AGENTS.md)** — engineering conventions: architecture, coding, testing, and Git workflow rules for contributors and agents.
+- **[evaluation/README.md](evaluation/README.md)** and **[evaluation/metrics.md](evaluation/metrics.md)** — evaluation harness and metric definitions.
+- **[integration_tests/README.md](integration_tests/README.md)** — disposable test services and required safety flags.
+
 ## Current scope and limitations
 
-- The product direction is **competitive product intelligence**. Current application screens still expose the generic research/workflow foundation; the domain refactor is not complete.
-- Initial scope is public, approved pricing, feature, integration and release-note sources. Authenticated/paywalled collection, anti-bot bypass and autonomous external actions are out of scope.
-- Comparison quality requires an accurate own-product profile and explicit criteria. Do not infer a winner from incomplete data, page edits or incompatible measurements.
-- Workflow scheduling is planned for a later phase and is not currently available.
-- Web research depends on external sites; sources may be unavailable, block requests, or return incomplete content.
-- Local model speed and structured-output quality vary with model, quantization, context size, and CPU/GPU resources. Multi-agent runs can take substantially longer than a single chat response.
-- A successful task/tool status does not by itself guarantee that research covered every requested subject. Review source coverage and citations before relying on a report.
-- The project targets local development and a small number of users. Production deployment still requires additional operational hardening, secure secret management, TLS, backups, and load testing.
+- The product is **competitive product intelligence** over explicitly approved public sources: pricing, features, integrations, and release notes. Authenticated/paywalled collection, anti-bot bypass, and autonomous external actions are out of scope. Declaring an official host is an owner assertion, not publisher verification.
+- The generic research/workflow foundation (chat planning, workflow editor, catalogs) still exists and is retained as execution infrastructure and advanced UI — it is not the product homepage.
+- Release acceptance remains manual: live-source repeat runs, model quality, single-vs-multi-agent comparison, human review time, backup/restore, retention purge approval, and measured quality/latency thresholds.
+- The dispatcher runs one ready task at a time (no parallel task execution); investigation rounds are bounded and budgeted; inference concurrency starts at one. Completed runs can be `partial` — review source coverage and citations before relying on a brief.
+- Local model speed and structured-output quality vary with model, quantization, context size, and hardware. Multi-agent runs take substantially longer than a single chat response. Local Ollama does not report provider token usage in all paths — budgets use conservative estimates.
+- Scheduling supports daily/weekly in-app runs and notifications; outbound delivery (email and similar) requires separate authority and stays deferred. Vector search is deferred; history Q&A is structured-first over timelines, baselines, and briefs.
+- A successful task/tool status does not by itself guarantee that research covered every requested subject; a change is not automatically an improvement, and a failed fetch is never a removed feature.
+- The project targets local development and a small number of users. Production deployment still requires operational hardening, secure secret management, TLS, backups, and load testing.
 
 ## Contributing
 
-Contributions and focused bug reports are welcome. Before changing code, review [AGENTS.md](AGENTS.md) for the repository's architecture, coding, testing, and Git workflow conventions. For a code change, run the relevant tests and checks described above and open a pull request targeting `dev`.
+Contributions and focused bug reports are welcome. Before changing code, review [AGENTS.md](AGENTS.md) for the repository's architecture, coding, testing, and Git workflow conventions. New tools and agents require unit tests. For a code change, run the checks described in [Testing](#testing) and open a pull request targeting `dev`.
 
 ## Security
 
-Do not commit credentials, access tokens, model-provider keys, or real user data. Use a strong `AUTH_SIGNING_SECRET` outside disposable local development. Do not expose the development server or Ollama endpoint to an untrusted network; production use requires appropriate authentication, TLS, network controls, and secret management.
+Do not commit credentials, access tokens, model-provider keys, or real user data — `.env`, `backend/.env`, `docs/`, and `workspace_data/` are git-ignored and must stay that way. Use a strong `AUTH_SIGNING_SECRET` outside disposable local development. Do not expose the development server or Ollama endpoint to an untrusted network; production use requires appropriate authentication, TLS, network controls, and secret management.

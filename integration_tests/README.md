@@ -30,5 +30,5 @@ ownership-filtered reads, cursor event replay, real Redis delivery, unauthentica
 API rejection. Not yet covered: worker crash recovery, DB upgrades with old business
 data, full authenticated API E2E, browser recovery, live research quality/load.
 
-CI runs unit, integration and frontend lint/build separately.
+CI runs unit (incl. the deterministic `run_ci_evaluation.py` scenario gate), integration and frontend lint/test/build separately.
 Architecture documents and generated evaluation records remain private/ignored.

@@ -69,6 +69,16 @@ python scripts/evaluation_runs.py summary
 
 `summary` writes an aggregate Markdown report to `workspace_data/evaluations/reports/` and reports p50/p95 API and end-to-end latency, planning/queue/execution/critical-path timings, raw LLM TTFT, ITL, per-call output tokens/sec, observed RPS where load data exists, outcome and verdict counts, dimension/source/citation coverage, and unsupported-claim counts. In-progress records are reported separately and excluded from terminal aggregates. Results are grouped by case, model configuration, commit, prompt revision, and tool revision so unlike runs are not accidentally averaged together.
 
+## Deterministic CI scenario replay
+
+`evaluation/ci_scenarios.json` holds ten fixed-domain CI fixtures (baseline, no-change,
+addition/removal, qualified pricing edit, noise, source failure, conflict, budget/scope
+exhaustion, restart). `python scripts/run_ci_evaluation.py` replays them through the real
+deterministic pipeline with no network, model, or clock dependence, writes measured reports
+under `workspace_data/evaluation/ci/`, and exits non-zero on any fixture mismatch; the unit
+CI job gates on it. This covers fixture-level correctness only — live quality still needs the
+Live E2E flow above.
+
 ## Evaluation modes
 
 - **Live E2E:** real model, tools, queue, worker, and SSE. Captures realistic latency and current source availability; record the collection time and source URLs because the web changes.
