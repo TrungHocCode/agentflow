@@ -31,19 +31,25 @@ class StubSearchTool:
     """Stable search fixture; stage B answers with the requested site only."""
 
     def __call__(self, queries, max_results):
-        if any(query.startswith("site:") for query in queries):
-            host = queries[0].split()[0].removeprefix("site:")
-            results = [
-                {"url": f"https://{host}/pricing", "title": f"{host} pricing", "snippet": "Pricing page"},
-                {"url": "https://elsewhere.example/pricing", "title": "Off-site", "snippet": "Wrong host"},
-            ]
-        else:
-            results = [
-                {"url": "https://todoist.com/pricing", "title": "Todoist Pricing", "snippet": "Todoist pricing"},
-                {"url": "https://clickup.com/pricing", "title": "ClickUp Pricing", "snippet": "ClickUp pricing"},
-                {"url": "https://www.todoist.com/features", "title": "Todoist Features",
-                 "snippet": "Todoist features"},
-            ]
+        results = []
+        for query in queries:
+            if query.startswith("site:"):
+                host = query.split()[0].removeprefix("site:")
+                results += [
+                    {"url": f"https://{host}/pricing", "title": f"{host} pricing",
+                     "snippet": "Pricing page"},
+                    {"url": "https://elsewhere.example/pricing", "title": "Off-site",
+                     "snippet": "Wrong host"},
+                ]
+            else:
+                results += [
+                    {"url": "https://todoist.com/pricing", "title": "Todoist Pricing",
+                     "snippet": "Todoist pricing"},
+                    {"url": "https://clickup.com/pricing", "title": "ClickUp Pricing",
+                     "snippet": "ClickUp pricing"},
+                    {"url": "https://www.todoist.com/features", "title": "Todoist Features",
+                     "snippet": "Todoist features"},
+                ]
         return json.dumps({"data": {"results": results}})
 
 
