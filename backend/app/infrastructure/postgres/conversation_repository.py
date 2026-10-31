@@ -1,6 +1,5 @@
 """PostgreSQL adapter for the Conversations bounded context."""
 
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
@@ -8,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.postgres_client import AsyncSessionLocal
 from app.infrastructure.postgres.models import (
     ConversationMessageModel,
@@ -42,7 +42,7 @@ class PostgresConversationRepository(ConversationRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def _with_session(
         self,

@@ -154,6 +154,7 @@ async def list_run_events(
         )
     return await service.list_run_events(
         run_id,
+        user_id,
         after_event_id=after_event_id,
         limit=limit,
     )
@@ -179,7 +180,7 @@ async def list_run_results(
     """Return structured task results for the run after ownership validation."""
 
     await _require_owned_run(service, run_id, user_id)
-    return await service.list_run_results(run_id, limit)
+    return await service.list_run_results(run_id, user_id, limit)
 
 
 @router.get("/{run_id}/evidence")
@@ -190,7 +191,7 @@ async def list_run_evidence(
     user_id: str = Depends(get_current_user_id),
 ):
     await _require_owned_run(service, run_id, user_id)
-    return await service.list_run_evidence(run_id, limit)
+    return await service.list_run_evidence(run_id, user_id, limit)
 
 
 @router.get("/{run_id}/evidence/{evidence_id}")
@@ -215,7 +216,7 @@ async def list_run_artifacts(
     user_id: str = Depends(get_current_user_id),
 ):
     await _require_owned_run(service, run_id, user_id)
-    artifacts = await service.list_run_artifacts(run_id, limit)
+    artifacts = await service.list_run_artifacts(run_id, user_id, limit)
     return [
         {
             **artifact.model_dump(mode="json"),
@@ -233,7 +234,7 @@ async def download_run_artifact(
     user_id: str = Depends(get_current_user_id),
 ):
     await _require_owned_run(service, run_id, user_id)
-    artifact = await service.get_run_artifact(run_id, artifact_id)
+    artifact = await service.get_run_artifact(run_id, artifact_id, user_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
     if service.artifact_storage is None:
@@ -328,7 +329,7 @@ async def stream_run(
         )
 
     return StreamingResponse(
-        service.stream_run_events(run_id, after_event_id=last_event_id),
+        service.stream_run_events(run_id, user_id, after_event_id=last_event_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

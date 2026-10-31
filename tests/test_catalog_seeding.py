@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
+from app.core.config import settings
 from app.db.init_db import seed_defaults
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.registry import autodiscover_tools
@@ -60,7 +61,7 @@ class CatalogSeedingTests(unittest.IsolatedAsyncioTestCase):
         result.scalars.return_value.all.return_value = rows
         session = MagicMock()
         session.execute = AsyncMock(return_value=result)
-        with patch.dict(os.environ, {"TESTING": "false"}):
+        with patch.object(settings, "REPOSITORY_BACKEND", "postgres"):
             tools = await PostgresCatalogRepository(session).list_tools()
         self.assertTrue(tools[0].is_available)
         self.assertFalse(tools[1].is_available)

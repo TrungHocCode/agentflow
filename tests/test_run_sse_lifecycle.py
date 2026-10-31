@@ -72,7 +72,7 @@ class TestRunSSELifecycle(unittest.IsolatedAsyncioTestCase):
             execution_port=_ExecutionPort(),
             event_publisher=publisher,
         )
-        stream = service.stream_run_events(run_id)
+        stream = service.stream_run_events(run_id, "user-1")
 
         first_frame = await anext(stream)
         self.assertIn('"legacy_type": "start"', first_frame)

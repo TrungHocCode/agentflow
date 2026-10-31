@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 from pydantic import Field, model_validator
@@ -9,8 +10,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str = "local"
     LOG_LEVEL: str = "INFO"
+
+    # Runtime safety switches. Unset values are derived from ENVIRONMENT in the
+    # validator below; explicit overrides (including unsafe ones) are preserved
+    # so production startup validation can reject them.
+    AUTH_MODE: Literal["required", "disabled"] | None = None
+    REPOSITORY_BACKEND: Literal["postgres", "memory"] | None = None
 
     # PostgreSQL
     POSTGRES_URL: str = "postgresql+asyncpg://agentflow:agentflow_password@localhost:5433/agentflow_db"
@@ -81,6 +88,15 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def resolve_runtime_flags(self) -> "Settings":
+        is_test = self.ENVIRONMENT.strip().lower() == "test"
+        if self.AUTH_MODE is None:
+            self.AUTH_MODE = "disabled" if is_test else "required"
+        if self.REPOSITORY_BACKEND is None:
+            self.REPOSITORY_BACKEND = "memory" if is_test else "postgres"
+        return self
+
+    @model_validator(mode="after")
     def resolve_artifact_root(self) -> "Settings":
         root = Path(self.ARTIFACT_ROOT)
         if not root.is_absolute():
@@ -104,6 +120,10 @@ def validate_runtime_settings(config: Settings = settings) -> None:
         raise ValueError(f"Unsupported LOG_LEVEL: {config.LOG_LEVEL!r}")
 
     if config.ENVIRONMENT.strip().lower() in {"production", "prod"}:
+        if config.AUTH_MODE != "required":
+            raise ValueError("Production requires AUTH_MODE=required.")
+        if config.REPOSITORY_BACKEND != "postgres":
+            raise ValueError("Production requires REPOSITORY_BACKEND=postgres.")
         if config.AUTH_SIGNING_SECRET == "development-only-change-me" or len(
             config.AUTH_SIGNING_SECRET
         ) < 32:

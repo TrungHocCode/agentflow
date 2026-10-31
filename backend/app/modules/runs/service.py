@@ -4,11 +4,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
 
 from app.core.config import settings
@@ -36,7 +35,7 @@ from app.modules.results.models import EvidenceRecord, ResultRecord
 from app.modules.results.ports import ArtifactStorage, ResearchDataRepository
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.commands import RunCommand
-from app.shared.errors import ConflictError, PersistenceError, ValidationError
+from app.shared.errors import ConflictError, PersistenceError, ResourceNotFoundError, ValidationError
 from app.shared.events import ExecutionEvent
 from app.shared.execution_metrics import (
     merge_execution_timings,
@@ -137,6 +136,36 @@ class RunService:
         if user_id is not None:
             return [document for document in documents if document.user_id == user_id]
         return documents
+
+    async def mark_stale_runs_zombie(self, now: datetime) -> List[RunDocument]:
+        """Interrupt queued/running runs abandoned far beyond the duration budget."""
+
+        cutoff = now - timedelta(seconds=2 * settings.MAX_RUN_DURATION)
+        list_stale_active = getattr(self.run_repository, "list_stale_active", None)
+        if list_stale_active is None:
+            return []
+        interrupted: List[RunDocument] = []
+        for run_doc in await list_stale_active(cutoff):
+            if run_doc.status not in {"queued", "running"}:
+                continue
+            run_doc.status = "interrupted"
+            run_doc.error_code = "run_stale_interrupted"
+            run_doc.error_message = "Run exceeded the stale-run watchdog limit."
+            run_doc.updated_at = now
+            run_doc.logs.append("[RunService] Marked stale run as interrupted.")
+            await self.save_run_doc(run_doc)
+            await self._record_event(
+                run_doc.run_id,
+                "run_interrupted",
+                phase="execute",
+                status="interrupted",
+                payload={
+                    "message": run_doc.error_message,
+                    "code": run_doc.error_code,
+                },
+            )
+            interrupted.append(run_doc)
+        return interrupted
 
     async def create_run(
         self,
@@ -1079,12 +1108,20 @@ class RunService:
                 )
         return run_doc
 
+    async def _require_owned_run(self, run_id: str, user_id: str) -> RunDocument:
+        run_doc = await self.get_run(run_id, user_id=user_id)
+        if run_doc is None:
+            raise ResourceNotFoundError(f"Run {run_id} was not found.", entity="run")
+        return run_doc
+
     async def list_run_events(
         self,
         run_id: str,
+        user_id: str,
         after_event_id: str | None = None,
         limit: int = 200,
     ) -> List[ExecutionEvent]:
+        await self._require_owned_run(run_id, user_id)
         list_events = getattr(self.run_repository, "list_events", None)
         if list_events is None:
             return []
@@ -1094,12 +1131,14 @@ class RunService:
             limit=limit,
         )
 
-    async def list_run_results(self, run_id: str, limit: int = 200):
+    async def list_run_results(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_results(run_id, limit)
 
-    async def list_run_evidence(self, run_id: str, limit: int = 200):
+    async def list_run_evidence(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_evidence(run_id, limit)
@@ -1109,12 +1148,14 @@ class RunService:
             return None
         return await self.research_repository.get_evidence(evidence_id, run_id)
 
-    async def list_run_artifacts(self, run_id: str, limit: int = 200):
+    async def list_run_artifacts(self, run_id: str, user_id: str, limit: int = 200):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return []
         return await self.research_repository.list_artifacts(run_id, limit)
 
-    async def get_run_artifact(self, run_id: str, artifact_id: str):
+    async def get_run_artifact(self, run_id: str, artifact_id: str, user_id: str):
+        await self._require_owned_run(run_id, user_id)
         if self.research_repository is None:
             return None
         return await self.research_repository.get_artifact(artifact_id, run_id)
@@ -1122,21 +1163,12 @@ class RunService:
     async def stream_run_events(
         self,
         run_id: str,
+        user_id: str,
         after_event_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Observe persisted and live events; never starts execution."""
 
-        run_doc = await self.get_run(run_id)
-        if not run_doc:
-            yield self._sse_event(
-                run_id,
-                "error",
-                phase="run",
-                status="failed",
-                payload={"message": f"Run {run_id} not found"},
-                message=f"Run {run_id} not found",
-            )
-            return
+        run_doc = await self._require_owned_run(run_id, user_id)
 
         seen_ids: set[str] = set()
         if after_event_id is None:
@@ -1150,6 +1182,7 @@ class RunService:
 
         persisted_events = await self.list_run_events(
             run_id,
+            user_id,
             after_event_id=after_event_id,
         )
         for event in persisted_events:
@@ -1186,9 +1219,9 @@ class RunService:
                 )
             return
 
-        latest = await self.get_run(run_id)
+        latest = await self.get_run(run_id, user_id=user_id)
         if latest and latest.status in TERMINAL_RUN_STATUSES:
-            trailing = await self.list_run_events(run_id)
+            trailing = await self.list_run_events(run_id, user_id)
             for event in trailing:
                 if event.event_id not in seen_ids:
                     seen_ids.add(event.event_id)
@@ -1208,8 +1241,8 @@ class RunService:
                         timeout=1.0,
                     )
                 except asyncio.TimeoutError:
-                    latest = await self.get_run(run_id)
-                    trailing = await self.list_run_events(run_id)
+                    latest = await self.get_run(run_id, user_id=user_id)
+                    trailing = await self.list_run_events(run_id, user_id)
                     for trailing_event in trailing:
                         if trailing_event.event_id not in seen_ids:
                             seen_ids.add(trailing_event.event_id)
@@ -1887,12 +1920,16 @@ class RunService:
     ) -> Dict[str, Any]:
         """Freeze model routing, prompts, step bindings and active tool metadata for replay."""
 
-        from app.execution.agents.resolver import AGENT_RUNTIME_GUIDANCE, DEFAULT_AGENT_PROFILES
+        from app.execution.agents.resolver import (
+            AGENT_RUNTIME_GUIDANCE,
+            DEFAULT_AGENT_PROFILES,
+            GLOBAL_RUNTIME_GUIDANCE,
+        )
         from app.execution.model_router import model_name_for
 
         agents_by_ref: Dict[str, Any] = {}
         tools_by_ref: Dict[str, Any] = {}
-        if self.catalog_repository is not None and os.getenv("TESTING", "").lower() != "true":
+        if self.catalog_repository is not None and settings.ENVIRONMENT.strip().lower() != "test":
             agents = await self.catalog_repository.list_agents(active_only=True)
             tools = await self.catalog_repository.list_tools(active_only=True)
             agents_by_ref = {
@@ -1940,7 +1977,7 @@ class RunService:
                 if task.tool_names
                 else "No tools are available for this task; do not attempt tool calls."
             )
-            prompt_sections = [profile["system_prompt"]]
+            prompt_sections = [GLOBAL_RUNTIME_GUIDANCE, profile["system_prompt"]]
             runtime_guidance = AGENT_RUNTIME_GUIDANCE.get(profile["name"])
             if runtime_guidance:
                 prompt_sections.append(runtime_guidance)

@@ -1,6 +1,5 @@
 """Conversation HTTP endpoints for the Build Phase."""
 
-import os
 from typing import List
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -141,7 +140,7 @@ async def send_conversation_message(
         settings.CHAT_RATE_LIMIT_PER_MINUTE,
         60,
     )
-    if os.getenv("TESTING", "").lower() == "true":
+    if settings.ENVIRONMENT.strip().lower() == "test":
         conversation = await service.send_message(
             conversation_id=conversation_id,
             content=request.content,

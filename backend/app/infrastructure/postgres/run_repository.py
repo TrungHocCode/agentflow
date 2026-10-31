@@ -1,6 +1,5 @@
 """PostgreSQL adapter for durable run state and replayable events."""
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Sequence, TypeVar
@@ -8,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Sequence, TypeVar
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.postgres_client import AsyncSessionLocal
 from app.infrastructure.postgres.models import (
     RunEventModel,
@@ -39,7 +39,7 @@ class PostgresRunRepository(RunRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def _with_session(
         self,
@@ -393,6 +393,29 @@ class PostgresRunRepository(RunRepository):
         except Exception as exc:
             await self._rollback()
             raise PersistenceError("Could not list run events.") from exc
+
+    async def list_stale_active(self, updated_before: datetime) -> List[RunDocument]:
+        if self.use_memory:
+            return [
+                RunDocument(**data)
+                for data in _IN_MEMORY_RUNS.values()
+                if data.get("status") in {"queued", "running"}
+                and data.get("updated_at") < updated_before
+            ]
+
+        try:
+            result = await self._with_session(
+                lambda session: session.execute(
+                    select(RunModel).where(
+                        RunModel.status.in_(["queued", "running"]),
+                        RunModel.updated_at < updated_before,
+                    )
+                )
+            )
+            return [self._to_domain(record) for record in result.scalars().all()]
+        except Exception as exc:
+            await self._rollback()
+            raise PersistenceError("Could not list stale active runs.") from exc
 
     @staticmethod
     def _to_orm_values(document: RunDocument) -> Dict[str, Any]:

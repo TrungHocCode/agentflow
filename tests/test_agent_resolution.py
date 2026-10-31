@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from app.execution.agents.resolver import (
     AgentProfile,
     AgentResolver,
+    DEFAULT_AGENT_PROFILES,
+    GLOBAL_RUNTIME_GUIDANCE,
 )
 from app.core.config import settings
 from app.execution.state import Task
@@ -370,6 +372,30 @@ class TestAgentResolution(unittest.IsolatedAsyncioTestCase):
         repository.active = False
         with self.assertRaisesRegex(ValueError, "missing or inactive"):
             await resolver.validate_plan([task])
+
+    async def test_every_default_role_receives_global_tool_output_guidance(self) -> None:
+        class DefaultProfileProvider:
+            async def get_agent(self, identifier: str) -> AgentProfile | None:
+                return DEFAULT_AGENT_PROFILES.get(identifier)
+
+        resolver = AgentResolver(provider=DefaultProfileProvider())
+        for role in DEFAULT_AGENT_PROFILES:
+            with self.subTest(role=role):
+                task = Task(
+                    id=1,
+                    node=role,
+                    agent_id=role,
+                    status="running",
+                    description="Execute the assigned task",
+                )
+                resolved = await resolver.resolve(task)
+                agent = resolver.create_agent(
+                    resolved=resolved,
+                    llm=MagicMock(spec=BaseChatModel),
+                    task=task,
+                )
+                self.assertIn(GLOBAL_RUNTIME_GUIDANCE, agent.system_prompt)
+                self.assertIn("<tool_output>", agent.system_prompt)
 
     async def test_resolved_profile_can_create_registered_runtime_agent(self) -> None:
         resolver = AgentResolver()

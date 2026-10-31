@@ -29,5 +29,14 @@ def isolated_workspace() -> Iterator[Path]:
 
 
 def use_test_adapters(case: TestCase) -> None:
-    """Set the test switch per test, including restoration after setup failures."""
-    case.enterContext(patch.dict(os.environ, {"TESTING": "true"}))
+    """Set the test switches per test, including restoration after setup failures."""
+    values = {
+        "ENVIRONMENT": "test",
+        "AUTH_MODE": "disabled",
+        "REPOSITORY_BACKEND": "memory",
+    }
+    case.enterContext(patch.dict(os.environ, values))
+    config = sys.modules.get("app.core.config")
+    if config is not None:
+        for name, value in values.items():
+            case.enterContext(patch.object(config.settings, name, value))

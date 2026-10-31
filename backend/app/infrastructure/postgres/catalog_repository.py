@@ -1,11 +1,11 @@
 """SQLAlchemy adapter for the Catalog bounded context."""
 
-import os
 from typing import List
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.postgres_client import AsyncSessionLocal
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.registry import autodiscover_tools
@@ -25,7 +25,7 @@ class PostgresCatalogRepository(CatalogRepository):
     def use_memory(self) -> bool:
         """Keep the dependency-free test path explicit and test-only."""
 
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def list_agents(self, active_only: bool = True) -> List[AgentDefinition]:
         if self.use_memory:

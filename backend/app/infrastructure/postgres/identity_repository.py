@@ -1,12 +1,12 @@
 """PostgreSQL adapter for identity data with an isolated test store."""
 
-import os
 from datetime import datetime, timezone
 from typing import Dict, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.infrastructure.postgres.models.identity import UserModel
 from app.modules.identity.models import UserRecord
 from app.modules.identity.ports import UserRepository
@@ -22,7 +22,7 @@ class PostgresUserRepository(UserRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def create(self, user: UserRecord, password_hash: str) -> UserRecord:
         if self.use_memory:

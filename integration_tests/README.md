@@ -11,7 +11,7 @@ Real integration uses separate PostgreSQL/Redis services, not the application's 
 ```powershell
 docker compose -p agentflow-phase0-test -f compose.test.yml up -d --wait
 $env:AGENTFLOW_INTEGRATION_TESTS = '1'
-$env:TESTING = 'false'
+$env:ENVIRONMENT = 'local'
 $env:POSTGRES_URL = 'postgresql+asyncpg://agentflow_test:test_only_password@127.0.0.1:55432/agentflow_test'
 $env:REDIS_URL = 'redis://127.0.0.1:56379/15'
 python scripts/run_tests.py integration
@@ -20,7 +20,7 @@ docker compose -p agentflow-phase0-test -f compose.test.yml down -v
 
 Use a dedicated terminal; close it after running to discard these environment overrides.
 On Linux export the same variables. The integration runner fails rather than skips
-when TESTING is enabled, configuration is missing/unsafe, or infrastructure is absent.
+when the test environment is enabled, configuration is missing/unsafe, or infrastructure is absent.
 Only loopback ports 55432/56379 and database names agentflow_test/15 are accepted.
 Migrations/seeds are applied to that disposable database, never inferred from `.env`.
 Cleanup removes fixture-owned rows/queue keys; `down -v` removes only this test project's volumes.

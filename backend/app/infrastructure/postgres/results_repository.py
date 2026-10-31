@@ -1,11 +1,11 @@
 """PostgreSQL adapter for structured results, evidence and artifact metadata."""
 
-import os
 from typing import Any, Awaitable, Callable, Dict, List, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.postgres_client import AsyncSessionLocal
 from app.infrastructure.postgres.models.results import ArtifactModel, EvidenceModel, ResultModel
 from app.modules.results.models import ArtifactRecord, EvidenceRecord, ResultRecord
@@ -30,7 +30,7 @@ class PostgresResearchRepository(ResearchDataRepository):
 
     @property
     def use_memory(self) -> bool:
-        return os.getenv("TESTING", "").lower() == "true"
+        return settings.REPOSITORY_BACKEND == "memory"
 
     async def _with_session(self, operation: Callable[[AsyncSession], Awaitable[_T]]) -> _T:
         if self.session is not None:
