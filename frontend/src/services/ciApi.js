@@ -66,6 +66,14 @@ export async function recommendWatchlists(prompt) {
   return ciRequest('/watchlists/recommendations', json('POST', { prompt }));
 }
 
+export async function discoverCompetitors(prompt) {
+  return ciRequest('/watchlists/discover-competitors', json('POST', { prompt }));
+}
+
+export async function discoverSources(domains, dimension) {
+  return ciRequest('/watchlists/discover-sources', json('POST', { domains, dimension }));
+}
+
 export async function updateWatchlist(watchlistId, payload) {
   return ciRequest(`/watchlists/${enc(watchlistId)}`, json('PATCH', payload));
 }

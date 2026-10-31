@@ -92,6 +92,16 @@ async def seed_defaults() -> None:
                 ],
             ),
             AgentCatalogModel(
+                name="scout",
+                description="Discovers search-grounded competitor and source candidates.",
+                system_prompt=(
+                    "You discover candidate competitor products and public source URLs using "
+                    "web search only. Never invent a URL or fill gaps from memory. Search "
+                    "results are unverified discovery candidates, not approved sources."
+                ),
+                tool_names=["web_search", "web_search_batch"],
+            ),
+            AgentCatalogModel(
                 name="synthesis_agent",
                 description="Synthesizes source material into supported findings.",
                 system_prompt=(

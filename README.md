@@ -62,6 +62,7 @@ These are target responsibilities, not six agents already wired into the applica
 | --- | --- | --- |
 | Supervisor / Coordinator | Clarify goals, propose a plan, resolve evidence gaps within approved scope | Read profiles, product history, source catalog and investigation state |
 | Source Researcher | Find and collect approved public evidence | Search, single/batch crawl, HTTP fetch, bounded snapshot reads |
+| Scout | Discover unverified competitor and source candidates before setup approval | Search only (`web_search`, `web_search_batch`); no model memory or crawl |
 | Product Analyst | Extract product facts and interpret detected changes | Read profiles/history, change candidates, snapshots and evidence |
 | Evidence Verifier | Check support, contradictions, dates and conditions | Read evidence/snapshots; scoped additional search or collection |
 | Competitive Analyst | Assess gaps, strengths and impact for the target customer | Read verified findings, product profiles/history and comparison criteria |
@@ -78,7 +79,7 @@ The backend owns permissions, storage, diffs, arithmetic, validation, budgets an
 - **Keep approval in the loop:** review and approve a workflow before its run begins.
 - **Execute dependency-aware workflows:** tasks are ordered by their dependencies; the current dispatcher runs one ready task at a time, so parallel task execution is not implemented yet.
 
-CI configuration endpoints are under `/api/v1/watchlists`: create/list/read/update/archive, revision history and approval, products/sources, immutable product profile history, and manual run submission/history. `/watchlists/proposals` derives a bounded draft from an owned persisted conversation; it neither saves nor approves it. API schemas are available at `/docs` and `/openapi.json` while the backend is running.
+CI configuration endpoints are under `/api/v1/watchlists`: create/list/read/update/archive, revision history and approval, products/sources, immutable product profile history, and manual run submission/history. `/watchlists/proposals` derives a bounded draft from an owned persisted conversation; it neither saves nor approves it. The setup UX uses two explicit human-in-the-loop stages: a code-owned Scout searches for competitors (`/watchlists/discover-competitors`, `web_search` provenance), then searches same-site source URLs only for the domains the user picked (`/watchlists/discover-sources`); nothing is persisted or approved until the user creates the watchlist. API schemas are available at `/docs` and `/openapi.json` while the backend is running.
 
 CI run admission freezes goals, product profile versions, criteria, source configuration and tightened budgets. One active run per watchlist is enforced in PostgreSQL; owner-scoped idempotency returns the original run without requeueing it. Baseline references are explicitly null until snapshot support is implemented; these runs do **not** perform competitive change detection yet.
 - **Use role-specific agents and tools:** research, synthesis, reporting, and chart work are assigned to agents with authorized tools.

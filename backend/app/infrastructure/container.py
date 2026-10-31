@@ -29,6 +29,7 @@ from app.infrastructure.redis.conversation_event_publisher import (
     RedisConversationEventPublisher,
     get_in_memory_conversation_publisher,
 )
+from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
 from app.modules.runs.events import RunEventPublisher
@@ -168,8 +169,10 @@ def build_research_result_service(session: AsyncSession | None = None) -> Resear
 
 
 def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
+    rate_limiter = NoopRateLimiter() if settings.REPOSITORY_BACKEND == "memory" else RedisRateLimiter()
     return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
-                               PostgresConversationRepository(), OllamaSetupPlanner())
+                               PostgresConversationRepository(), OllamaSetupPlanner(),
+                               rate_limiter=rate_limiter)
 
 
 def build_snapshot_service() -> SnapshotService:
