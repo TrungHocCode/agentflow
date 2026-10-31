@@ -62,6 +62,15 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
             "http_request",
         ],
     ),
+    "scout": AgentProfile(
+        name="scout",
+        system_prompt=(
+            "You discover candidate competitor products and public source URLs using web search only. "
+            "Return search-grounded candidates with their URLs; never invent a URL or fill gaps from memory. "
+            "Search results are unverified discovery candidates, not approved sources."
+        ),
+        tool_names=["web_search", "web_search_batch"],
+    ),
     "synthesis_agent": AgentProfile(
         name="synthesis_agent",
         system_prompt=(

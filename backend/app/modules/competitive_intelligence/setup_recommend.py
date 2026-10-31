@@ -11,9 +11,10 @@ from pydantic import Field
 
 from app.modules.competitive_intelligence.models import Contract, SourceKind
 
-RecommendationProvenance = Literal["model_knowledge", "user_supplied"]
+RecommendationProvenance = Literal["model_knowledge", "user_supplied", "web_search"]
 MAX_RECOMMENDED_PRODUCTS = 10
 MAX_RECOMMENDED_SOURCES = 40
+MAX_DISCOVERY_DOMAINS = 10
 
 
 class RecommendedSource(Contract):
@@ -30,6 +31,7 @@ class RecommendedProduct(Contract):
     official_website: str | None = Field(None, max_length=2048)
     sources: list[RecommendedSource] = Field(default_factory=list, max_length=20)
     rationale: str = Field(default="", max_length=500)
+    provenance: RecommendationProvenance = "model_knowledge"
 
 
 class SuggestedCriterion(Contract):
@@ -50,3 +52,12 @@ class SetupRecommendation(Contract):
 
 class RecommendRequest(Contract):
     prompt: str = Field(min_length=1, max_length=2000)
+
+
+class DiscoverCompetitorsRequest(Contract):
+    prompt: str = Field(min_length=1, max_length=2000)
+
+
+class DiscoverSourcesRequest(Contract):
+    domains: list[str] = Field(min_length=1, max_length=MAX_DISCOVERY_DOMAINS)
+    dimension: SourceKind

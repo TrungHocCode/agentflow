@@ -9,13 +9,15 @@ from app.modules.competitive_intelligence.models import (
     CreateWatchlist, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
     UpdateWatchlist, Watchlist, digest, public_url,
 )
+from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.setup_recommend import (
-    MAX_RECOMMENDED_PRODUCTS, MAX_RECOMMENDED_SOURCES, SetupRecommendation,
+    MAX_RECOMMENDED_PRODUCTS, MAX_RECOMMENDED_SOURCES, RecommendedSource, SetupRecommendation,
 )
 from app.modules.competitive_intelligence.ports import IntelligenceRepository, SetupPlanner
 from app.modules.conversations.ports import ConversationRepository
 from app.modules.runs.models import RunDocument, RunResponse
 from app.modules.runs.service import RunService
+from app.modules.system.ports import RateLimiter
 from app.shared.errors import ConflictError, ResourceNotFoundError, ValidationError
 
 SAFE_ROLES = {"source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst",
@@ -26,9 +28,17 @@ SAFE_TOOLS = {"news_crawler", "news_crawler_batch", "http_request", "text_summar
 
 class IntelligenceService:
     def __init__(self, repository: IntelligenceRepository, runs: RunService,
-                 conversations: ConversationRepository | None = None, planner: SetupPlanner | None = None) -> None:
+                 conversations: ConversationRepository | None = None, planner: SetupPlanner | None = None,
+                 scout: ScoutDiscovery | None = None, rate_limiter: RateLimiter | None = None) -> None:
         self.repository, self.run_service = repository, runs
         self.conversations, self.planner = conversations, planner
+        self.scout = scout if scout is not None else ScoutDiscovery()
+        # Composition injects the shared limiter, which hashes the identifier into
+        # "agentflow:rate:v1:ci-scout:<sha256(owner_id)>"; passing the owner as the
+        # identifier gives the required per-owner 3/86400 window without a new store.
+        # A missing port means "no shared limiter configured" (unit/service wiring only);
+        # production composition always supplies Redis via build_intelligence_service.
+        self.rate_limiter = rate_limiter
 
     @staticmethod
     def validate_budget(request: CreateWatchlist) -> None:
@@ -91,6 +101,25 @@ class IntelligenceService:
         if len(raw.products) > MAX_RECOMMENDED_PRODUCTS:
             warnings.append(f"Truncated to {MAX_RECOMMENDED_PRODUCTS} products; refine the description.")
         return raw.model_copy(update={"products": products, "warnings": warnings[:16]})
+
+    async def discover_competitors(self, prompt: str, owner_id: str) -> SetupRecommendation:
+        """Return search-grounded competitor candidates; nothing is persisted or approved."""
+
+        await self._consume_scout_round(owner_id)
+        products = await self.scout.stage_a(prompt)
+        return SetupRecommendation(products=products, warnings=list(self.scout.warnings)[:16])
+
+    async def discover_sources(self, domains: list[str], dimension: str,
+                               owner_id: str) -> dict[str, list[RecommendedSource]]:
+        """Return same-site source URL candidates for explicitly picked domains."""
+
+        await self._consume_scout_round(owner_id)
+        return await self.scout.stage_b(domains, dimension)
+
+    async def _consume_scout_round(self, owner_id: str) -> None:
+        if self.rate_limiter is None:
+            return
+        await self.rate_limiter.consume("ci-scout", owner_id, 3, 86400)
 
     async def propose(self, conversation_id: str, owner_id: str) -> CreateWatchlist:
         if self.conversations is None or self.planner is None:

@@ -14,7 +14,9 @@ from app.modules.competitive_intelligence.models import (
 from app.modules.competitive_intelligence.schedule_contracts import CreateSchedule, Schedule, UpdateSchedule
 from app.modules.competitive_intelligence.scheduling_service import SchedulingService
 from app.modules.competitive_intelligence.service import IntelligenceService
-from app.modules.competitive_intelligence.setup_recommend import RecommendRequest, SetupRecommendation
+from app.modules.competitive_intelligence.setup_recommend import (
+    DiscoverCompetitorsRequest, DiscoverSourcesRequest, RecommendRequest, RecommendedSource, SetupRecommendation,
+)
 from app.modules.runs.models import RunResponse
 
 router = APIRouter(prefix="/watchlists", tags=["Competitive Intelligence"])
@@ -31,6 +33,20 @@ async def recommend(request: RecommendRequest,
                     service: IntelligenceService = Depends(get_intelligence_service),
                     owner: str = Depends(get_current_user_id)) -> SetupRecommendation:
     return await service.recommend(request.prompt, owner)
+
+
+@router.post("/discover-competitors", response_model=SetupRecommendation)
+async def discover_competitors(request: DiscoverCompetitorsRequest,
+                               service: IntelligenceService = Depends(get_intelligence_service),
+                               owner: str = Depends(get_current_user_id)) -> SetupRecommendation:
+    return await service.discover_competitors(request.prompt, owner)
+
+
+@router.post("/discover-sources", response_model=dict[str, list[RecommendedSource]])
+async def discover_sources(request: DiscoverSourcesRequest,
+                           service: IntelligenceService = Depends(get_intelligence_service),
+                           owner: str = Depends(get_current_user_id)) -> dict[str, list[RecommendedSource]]:
+    return await service.discover_sources(request.domains, request.dimension, owner)
 
 
 @router.post("", response_model=Watchlist, status_code=201)
