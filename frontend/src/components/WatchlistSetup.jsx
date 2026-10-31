@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createWatchlist, recommendWatchlists } from '../services/ciApi';
+import { createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -24,12 +24,22 @@ function blankProduct(kind) {
 }
 
 function blankSource() {
-  return { url: '', kind: 'pricing', provenance: 'user_supplied', note: '' };
+  return { url: '', kind: 'pricing', provenance: 'user_supplied', note: '', tracked: true };
+}
+
+function withTrackedSources(item) {
+  return {
+    ...item,
+    tracked: item.tracked ?? true,
+    sources: (item.sources || []).map((source) => ({ ...source, tracked: source.tracked ?? true }))
+  };
 }
 
 export default function WatchlistSetup({ onCreated, onCancel }) {
   const [prompt, setPrompt] = useState('');
-  const [recommending, setRecommending] = useState(false);
+  const [discoveringCompetitors, setDiscoveringCompetitors] = useState(false);
+  const [discoveringSources, setDiscoveringSources] = useState(false);
+  const [discovered, setDiscovered] = useState(false);
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [dimensions, setDimensions] = useState(['pricing']);
@@ -39,31 +49,60 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
+  const pickedDomains = products
+    .filter((item) => item.tracked && item.official_website?.trim())
+    .map((item) => item.official_website.trim());
+
   function toggleDimension(dimension) {
     setDimensions((current) =>
       current.includes(dimension) ? current.filter((item) => item !== dimension) : [...current, dimension]
     );
   }
 
-  async function handleRecommend(event) {
+  async function handleDiscoverCompetitors(event) {
     event.preventDefault();
-    setRecommending(true);
+    setDiscoveringCompetitors(true);
     setError('');
     try {
-      const recommendation = await recommendWatchlists(prompt);
-      if (recommendation.suggested_goal) setGoal(recommendation.suggested_goal);
-      if (recommendation.suggested_dimensions?.length) setDimensions(recommendation.suggested_dimensions);
-      if (recommendation.suggested_criteria?.length) {
-        setCriteria(recommendation.suggested_criteria.map((item) => ({ ...item })));
-      }
-      if (recommendation.products?.length) {
-        setProducts(recommendation.products.map((item) => ({ ...item, tracked: true })));
-      }
+      const recommendation = await discoverCompetitors(prompt);
+      const competitors = (recommendation.products || []).map((item) =>
+        withTrackedSources({ ...item, kind: item.kind || 'competitor', tracked: true })
+      );
+      setProducts((current) => [...current.filter((item) => item.kind === 'own'), ...competitors]);
       setWarnings(recommendation.warnings || []);
+      setDiscovered(true);
     } catch (err) {
       setError(err.message);
     } finally {
-      setRecommending(false);
+      setDiscoveringCompetitors(false);
+    }
+  }
+
+  async function handleDiscoverSources() {
+    if (pickedDomains.length === 0) {
+      setError('Pick at least one competitor with an official website first.');
+      return;
+    }
+    setDiscoveringSources(true);
+    setError('');
+    try {
+      const dimension = dimensions[0] || 'pricing';
+      const requested = new Set(pickedDomains);
+      const sourcesByDomain = await discoverSources([...requested], dimension);
+      setProducts((current) =>
+        current.map((item) => {
+          const found = item.official_website && requested.has(item.official_website)
+            ? sourcesByDomain[item.official_website]
+            : null;
+          if (!found) return item;
+          return { ...item, sources: found.map((source) => ({ ...source, tracked: true })) };
+        })
+      );
+      setDiscovered(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDiscoveringSources(false);
     }
   }
 
@@ -117,7 +156,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             official_website: item.official_website || null,
             profile: { facts: [], target_segments: [] },
             sources: (item.sources || [])
-              .filter((source) => source.url.trim())
+              .filter((source) => source.url.trim() && source.tracked !== false)
               .map((source) => ({ url: source.url.trim(), kind: source.kind, enabled: true }))
           }))
         }
@@ -139,21 +178,45 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ci-setup-prompt">Describe your product and what to track (optional)</Label>
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="ci-setup-prompt">Describe your product and what to track</Label>
           <Textarea
             id="ci-setup-prompt"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             placeholder="I make TaskFlow, a team task manager. Track pricing of Todoist and ClickUp."
           />
-          <div>
-            <Button type="button" variant="outline" onClick={handleRecommend} disabled={recommending || !prompt.trim()}>
-              {recommending ? 'Recommending…' : 'Get recommendations'}
-            </Button>
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-medium">Step 1 — Find competitors</p>
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDiscoverCompetitors}
+                disabled={discoveringCompetitors || !prompt.trim()}
+              >
+                {discoveringCompetitors ? 'Searching…' : 'Find competitors'}
+              </Button>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-medium">Step 2 — Find source URLs</p>
+            <p className="text-xs text-muted-foreground">
+              Searches only the picked competitor domains for the selected dimension ({dimensions[0] || 'pricing'}).
+            </p>
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleDiscoverSources}
+                disabled={discoveringSources || pickedDomains.length === 0}
+              >
+                {discoveringSources ? 'Searching…' : 'Find source URLs'}
+              </Button>
+            </div>
           </div>
         </div>
-        {warnings.length > 0 && (
+        {(discovered || warnings.length > 0) && (
           <Alert>
             <AlertDescription>
               Unverified draft — review every entry before creating. {warnings.join(' ')}
@@ -206,9 +269,14 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
           {products.map((item, index) => (
             <Card key={index} className="flex flex-col gap-2 p-3">
               <label className="flex items-center gap-2 text-sm font-medium">
-                <input type="checkbox" checked={item.tracked} onChange={(event) => updateProduct(index, { tracked: event.target.checked })} />
+                <input
+                  type="checkbox"
+                  checked={item.tracked}
+                  onChange={(event) => updateProduct(index, { tracked: event.target.checked })}
+                  aria-label={`Track ${item.name || 'product'}`}
+                />
                 {item.kind === 'own' ? 'Own product' : 'Competitor'}
-                {item.rationale && <Badge variant="outline">{item.provenance || 'draft'}</Badge>}
+                {item.provenance && <Badge variant="outline">{item.provenance}</Badge>}
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <Input value={item.name} onChange={(event) => updateProduct(index, { name: event.target.value })} placeholder="Product name" aria-label="Product name" />
@@ -217,7 +285,13 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
               <Input value={item.official_website || ''} onChange={(event) => updateProduct(index, { official_website: event.target.value })} placeholder="https://product.example/" aria-label="Official website" />
               <div className="flex flex-col gap-1">
                 {(item.sources || []).map((source, sub) => (
-                  <div key={sub} className="grid grid-cols-[2fr_1fr_auto_auto] items-center gap-2">
+                  <div key={sub} className="grid grid-cols-[auto_2fr_1fr_auto_auto] items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={source.tracked !== false}
+                      onChange={(event) => updateSource(index, sub, { tracked: event.target.checked })}
+                      aria-label={`Track source ${source.url || 'row'}`}
+                    />
                     <Input value={source.url} onChange={(event) => updateSource(index, sub, { url: event.target.value })} placeholder="https://rival.example/pricing" aria-label="Source URL" />
                     <select value={source.kind} onChange={(event) => updateSource(index, sub, { kind: event.target.value })} aria-label="Source kind" className="rounded border p-1 text-sm">
                       {KINDS.map((kind) => (

@@ -65,6 +65,7 @@ Hệ thống tách biệt rõ ràng giữa hai giai đoạn:
    - **ExecutionManager / TaskDispatcher**: Node điều phối bằng code (code-based router) đọc `plan`, lọc ra các `Task` có status `pending` đã thỏa mãn `dependencies`, và gán `current_task` cho WorkerAgent tương ứng.
    - **WorkerAgent**: Thực thi task bằng ReAct loop (LLM + tool calls). Kết quả tool output được bao bọc trong tag `<tool_output>...</tool_output>` để chống prompt injection.
    - Dispatcher hiện chọn task tuần tự theo DAG, **không gọi lại Supervisor LLM sau mỗi bước worker**. Bounded parallel DAG execution là mục tiêu; tool crawl batch đã có concurrency riêng.
+   - **ScoutAgent (setup discovery)**: Runtime worker profile `scout` chỉ có tool search (`web_search`, `web_search_batch`). Nó đề xuất competitor/source candidates chưa xác minh trước khi tạo watchlist; **không phải** role của investigation round (không nằm trong `CI_ROLE_TOOLS`/`SAFE_ROLES`).
 
 ### State Management
 
