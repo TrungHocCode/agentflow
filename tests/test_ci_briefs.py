@@ -103,6 +103,8 @@ class TestBriefService(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(brief.advisory_actions)
         self.assertTrue(Path(self.tmp.name, brief.artifact_uri).is_file())
         self.assertEqual(len(brief.artifact_hash), 64)
+        self.assertNotEqual(brief.artifact_hash, "0" * 64)
+        self.assertEqual(brief.artifact_hash, BriefService.content_hash(brief))
 
     async def test_build_rejects_unowned_incomplete_or_mismatched_runs(self) -> None:
         from app.shared.errors import ConflictError
