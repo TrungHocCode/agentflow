@@ -47,10 +47,10 @@ export default function NotificationBell() {
     <div className="relative">
       <Button type="button" variant="ghost" size="sm" onClick={() => setOpen((value) => !value)} aria-label="Notifications">
         <Bell data-icon="inline-start" />
-        {unread > 0 && <span data-testid="notification-count">{unread}</span>}
+        {unread > 0 && <span className="notification-count" data-testid="notification-count">{unread}</span>}
       </Button>
       {open && (
-        <Card className="absolute right-0 z-50 w-80 p-2" data-testid="notification-list">
+        <Card className="notification-popover absolute right-0 z-50 w-80 p-2" data-testid="notification-list">
           {loading ? (
             <ListSkeleton label="Loading notifications" rows={3} compact />
           ) : error ? (
@@ -67,7 +67,7 @@ export default function NotificationBell() {
                 <li key={item.id}>
                   <button
                     type="button"
-                    className="flex w-full flex-col gap-0.5 rounded p-2 text-left text-sm hover:bg-muted"
+                    className="flex w-full flex-col gap-0.5 rounded-lg p-2.5 text-left text-sm transition-colors duration-200 ease-out hover:bg-muted"
                     onClick={() => handleRead(item.id)}
                   >
                     <span className="font-medium">{item.read_at ? item.title : `• ${item.title}`}</span>

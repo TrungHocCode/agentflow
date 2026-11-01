@@ -991,18 +991,18 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      {/* Top Header */}
-      <Header 
+      {/* Deep ink navigation rail with the product mark and account footer */}
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
         user={authUser}
         onLogout={handleLogout}
       />
 
-      {/* Main Layout Body */}
-      <div className="workspace-layout">
-        {/* Left Navigation Sidebar */}
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      {/* Main workspace: slim contextual bar above the active view */}
+      <div className="app-body">
+        <Header activeTab={activeTab} />
 
-        {/* Dynamic Center View Tab */}
         <main className="workspace-main">
           {activeTab === 'studio' && (
             <ChatStudio 

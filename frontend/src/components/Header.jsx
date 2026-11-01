@@ -1,38 +1,34 @@
-import { LogOut, Sparkles } from 'lucide-react';
-import { Button } from './ui/button';
+import { ChevronRight } from 'lucide-react';
 import NotificationBell from './NotificationBell';
 
-function initials(user) {
-  const name = String(user?.display_name || user?.email || 'A').trim();
-  return name.slice(0, 1).toUpperCase();
-}
+const SECTIONS = {
+  watchlists: { crumb: 'Intelligence', title: 'Watchlists' },
+  changes: { crumb: 'Intelligence', title: 'Changes' },
+  briefs: { crumb: 'Intelligence', title: 'Briefs & History' },
+  studio: { crumb: 'Workspace', title: 'Research studio' },
+  runs: { crumb: 'Execution', title: 'Run history' },
+  settings: { crumb: 'Workspace', title: 'Settings' }
+};
 
-export default function Header({ user, onLogout }) {
+// Slim contextual bar: the product mark and account live in the sidebar, so the
+// header only carries orientation and global actions.
+export default function Header({ activeTab = 'watchlists' }) {
+  const section = SECTIONS[activeTab] || SECTIONS.watchlists;
+
   return (
-    <header className="app-header">
-      <div className="brand-lockup" aria-label="AgentFlow">
-        <div className="brand-mark" aria-hidden="true">
-          <Sparkles />
-        </div>
-        <div>
-          <div className="brand-name">AgentFlow</div>
-          <p className="brand-caption">Intelligent research workspace</p>
-        </div>
+    <header className="app-header" data-testid="app-header">
+      <div className="header-context">
+        <p className="header-breadcrumb">
+          <span>{section.crumb}</span>
+          <ChevronRight aria-hidden="true" />
+          <span>{section.title}</span>
+        </p>
+        <h1 className="header-title" data-testid="header-title">{section.title}</h1>
       </div>
 
-      {user && (
-        <div className="header-account">
-          <NotificationBell />
-          <span className="account-avatar" aria-hidden="true">{initials(user)}</span>
-          <span className="account-name" title={user.display_name || user.email}>
-            {user.display_name || user.email}
-          </span>
-          <Button type="button" variant="ghost" size="sm" onClick={onLogout} title="Sign out">
-            <LogOut data-icon="inline-start" />
-            Sign out
-          </Button>
-        </div>
-      )}
+      <div className="header-actions">
+        <NotificationBell />
+      </div>
     </header>
   );
 }
