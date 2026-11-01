@@ -7,6 +7,7 @@ fully verified — findings carry quotation-level labels only.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -24,6 +25,17 @@ class BriefService:
     def __init__(self, briefs: BriefRepository, snapshots: SnapshotRepository, blobs,
                  runs: RunService) -> None:
         self.briefs, self.snapshots, self.blobs, self.runs = briefs, snapshots, blobs, runs
+
+    @staticmethod
+    def content_hash(brief: IntelligenceBrief) -> str:
+        """Hash the canonical brief data, excluding the self-referential artifact fields.
+
+        The rendered file displays this hash, so it cannot cover the file bytes
+        themselves (that would be circular). Verification recomputes it from the
+        stored record with the same exclusion.
+        """
+        payload = brief.model_dump(mode="json", exclude={"artifact_uri", "artifact_hash"})
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
     @staticmethod
     def derive_outcome(outcomes: list[str]) -> tuple[str, str]:
@@ -90,10 +102,11 @@ class BriefService:
             limitations=limitations, advisory_actions=advisory_actions(outcome),
             artifact_id=str(brief_id), artifact_uri="", artifact_hash="0" * 64,
             observed_from=min(decided), observed_to=max(decided), created_at=created_at)
+        content_hash = self.content_hash(brief)
+        brief = brief.model_copy(update={"artifact_hash": content_hash})
         text = render_markdown(brief)
         uri = self.blobs.put(owner_id, str(run_id), str(brief_id), text)
-        stored = brief.model_copy(update={"artifact_uri": uri,
-                                          "artifact_hash": hashlib.sha256(text.encode()).hexdigest()})
+        stored = brief.model_copy(update={"artifact_uri": uri})
         return await self.briefs.save_brief(stored, owner_id)
 
     async def get_brief(self, brief_id: str, owner_id: str) -> IntelligenceBrief:
