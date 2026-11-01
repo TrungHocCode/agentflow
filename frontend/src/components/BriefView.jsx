@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Spinner } from './ui/spinner';
 import ErrorNotice from './ErrorNotice';
+import StructuredText from './StructuredText';
 import { OutcomeBadge, QualityBadge, VerificationBadge } from './OutcomeBadge';
 import { dateLabel, sourceLabel } from '../lib/labels';
 
@@ -27,11 +28,12 @@ export default function BriefView({ brief }) {
 
   return (
     <div className="flex flex-col gap-3" data-testid="brief-view">
-      <div className="flex flex-wrap items-center gap-2">
-        <OutcomeBadge outcome={brief.outcome} />
-        <QualityBadge quality={brief.quality} />
-        <span className="tnum text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
-        <span className="flex-1" />
+      <div className="ci-section-head">
+        <div className="ci-chip-row">
+          <OutcomeBadge outcome={brief.outcome} />
+          <QualityBadge quality={brief.quality} />
+          <span className="tnum text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
+        </div>
         <Button type="button" variant="outline" onClick={handleDownload} disabled={downloading}>
           {downloading
             ? <Spinner data-icon="inline-start" aria-hidden="true" />
@@ -46,45 +48,54 @@ export default function BriefView({ brief }) {
           onDismiss={() => setError('')}
         />
       )}
-      <Card className="p-4">
-        <p className="mb-1 text-sm font-medium">Summary</p>
-        <p className="text-sm">{brief.summary}</p>
+      <Card className="ci-section brief-prose p-4">
+        <p className="ci-section-title">Summary</p>
+        <StructuredText text={brief.summary} />
       </Card>
-      <Card className="p-4">
-        <p className="mb-2 text-sm font-medium">Per-source coverage</p>
-        <ul className="flex flex-col gap-1 text-sm">
+      <Card className="ci-section p-4">
+        <div className="ci-section-head">
+          <p className="ci-section-title">Per-source coverage</p>
+          <span className="ci-chip ci-chip--quiet">{(brief.source_coverage || []).length} sources</span>
+        </div>
+        <ul className="coverage-list">
           {(brief.source_coverage || []).map((entry) => (
-            <li key={entry.source_id} className="flex flex-wrap items-center gap-2">
-              <span>{sourceLabel(entry)}</span>
+            <li key={entry.source_id} className="coverage-row">
+              <span className="ci-chip ci-chip--id" title={String(entry.source_id)}>
+                {sourceLabel(entry)}
+              </span>
               <OutcomeBadge outcome={entry.outcome} />
               <QualityBadge quality={entry.quality} />
-              <span className="text-muted-foreground">{(entry.reason_codes || []).join(', ')}</span>
+              {entry.reason_codes?.length > 0 && (
+                <span className="coverage-reason">{entry.reason_codes.join(', ')}</span>
+              )}
             </li>
           ))}
         </ul>
       </Card>
-      <Card className="p-4">
-        <p className="mb-2 text-sm font-medium">Findings</p>
+      <Card className="ci-section p-4">
+        <p className="ci-section-title">Findings</p>
         {(brief.findings || []).length === 0 ? (
-          <p className="text-sm text-muted-foreground">No verified findings in this run.</p>
+          <p className="ci-empty empty-state-fade">No verified findings in this run.</p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="ci-list">
             {brief.findings.map((finding) => (
-              <li key={finding.id} className="flex flex-col gap-1 text-sm">
-                <span className="flex items-center gap-2">
+              <li key={finding.id} className="ci-row-card flex flex-col gap-1.5">
+                <span className="ci-chip-row">
                   <VerificationBadge verification={finding.verification} />
                 </span>
-                <span>{finding.text}</span>
-                {finding.rationale && <span className="text-muted-foreground">{finding.rationale}</span>}
+                <div className="brief-prose"><StructuredText text={finding.text} /></div>
+                {finding.rationale && (
+                  <div className="ci-row-copy"><StructuredText text={finding.rationale} /></div>
+                )}
               </li>
             ))}
           </ul>
         )}
       </Card>
       {brief.limitations?.length > 0 && (
-        <Card className="p-4">
-          <p className="mb-1 text-sm font-medium">Limitations</p>
-          <ul className="list-disc pl-5 text-sm">
+        <Card className="ci-section p-4">
+          <p className="ci-section-title">Limitations</p>
+          <ul className="structured-text list-disc pl-5">
             {brief.limitations.map((limitation, index) => (
               <li key={index}>{limitation}</li>
             ))}
@@ -92,9 +103,9 @@ export default function BriefView({ brief }) {
         </Card>
       )}
       {brief.advisory_actions?.length > 0 && (
-        <Card className="p-4">
-          <p className="mb-1 text-sm font-medium">Advisory actions</p>
-          <ul className="list-disc pl-5 text-sm">
+        <Card className="ci-section p-4">
+          <p className="ci-section-title">Advisory actions</p>
+          <ul className="structured-text list-disc pl-5">
             {brief.advisory_actions.map((action, index) => (
               <li key={index}>{action}</li>
             ))}

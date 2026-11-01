@@ -51,6 +51,10 @@ export default function NotificationBell() {
       </Button>
       {open && (
         <Card className="notification-popover absolute right-0 z-50 w-80 p-2" data-testid="notification-list">
+          <div className="ci-section-head px-2 pt-1">
+            <p className="ci-section-title">Notifications</p>
+            {unread > 0 && <span className="ci-chip ci-chip--quiet">{unread} unread</span>}
+          </div>
           {loading ? (
             <ListSkeleton label="Loading notifications" rows={3} compact />
           ) : error ? (
@@ -60,18 +64,18 @@ export default function NotificationBell() {
               onDismiss={() => setError('')}
             />
           ) : items.length === 0 ? (
-            <p className="p-2 text-sm text-muted-foreground">No notifications yet.</p>
+            <p className="ci-empty empty-state-fade">No notifications yet.</p>
           ) : (
-            <ul className="flex max-h-80 flex-col gap-1 overflow-auto">
+            <ul className="notification-list">
               {items.map((item) => (
                 <li key={item.id}>
                   <button
                     type="button"
-                    className="flex w-full flex-col gap-0.5 rounded-lg p-2.5 text-left text-sm transition-colors duration-200 ease-out hover:bg-muted"
+                    className="notification-item"
                     onClick={() => handleRead(item.id)}
                   >
-                    <span className="font-medium">{item.read_at ? item.title : `• ${item.title}`}</span>
-                    {item.body && <span className="text-muted-foreground">{item.body}</span>}
+                    <span className="notification-item__title" data-unread={!item.read_at}>{item.title}</span>
+                    {item.body && <span className="notification-item__body">{item.body}</span>}
                   </button>
                 </li>
               ))}

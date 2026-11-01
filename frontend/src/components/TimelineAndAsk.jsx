@@ -62,8 +62,8 @@ export default function TimelineAndAsk({ watchlistId }) {
           onDismiss={() => setError('')}
         />
       )}
-      <form onSubmit={handleAsk} className="flex gap-2">
-        <div className="flex flex-1 flex-col gap-1">
+      <form onSubmit={handleAsk} className="timeline-form">
+        <div className="flex flex-col gap-1 timeline-form__field">
           <Label htmlFor="ci-ask-question">Ask history</Label>
           <Input
             id="ci-ask-question"
@@ -81,17 +81,19 @@ export default function TimelineAndAsk({ watchlistId }) {
         </div>
       </form>
       {answer && (
-        <Card className="p-3" data-testid="history-answer">
-          <p className="mb-1 text-sm font-medium">
+        <Card className="ci-section p-3" data-testid="history-answer">
+          <p className="ci-section-title">
             {answer.verdict === 'answered' ? `Answered (${answer.intent})` : 'Not observed'}
           </p>
-          <p className="whitespace-pre-wrap text-sm">{answer.text}</p>
+          <p className="ci-row-copy whitespace-pre-wrap">{answer.text}</p>
           {answer.citations?.length > 0 && (
-            <ul className="mt-2 flex flex-col gap-1">
+            <ul className="citation-list">
               {answer.citations.map((citation, index) => (
-                <li key={index} className="tnum type-mono text-xs text-muted-foreground">
-                  Evidence {index + 1}: snapshot {String(citation.snapshot_id).slice(0, 8)}…
-                  offsets {citation.start_offset}–{citation.end_offset}
+                <li key={index} className="citation-chip" title={String(citation.snapshot_id)}>
+                  <span className="ci-chip ci-chip--id">Evidence {index + 1}</span>
+                  <span className="type-mono">
+                    snapshot {String(citation.snapshot_id).slice(0, 8)}… offsets {citation.start_offset}–{citation.end_offset}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -99,19 +101,16 @@ export default function TimelineAndAsk({ watchlistId }) {
         </Card>
       )}
       {events.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No recorded events yet. Completed runs appear here.</p>
+        <p className="ci-empty empty-state-fade">No recorded events yet. Completed runs appear here.</p>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="timeline-list">
           {events.map((event) => (
-            <li key={event.id}>
-              <Card className="p-3">
-                <p className="text-sm">
-                  <span className="font-medium">{event.kind.replaceAll('_', ' ')}</span>
-                  {' · '}
-                  <span className="tnum text-muted-foreground">{event.at}</span>
-                </p>
-                <p className="text-sm">{event.summary}</p>
-              </Card>
+            <li key={event.id} className="ci-row-card">
+              <p className="flex flex-wrap items-baseline gap-2">
+                <span className="timeline-item__kind">{event.kind.replaceAll('_', ' ')}</span>
+                <span className="tnum text-xs text-muted-foreground">{event.at}</span>
+              </p>
+              <p className="ci-row-copy mt-1">{event.summary}</p>
             </li>
           ))}
         </ul>

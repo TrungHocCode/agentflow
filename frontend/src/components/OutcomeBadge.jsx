@@ -30,27 +30,86 @@ const STATUS_VARIANTS = {
   abandoned: 'ghost'
 };
 
+const OUTCOME_TONES = {
+  changes_detected: 'alert',
+  changed: 'alert',
+  no_change: 'calm',
+  baseline_created: 'info',
+  partial: 'warn',
+  unavailable: 'quiet',
+  rebaseline_required: 'warn'
+};
+
+const QUALITY_TONES = {
+  complete: 'calm',
+  partial: 'warn',
+  insufficient: 'alert'
+};
+
+const STATUS_TONES = {
+  active: 'calm',
+  archived: 'quiet',
+  queued: 'warn',
+  pending: 'warn',
+  running: 'info',
+  completed: 'calm',
+  failed: 'alert',
+  cancelled: 'quiet',
+  interrupted: 'warn',
+  abandoned: 'quiet'
+};
+
+function pill(tone) {
+  return tone ? `ci-pill ci-pill--${tone}` : 'ci-pill';
+}
+
 export function OutcomeBadge({ outcome }) {
   if (!outcome) return null;
-  return <Badge variant={OUTCOME_VARIANTS[outcome] || 'outline'}>{outcome.replaceAll('_', ' ')}</Badge>;
+  return (
+    <Badge variant={OUTCOME_VARIANTS[outcome] || 'outline'} className={pill(OUTCOME_TONES[outcome])}>
+      {outcome.replaceAll('_', ' ')}
+    </Badge>
+  );
 }
 
 export function QualityBadge({ quality }) {
   if (!quality) return null;
-  return <Badge variant={QUALITY_VARIANTS[quality] || 'outline'}>{quality}</Badge>;
+  return (
+    <Badge variant={QUALITY_VARIANTS[quality] || 'outline'} className={pill(QUALITY_TONES[quality])}>
+      {quality}
+    </Badge>
+  );
 }
 
 export function VerificationBadge({ verification }) {
   if (!verification) return null;
-  return <Badge variant={verification === 'observed' ? 'secondary' : 'destructive'}>{verification}</Badge>;
+  return (
+    <Badge
+      variant={verification === 'observed' ? 'secondary' : 'destructive'}
+      className={pill(verification === 'observed' ? 'calm' : 'warn')}
+    >
+      {verification}
+    </Badge>
+  );
 }
 
 export function StatusBadge({ status }) {
   if (!status) return null;
-  return <Badge variant={STATUS_VARIANTS[status] || 'outline'}>{String(status).replaceAll('_', ' ')}</Badge>;
+  return (
+    <Badge variant={STATUS_VARIANTS[status] || 'outline'} className={pill(STATUS_TONES[status])}>
+      {String(status).replaceAll('_', ' ')}
+    </Badge>
+  );
 }
 
 export function ApprovalBadge({ status }) {
   if (!status) return null;
-  return <Badge variant={status === 'approved' ? 'secondary' : 'outline'}>{String(status).replaceAll('_', ' ')}</Badge>;
+  return (
+    <Badge
+      variant={status === 'approved' ? 'secondary' : 'outline'}
+      className={pill(status === 'approved' ? 'calm' : 'warn')}
+    >
+      {String(status).replaceAll('_', ' ')}
+    </Badge>
+  );
 }

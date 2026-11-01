@@ -42,6 +42,13 @@ function response(payload) {
   return { ok: true, json: async () => payload };
 }
 
+function startWizard() {
+  render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+  fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+  fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+  expect(screen.getByTestId('setup-step-2')).toBeInTheDocument();
+}
+
 describe('WatchlistSetup wizard', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn(async (url) => {
@@ -52,34 +59,37 @@ describe('WatchlistSetup wizard', () => {
     }));
   });
 
-  it('runs the two discovery steps and marks candidates unverified', async () => {
-    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
-    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+  it('runs discovery across steps and marks candidates unverified', async () => {
+    startWizard();
     fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
     await waitFor(() => expect(screen.getByDisplayValue('Todoist')).toBeInTheDocument());
     expect(screen.getAllByText('web_search').length).toBeGreaterThan(0);
     expect(screen.getByText(/unverified draft/i)).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
     fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.getByLabelText('Track source https://todoist.com/pricing')).toBeInTheDocument();
   });
 
   it('supports manual entry with criteria and extra sources', () => {
-    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
-    expect(screen.getByLabelText('Name')).toBeInTheDocument();
+    startWizard();
+    fireEvent.click(screen.getByRole('button', { name: /add competitor/i }));
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Rival' } });
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+
     fireEvent.click(screen.getByRole('button', { name: /add criterion/i }));
     expect(screen.getAllByLabelText('Criterion field')).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: /add competitor/i }));
-    expect(screen.getAllByLabelText('Product name')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: /add source/i }));
+    expect(screen.getAllByLabelText('Source URL')).toHaveLength(1);
   });
 
   it('searches source URLs only for picked competitor domains', async () => {
-    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
-    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    startWizard();
     fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
     await waitFor(() => expect(screen.getByDisplayValue('ClickUp')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('Track ClickUp'));
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
     fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.queryByDisplayValue('https://clickup.com/pricing')).not.toBeInTheDocument();

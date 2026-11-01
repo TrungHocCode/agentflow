@@ -19,11 +19,11 @@ export default function FlowCanvas({ plan }) {
           <h1 id="flow-title" className="page-title">Workflow diagram</h1>
           <p className="page-description">See how steps depend on each other and which ones can run in parallel.</p>
         </div>
-        {plan?.length > 0 && <Badge variant="secondary">{plan.length} steps</Badge>}
+        {plan?.length > 0 && <Badge variant="secondary" className="ci-pill">{plan.length} steps</Badge>}
       </div>
 
       {!plan?.length ? (
-        <Card className="surface-card empty-state">
+        <Card className="surface-card empty-state empty-state-fade">
           <span className="empty-state__icon" aria-hidden="true"><GitMerge /></span>
           <CardTitle className="empty-state__title">No workflow diagram yet</CardTitle>
           <CardDescription className="empty-state__description">

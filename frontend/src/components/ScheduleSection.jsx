@@ -85,19 +85,21 @@ export default function ScheduleSection({ watchlistId }) {
         <ConfirmationBanner message={notice} onDismiss={() => setNotice('')} />
       )}
       {schedules.length > 0 && (
-        <ul className="flex flex-col gap-1 text-sm">
+        <ul className="schedule-list">
           {schedules.map((schedule) => (
-            <li key={schedule.id} className="flex flex-wrap items-center gap-2">
-              <span>
+            <li key={schedule.id} className="ci-row-card flex flex-wrap items-center gap-2">
+              <span className="text-sm">
                 {schedule.cadence} {schedule.day_of_week !== null && schedule.cadence === 'weekly'
                   ? `on ${WEEKDAYS[schedule.day_of_week]} ` : ''}at {schedule.run_at} ({schedule.timezone})
               </span>
-              <span className="tnum text-muted-foreground">
+              <span className={`ci-chip ${schedule.active ? 'ci-pill--calm' : 'ci-chip--quiet'}`}>
                 {schedule.active ? `next due ${schedule.next_due_at}` : 'disabled'}
               </span>
+              <span className="flex-1" />
               <Button
                 type="button"
                 variant="ghost"
+                size="sm"
                 onClick={() => handleToggle(schedule)}
                 disabled={togglingId === schedule.id}
               >
@@ -108,17 +110,17 @@ export default function ScheduleSection({ watchlistId }) {
           ))}
         </ul>
       )}
-      <form onSubmit={handleCreate} className="grid grid-cols-2 gap-2">
+      <form onSubmit={handleCreate} className="schedule-form">
         <div className="flex flex-col gap-1">
           <Label htmlFor="ci-sched-cadence">Cadence</Label>
-          <select id="ci-sched-cadence" value={cadence} onChange={(event) => setCadence(event.target.value)} className="rounded border p-1 text-sm">
+          <select id="ci-sched-cadence" value={cadence} onChange={(event) => setCadence(event.target.value)} className="ci-select">
             <option value="weekly">weekly</option>
             <option value="daily">daily</option>
           </select>
         </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor="ci-sched-tz">Timezone</Label>
-          <select id="ci-sched-tz" value={timezone} onChange={(event) => setTimezone(event.target.value)} className="rounded border p-1 text-sm">
+          <select id="ci-sched-tz" value={timezone} onChange={(event) => setTimezone(event.target.value)} className="ci-select">
             {TIMEZONES.map((zone) => (
               <option key={zone} value={zone}>{zone}</option>
             ))}
@@ -131,7 +133,7 @@ export default function ScheduleSection({ watchlistId }) {
         {cadence === 'weekly' && (
           <div className="flex flex-col gap-1">
             <Label htmlFor="ci-sched-dow">Day of week</Label>
-            <select id="ci-sched-dow" value={dayOfWeek} onChange={(event) => setDayOfWeek(event.target.value)} className="rounded border p-1 text-sm">
+            <select id="ci-sched-dow" value={dayOfWeek} onChange={(event) => setDayOfWeek(event.target.value)} className="ci-select">
               {WEEKDAYS.map((day, index) => (
                 <option key={day} value={index}>{day}</option>
               ))}

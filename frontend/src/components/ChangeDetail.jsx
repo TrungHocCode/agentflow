@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { getChange, getSnapshotContent } from '../services/ciApi';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -57,21 +58,23 @@ export default function ChangeDetail({ changeId, onBack }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-        <OutcomeBadge outcome={change.kind} />
-        <span className="font-medium">{change.section || 'Preamble'}</span>
+      <div className="ci-section-head">
+        <div className="ci-title-row">
+          <Button type="button" variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft data-icon="inline-start" />Back
+          </Button>
+          <OutcomeBadge outcome={change.kind} />
+          <span className="ci-row-title">{change.section || 'Preamble'}</span>
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Card className="p-3">
-          <p className="mb-1 text-sm font-medium">Before</p>
-          <pre className="whitespace-pre-wrap text-sm">{change.before_excerpt || beforeText}</pre>
+      <div className="grid gap-2 md:grid-cols-2">
+        <Card className="ci-section p-3">
+          <p className="ci-section-title">Before</p>
+          <pre className="ci-diff">{change.before_excerpt || beforeText}</pre>
         </Card>
-        <Card className="p-3">
-          <p className="mb-1 text-sm font-medium">After</p>
-          <pre className="whitespace-pre-wrap text-sm">{change.after_excerpt || afterText}</pre>
+        <Card className="ci-section p-3">
+          <p className="ci-section-title">After</p>
+          <pre className="ci-diff">{change.after_excerpt || afterText}</pre>
         </Card>
       </div>
     </div>

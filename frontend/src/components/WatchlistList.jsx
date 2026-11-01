@@ -46,32 +46,40 @@ export default function WatchlistList({ onSelect, onCreate }) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h2 className="type-display">Watchlists</h2>
+    <div className="ci-page flex flex-col gap-4">
+      <div className="ci-page-heading">
+        <div className="page-heading__copy">
+          <p className="page-eyebrow">INTELLIGENCE</p>
+          <h2 className="page-title">Watchlists</h2>
+          <p className="page-description">Track competitor pages and turn real changes into a reviewable brief.</p>
+        </div>
         <Button type="button" onClick={onCreate}>
           <Plus data-icon="inline-start" /> New watchlist
         </Button>
       </div>
       {items.length === 0 ? (
-        <Card className="p-6 text-center text-sm text-muted-foreground">
-          No watchlists yet. Create one to start tracking competitor changes.
+        <Card className="empty-state empty-state-fade">
+          <p className="empty-state__title">No watchlists yet</p>
+          <p className="empty-state__description">Create one to start tracking competitor changes.</p>
+          <Button type="button" onClick={onCreate}>
+            <Plus data-icon="inline-start" /> New watchlist
+          </Button>
         </Card>
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="ci-list">
           {items.map((watchlist) => (
             <li key={watchlist.id}>
               <Card className="p-4">
                 <button
                   type="button"
-                  className="flex w-full items-center justify-between gap-2 text-left"
+                  className="ci-row-button"
                   onClick={() => onSelect(watchlist.id)}
                 >
-                  <span>
-                    <span className="type-display block">{watchlist.name}</span>
-                    <span className="type-caption tnum block">
-                      {revisionLabel(watchlist.current_revision)} ·{' '}
-                      {watchlist.current_revision?.approval_status}
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <span className="ci-row-title">{watchlist.name}</span>
+                    <span className="ci-row-meta">
+                      <span className="ci-chip ci-chip--quiet">{revisionLabel(watchlist.current_revision)}</span>
+                      <span className="ci-chip ci-chip--quiet">{watchlist.current_revision?.approval_status}</span>
                     </span>
                   </span>
                   <StatusBadge status={watchlist.status} />
