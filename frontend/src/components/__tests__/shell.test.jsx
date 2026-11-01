@@ -59,11 +59,43 @@ describe('application shell', () => {
     renderChat();
 
     expect(screen.getByText(/set up competitor tracking/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('Research request')).toBeInTheDocument();
+    expect(screen.getByLabelText('Competitor intelligence request')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send request/i })).toBeInTheDocument();
 
     const suggestions = screen.getByLabelText('Example prompts');
     expect(within(suggestions).getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('labels the assistant for competitive intelligence, not generic research', () => {
+    renderChat();
+
+    expect(screen.getByText('CI assistant')).toBeInTheDocument();
+    expect(screen.getByText(/ask about your competitors/i)).toBeInTheDocument();
+    expect(screen.queryByText('Research assistant')).not.toBeInTheDocument();
+  });
+
+  it('offers a new chat and lists recent conversations with delete actions', () => {
+    const onNewChat = vi.fn();
+    const onSelectConversation = vi.fn();
+    const onDeleteListItem = vi.fn();
+    renderChat({
+      conversations: [
+        { id: 'conv-old', title: 'Old pricing chat', updated_at: '2026-01-01T00:00:00Z' },
+        { id: 'conv-new', title: 'ClickUp watch', updated_at: '2026-02-01T00:00:00Z' }
+      ],
+      conversationId: 'conv-new',
+      onNewChat,
+      onSelectConversation,
+      onDeleteListItem
+    });
+
+    screen.getByRole('button', { name: /new chat/i }).click();
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+
+    const list = screen.getByText('Old pricing chat').closest('ul');
+    expect(list).toBeInTheDocument();
+    screen.getByRole('button', { name: /delete chat old pricing chat/i }).click();
+    expect(onDeleteListItem).toHaveBeenCalledWith('conv-old');
   });
 
   it('renders a contextual title in the slim header', () => {
