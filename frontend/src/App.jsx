@@ -136,6 +136,7 @@ export default function App() {
   // Conversational & Execution State
   const [messages, setMessages] = useState([]);
   const [conversationId, setConversationId] = useState(null);
+  const [conversationList, setConversationList] = useState([]);
   const [conversationClosed, setConversationClosed] = useState(false);
   const [currentRun, setCurrentRun] = useState(null);
   const [conversationRun, setConversationRun] = useState(null);
@@ -329,9 +330,11 @@ export default function App() {
           .filter(conversation => conversation.status !== 'archived')
           .sort((left, right) => new Date(right.updated_at) - new Date(left.updated_at));
         const rememberedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
+        // Restore ONLY the explicitly remembered conversation. Falling back to the
+        // most recent one resurrects old chats the user already deleted or left.
         const conversation = sortedConversations.find(item => item.id === rememberedId)
-          || sortedConversations[0]
           || null;
+        setConversationList(sortedConversations);
         if (!conversation) localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         const persistedMessages = conversation
           ? await getConversationMessages(conversation.id)
@@ -996,7 +999,65 @@ export default function App() {
       }]);
     } finally {
       setIsDeletingConversation(false);
+      void refreshConversationList();
     }
+  };
+
+  const refreshConversationList = async () => {
+    try {
+      const conversations = await getConversations();
+      setConversationList([...conversations]
+        .filter(conversation => conversation.status !== 'archived')
+        .sort((left, right) => new Date(right.updated_at) - new Date(left.updated_at)));
+    } catch (error) {
+      console.warn('Could not refresh conversation list:', error);
+    }
+  };
+
+  const resetAssistantState = () => {
+    if (conversationStreamRef.current) {
+      conversationStreamRef.current();
+      conversationStreamRef.current = null;
+    }
+    localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+    if (conversationId) localStorage.removeItem(conversationRunStorageKey(conversationId));
+    setConversationId(null);
+    setActiveConversationTurnId(null);
+    setConversationClosed(false);
+    setConversationRun(null);
+    setDraftPlan([]);
+    setMessages([]);
+    setIsResultsOpen(false);
+    setCurrentRun(null);
+    setActivePlan([]);
+    setExecutionResults([]);
+    setExecutionDuration(null);
+    conversationRunIdRef.current = null;
+  };
+
+  const handleNewChat = () => {
+    resetAssistantState();
+  };
+
+  const handleSelectConversation = (id) => {
+    // A full reload re-runs the restore path for the chosen conversation,
+    // which is the single tested loader for messages, turns and linked runs.
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    window.location.reload();
+  };
+
+  const handleDeleteListItem = async (id) => {
+    try {
+      await deleteConversation(id);
+    } catch (error) {
+      setMessages(previous => [...previous, {
+        sender: 'supervisor',
+        text: `Could not delete the conversation: ${error.message}`
+      }]);
+      return;
+    }
+    await refreshConversationList();
+    if (id === conversationId) resetAssistantState();
   };
 
   return (
@@ -1023,6 +1084,10 @@ export default function App() {
               onCancelTurn={handleCancelConversationTurn}
               onDeleteConversation={handleDeleteConversation}
               conversationId={conversationId}
+              conversations={conversationList}
+              onNewChat={handleNewChat}
+              onSelectConversation={handleSelectConversation}
+              onDeleteListItem={handleDeleteListItem}
               isCancelling={isCancelling}
               activeTurnId={activeConversationTurnId}
               isDeletingConversation={isDeletingConversation}
