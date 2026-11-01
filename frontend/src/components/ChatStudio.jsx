@@ -125,7 +125,9 @@ export default function ChatStudio({
         <div className="page-heading__copy">
           <p className="page-eyebrow">CI ASSISTANT</p>
           <h1 id="studio-title" className="page-title">Ask about your competitors</h1>
-          <p className="page-description">Ask what changed, why it matters to your products, or describe rivals to track. AgentFlow answers from approved sources with cited evidence.</p>
+          {messages.length === 0 && (
+            <p className="page-description">Ask what changed, why it matters to your products, or describe rivals to track. AgentFlow answers from approved sources with cited evidence.</p>
+          )}
         </div>
         {conversationId && (
           <Button
@@ -298,8 +300,11 @@ export default function ChatStudio({
             ))
           )}
 
-          {messages.some(message => message.sender === 'user') && !runStatus && (
-            <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
+          {messages.some(message => message.sender === 'user') && !runStatus && !activePlan?.length && (
+            <details className="chat-proposal" {...(messages.length <= 2 ? { open: true } : {})}>
+              <summary>Set up tracking from this chat</summary>
+              <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
+            </details>
           )}
 
           {isProcessing && !isStreaming && !hasStreamingAssistantMessage && (
