@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { AlertCircle, ArrowRight, KeyRound, LogIn, Sparkles, UserPlus } from 'lucide-react';
+import { ArrowRight, KeyRound, LogIn, Sparkles, UserPlus } from 'lucide-react';
 import { login, register } from '../services/api';
-import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+import ErrorNotice from './ErrorNotice';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Field, FieldGroup, FieldLabel } from './ui/field';
@@ -115,11 +115,7 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
               </FieldGroup>
 
               {error && (
-                <Alert variant="destructive" role="alert" className="auth-alert">
-                  <AlertCircle />
-                  <AlertTitle>Could not continue</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
+                <ErrorNotice title="Could not continue" message={error} className="auth-alert" />
               )}
 
               <Button type="submit" size="lg" className="auth-submit" disabled={submitting}>

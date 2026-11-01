@@ -3,6 +3,7 @@ import { AlertCircle, Download, ExternalLink, FileText, Image, X } from 'lucide-
 import { downloadRunArtifact, getRunArtifacts } from '../services/api';
 import StructuredText from './StructuredText';
 import { Alert, AlertDescription } from './ui/alert';
+import ErrorNotice from './ErrorNotice';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -206,7 +207,11 @@ export default function RunResultsDrawer({
         </header>
 
         {error && (
-          <Alert variant="destructive" className="results-alert"><AlertCircle /><AlertDescription>{error}</AlertDescription></Alert>
+          <ErrorNotice
+            message={error}
+            onDismiss={() => setError('')}
+            className="results-alert"
+          />
         )}
 
         <div className={`results-drawer__body${artifacts.length > 1 ? ' results-drawer__body--with-list' : ''}`}>

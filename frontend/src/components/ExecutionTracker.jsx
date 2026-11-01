@@ -79,7 +79,10 @@ export default function ExecutionTracker({
           ) : null}
           {canCancel && (
             <Button type="button" variant="destructive" size="sm" onClick={onCancelRun} disabled={isCancelling}>
-              <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel run'}
+              {isCancelling
+                ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                : <XCircle data-icon="inline-start" />}
+              {isCancelling ? 'Cancelling…' : 'Cancel run'}
             </Button>
           )}
         </div>

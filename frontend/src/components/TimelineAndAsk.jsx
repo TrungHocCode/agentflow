@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import { askHistory, getTimeline } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Spinner } from './ui/spinner';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 
 export default function TimelineAndAsk({ watchlistId }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorSource, setErrorSource] = useState('');
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState(null);
   const [asking, setAsking] = useState(false);
@@ -18,10 +20,12 @@ export default function TimelineAndAsk({ watchlistId }) {
   async function load() {
     setLoading(true);
     setError('');
+    setErrorSource('');
     try {
       setEvents(await getTimeline(watchlistId));
     } catch (err) {
       setError(err.message);
+      setErrorSource('load');
     } finally {
       setLoading(false);
     }
@@ -36,23 +40,27 @@ export default function TimelineAndAsk({ watchlistId }) {
     event.preventDefault();
     setAsking(true);
     setError('');
+    setErrorSource('');
     try {
       setAnswer(await askHistory(watchlistId, question));
     } catch (err) {
       setError(err.message);
+      setErrorSource('ask');
     } finally {
       setAsking(false);
     }
   }
 
-  if (loading) return <Spinner aria-label="Loading timeline" />;
+  if (loading) return <ListSkeleton label="Loading timeline" rows={3} />;
 
   return (
     <div className="flex flex-col gap-3">
       {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <ErrorNotice
+          message={error}
+          onRetry={errorSource === 'load' ? load : undefined}
+          onDismiss={() => setError('')}
+        />
       )}
       <form onSubmit={handleAsk} className="flex gap-2">
         <div className="flex flex-1 flex-col gap-1">
@@ -67,6 +75,7 @@ export default function TimelineAndAsk({ watchlistId }) {
         </div>
         <div className="flex items-end">
           <Button type="submit" disabled={asking}>
+            {asking && <Spinner data-icon="inline-start" aria-hidden="true" />}
             {asking ? 'Asking…' : 'Ask'}
           </Button>
         </div>
@@ -80,7 +89,7 @@ export default function TimelineAndAsk({ watchlistId }) {
           {answer.citations?.length > 0 && (
             <ul className="mt-2 flex flex-col gap-1">
               {answer.citations.map((citation, index) => (
-                <li key={index} className="text-xs text-muted-foreground">
+                <li key={index} className="tnum type-mono text-xs text-muted-foreground">
                   Evidence {index + 1}: snapshot {String(citation.snapshot_id).slice(0, 8)}…
                   offsets {citation.start_offset}–{citation.end_offset}
                 </li>
@@ -99,7 +108,7 @@ export default function TimelineAndAsk({ watchlistId }) {
                 <p className="text-sm">
                   <span className="font-medium">{event.kind.replaceAll('_', ' ')}</span>
                   {' · '}
-                  <span className="text-muted-foreground">{event.at}</span>
+                  <span className="tnum text-muted-foreground">{event.at}</span>
                 </p>
                 <p className="text-sm">{event.summary}</p>
               </Card>

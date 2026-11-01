@@ -6,7 +6,9 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Spinner } from './ui/spinner';
 import { Textarea } from './ui/textarea';
+import ErrorNotice from './ErrorNotice';
 
 const DIMENSIONS = ['pricing', 'features', 'integrations', 'release_notes'];
 const KINDS = ['pricing', 'features', 'integrations', 'release_notes'];
@@ -172,11 +174,9 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
   return (
     <Card className="p-4">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold">New watchlist</h2>
+        <h2 className="type-display">New watchlist</h2>
         {error && (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <ErrorNotice message={error} onDismiss={() => setError('')} />
         )}
         <div className="flex flex-col gap-2">
           <Label htmlFor="ci-setup-prompt">Describe your product and what to track</Label>
@@ -195,6 +195,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
                 onClick={handleDiscoverCompetitors}
                 disabled={discoveringCompetitors || !prompt.trim()}
               >
+                {discoveringCompetitors && <Spinner data-icon="inline-start" aria-hidden="true" />}
                 {discoveringCompetitors ? 'Searching…' : 'Find competitors'}
               </Button>
             </div>
@@ -211,6 +212,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
                 onClick={handleDiscoverSources}
                 disabled={discoveringSources || pickedDomains.length === 0}
               >
+                {discoveringSources && <Spinner data-icon="inline-start" aria-hidden="true" />}
                 {discoveringSources ? 'Searching…' : 'Find source URLs'}
               </Button>
             </div>
@@ -332,6 +334,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
         </div>
         <div className="flex gap-2">
           <Button type="submit" disabled={saving || dimensions.length === 0}>
+            {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
             {saving ? 'Saving…' : 'Create watchlist'}
           </Button>
           <Button type="button" variant="ghost" onClick={onCancel}>

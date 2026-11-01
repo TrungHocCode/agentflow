@@ -33,7 +33,7 @@ export default function EmptyState({ state }) {
   const config = STATES[state] || STATES.unavailable;
   const Icon = config.icon;
   return (
-    <Card className="flex flex-col items-center gap-2 p-6 text-center" data-testid={`empty-state-${state}`}>
+    <Card className="empty-state-fade flex flex-col items-center gap-2 p-6 text-center" data-testid={`empty-state-${state}`}>
       <Icon aria-hidden="true" />
       <p className="font-medium">{config.title}</p>
       <p className="text-sm text-muted-foreground">{config.body}</p>

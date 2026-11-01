@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getChange, getSnapshotContent } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { Spinner } from './ui/spinner';
+import ErrorNotice from './ErrorNotice';
+import LoadingState from './LoadingState';
 import { OutcomeBadge } from './OutcomeBadge';
 
 export default function ChangeDetail({ changeId, onBack }) {
@@ -12,6 +12,7 @@ export default function ChangeDetail({ changeId, onBack }) {
   const [afterText, setAfterText] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,14 +41,16 @@ export default function ChangeDetail({ changeId, onBack }) {
     return () => {
       cancelled = true;
     };
-  }, [changeId]);
+  }, [changeId, reloadKey]);
 
-  if (loading) return <Spinner aria-label="Loading change detail" />;
+  if (loading) return <LoadingState label="Loading change detail" />;
   if (error) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <ErrorNotice
+        message={error}
+        onRetry={() => setReloadKey((key) => key + 1)}
+        onDismiss={() => setError('')}
+      />
     );
   }
   if (!change) return null;

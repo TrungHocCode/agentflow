@@ -3,19 +3,27 @@ import { Bell } from 'lucide-react';
 import { listNotifications, markNotificationRead } from '../services/ciApi';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   async function refresh() {
     try {
       const page = await listNotifications(20, false);
       setItems(page.items || []);
       setUnread(page.items ? page.items.filter((item) => !item.read_at).length : 0);
-    } catch {
+      setError('');
+    } catch (err) {
       // Notifications are best-effort; runs and briefs keep working without them.
+      setError(err.message || 'Notifications are unavailable right now.');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -29,8 +37,9 @@ export default function NotificationBell() {
     try {
       await markNotificationRead(id);
       await refresh();
-    } catch {
-      // Keep the list as-is on failure.
+    } catch (err) {
+      // Keep the list as-is on failure but surface the reference for support.
+      setError(err.message || 'Could not mark the notification as read.');
     }
   }
 
@@ -42,7 +51,15 @@ export default function NotificationBell() {
       </Button>
       {open && (
         <Card className="absolute right-0 z-50 w-80 p-2" data-testid="notification-list">
-          {items.length === 0 ? (
+          {loading ? (
+            <ListSkeleton label="Loading notifications" rows={3} compact />
+          ) : error ? (
+            <ErrorNotice
+              message={error}
+              onRetry={refresh}
+              onDismiss={() => setError('')}
+            />
+          ) : items.length === 0 ? (
             <p className="p-2 text-sm text-muted-foreground">No notifications yet.</p>
           ) : (
             <ul className="flex max-h-80 flex-col gap-1 overflow-auto">

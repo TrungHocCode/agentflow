@@ -207,7 +207,10 @@ export default function ChatStudio({
                               onClick={onCancelTurn}
                               disabled={isCancelling}
                             >
-                              <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel'}
+                              {isCancelling
+                                ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                                : <XCircle data-icon="inline-start" />}
+                              {isCancelling ? 'Cancelling…' : 'Cancel'}
                             </Button>
                           )}
                         </MessageHeader>
@@ -259,9 +262,12 @@ export default function ChatStudio({
                 {isRestoring ? 'Restoring workflow' : 'Analyzing request'} · {liveThinkingSeconds}s
               </MarkerContent>
               {activeTurnId && (
-                <Button type="button" variant="ghost" size="sm" onClick={onCancelTurn} disabled={isCancelling}>
-                  <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel'}
-                </Button>
+                 <Button type="button" variant="ghost" size="sm" onClick={onCancelTurn} disabled={isCancelling}>
+                   {isCancelling
+                     ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                     : <XCircle data-icon="inline-start" />}
+                   {isCancelling ? 'Cancelling…' : 'Cancel'}
+                 </Button>
               )}
             </Marker>
           )}
@@ -311,7 +317,10 @@ export default function ChatStudio({
               <CardFooter className="chat-plan-actions">
                 {!runStatus ? (
                   <Button type="button" onClick={onApprovePlan} disabled={isProcessing}>
-                    <Play data-icon="inline-start" />Approve and start
+                    {isProcessing
+                      ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                      : <Play data-icon="inline-start" />}
+                    Approve and start
                   </Button>
                 ) : (
                   <>
@@ -325,7 +334,10 @@ export default function ChatStudio({
                     )}
                     {['queued', 'running'].includes(runStatus) && (
                       <Button type="button" variant="destructive" onClick={onCancelRun} disabled={isCancelling}>
-                        <XCircle data-icon="inline-start" />{isCancelling ? 'Cancelling…' : 'Cancel workflow'}
+                        {isCancelling
+                          ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                          : <XCircle data-icon="inline-start" />}
+                        {isCancelling ? 'Cancelling…' : 'Cancel workflow'}
                       </Button>
                     )}
                   </>

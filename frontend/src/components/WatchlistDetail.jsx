@@ -12,7 +12,6 @@ import {
   startWatchlistRun,
   updateWatchlist
 } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Spinner } from './ui/spinner';
@@ -20,6 +19,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import BriefView from './BriefView';
 import ChangeDetail from './ChangeDetail';
 import ChangeFeed from './ChangeFeed';
+import ConfirmationBanner from './ConfirmationBanner';
+import ErrorNotice from './ErrorNotice';
+import LoadingState from './LoadingState';
 import { ApprovalBadge, OutcomeBadge, QualityBadge, StatusBadge } from './OutcomeBadge';
 import ScheduleSection from './ScheduleSection';
 import TimelineAndAsk from './TimelineAndAsk';
@@ -38,6 +40,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
+  const [notice, setNotice] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -169,6 +172,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
       setBriefs((current) => [brief, ...current]);
       setSelectedBrief(brief);
       setTab('briefs');
+      setNotice('Brief built.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -182,12 +186,14 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
     setTab('briefs');
   }
 
-  if (loading) return <Spinner aria-label="Loading watchlist detail" />;
+  if (loading) return <LoadingState label="Loading watchlist detail" />;
   if (error && !watchlist) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <ErrorNotice
+        message={error}
+        onRetry={() => setRefreshKey((key) => key + 1)}
+        onDismiss={() => setError('')}
+      />
     );
   }
   if (!watchlist) return null;
@@ -206,13 +212,14 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         <Button type="button" variant="ghost" onClick={onBack}>
           Back
         </Button>
-        <h2 className="text-lg font-semibold">{watchlist.name}</h2>
+        <h2 className="type-display">{watchlist.name}</h2>
         <StatusBadge status={watchlist.status} />
       </div>
       {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <ErrorNotice message={error} onDismiss={() => setError('')} />
+      )}
+      {notice && (
+        <ConfirmationBanner message={notice} onDismiss={() => setNotice('')} />
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -235,7 +242,9 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
 
           <Card className="flex flex-wrap items-center gap-2 p-4">
             <Button type="button" onClick={handleRunNow} disabled={action === 'run' || Boolean(activeRun)}>
-              <Play data-icon="inline-start" />
+              {action === 'run'
+                ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                : <Play data-icon="inline-start" />}
               {action === 'run' ? 'Starting…' : activeRun ? 'Run in progress…' : 'Run now'}
             </Button>
             {activeRun && (
@@ -245,6 +254,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                 onClick={() => handleCancelRun(activeRun.run_id)}
                 disabled={action === `cancel-${activeRun.run_id}`}
               >
+                {action === `cancel-${activeRun.run_id}` && <Spinner data-icon="inline-start" aria-hidden="true" />}
                 Cancel run
               </Button>
             )}
@@ -283,7 +293,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
               <ul className="flex flex-col gap-2">
                 {runs.slice(0, 5).map((run) => (
                   <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span>{runLabel(run)}</span>
+                    <span className="tnum">{runLabel(run)}</span>
                     <StatusBadge status={run.status} />
                     <span className="flex-1" />
                     {ACTIVE_RUN_STATUSES.has(run.status) && (
@@ -293,6 +303,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                         onClick={() => handleCancelRun(run.run_id)}
                         disabled={action === `cancel-${run.run_id}`}
                       >
+                        {action === `cancel-${run.run_id}` && <Spinner data-icon="inline-start" aria-hidden="true" />}
                         Cancel
                       </Button>
                     )}
@@ -337,7 +348,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                     >
                       <OutcomeBadge outcome={brief.outcome} />
                       <QualityBadge quality={brief.quality} />
-                      <span className="text-muted-foreground">{dateLabel(brief.created_at)}</span>
+                      <span className="tnum text-muted-foreground">{dateLabel(brief.created_at)}</span>
                     </button>
                   </li>
                 ))}
@@ -355,6 +366,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
               <span className="flex-1" />
               {!approved && revision?.config?.workflow_version_id && (
                 <Button type="button" variant="outline" onClick={handleApprove} disabled={action === 'approve'}>
+                  {action === 'approve' && <Spinner data-icon="inline-start" aria-hidden="true" />}
                   {action === 'approve' ? 'Approving…' : 'Approve current revision'}
                 </Button>
               )}
@@ -371,7 +383,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                   .filter((run) => run.status === 'completed' && !briefs.some((brief) => brief.run_id === run.run_id))
                   .map((run) => (
                     <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                      <span>{runLabel(run)}</span>
+                      <span className="tnum">{runLabel(run)}</span>
                       <span className="flex-1" />
                       <Button
                         type="button"
@@ -379,7 +391,8 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                         onClick={() => handleBuildBrief(run)}
                         disabled={action === `brief-${run.run_id}`}
                       >
-                        Build brief
+                        {action === `brief-${run.run_id}` && <Spinner data-icon="inline-start" aria-hidden="true" />}
+                        {action === `brief-${run.run_id}` ? 'Building…' : 'Build brief'}
                       </Button>
                     </li>
                   ))}

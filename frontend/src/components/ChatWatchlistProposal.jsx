@@ -7,6 +7,9 @@ import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Spinner } from './ui/spinner';
+import ConfirmationBanner from './ConfirmationBanner';
+import ErrorNotice from './ErrorNotice';
 
 function lastUserText(messages) {
   const mine = (messages || []).filter((message) => message.sender === 'user');
@@ -138,11 +141,13 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
 
   if (createdId) {
     return (
-      <Card className="p-3" data-testid="chat-proposal-done">
-        <p className="text-sm font-medium">Watchlist created from this chat.</p>
-        <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)}>
-          View in Intelligence
-        </Button>
+      <Card className="flex flex-col gap-2 p-3" data-testid="chat-proposal-done">
+        <ConfirmationBanner message="Watchlist created from this chat." />
+        <div>
+          <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)}>
+            View in Intelligence
+          </Button>
+        </div>
       </Card>
     );
   }
@@ -159,6 +164,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={handleDiscoverCompetitors} disabled={loading || !prompt}>
+          {loading && <Spinner data-icon="inline-start" aria-hidden="true" />}
           {loading ? 'Searching…' : 'Find competitors'}
         </Button>
         {recommendation && (
@@ -168,14 +174,15 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
             onClick={handleDiscoverSources}
             disabled={discoveringSources || pickedDomains().length === 0}
           >
+            {discoveringSources && <Spinner data-icon="inline-start" aria-hidden="true" />}
             {discoveringSources ? 'Searching…' : 'Find source URLs'}
           </Button>
         )}
       </div>
       {error && (
-        <Alert variant="destructive" className="mt-2">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <div className="mt-2">
+          <ErrorNotice message={error} onDismiss={() => setError('')} />
+        </div>
       )}
       {recommendation && (
         <div className="mt-2 flex flex-col gap-2">
@@ -224,6 +231,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
           </div>
           <div>
             <Button type="button" onClick={handleCreate} disabled={saving}>
+              {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
               {saving ? 'Creating…' : 'Create watchlist from picks'}
             </Button>
           </div>
