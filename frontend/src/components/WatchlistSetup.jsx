@@ -1,17 +1,68 @@
 import { useState } from 'react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Boxes,
+  Check,
+  CircleDollarSign,
+  FileClock,
+  Globe2,
+  PlugZap,
+  Plus,
+  Search,
+  Sparkles,
+  Trash2
+} from 'lucide-react';
 import { createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Input } from './ui/input';
-import { Label } from './ui/label';
 import { Spinner } from './ui/spinner';
 import { Textarea } from './ui/textarea';
 import ErrorNotice from './ErrorNotice';
 
-const DIMENSIONS = ['pricing', 'features', 'integrations', 'release_notes'];
+const DIMENSIONS = [
+  {
+    id: 'pricing',
+    label: 'Pricing',
+    caption: 'Price tiers, add-ons and discounts',
+    icon: CircleDollarSign
+  },
+  {
+    id: 'features',
+    label: 'Features',
+    caption: 'New capabilities and packaging',
+    icon: Boxes
+  },
+  {
+    id: 'integrations',
+    label: 'Integrations',
+    caption: 'Partners, APIs and app marketplaces',
+    icon: PlugZap
+  },
+  {
+    id: 'release_notes',
+    label: 'Release notes',
+    caption: 'Changelogs and shipped updates',
+    icon: FileClock
+  }
+];
 const KINDS = ['pricing', 'features', 'integrations', 'release_notes'];
+const STEPS = [
+  { id: 1, label: 'Who you are' },
+  { id: 2, label: 'Competitors' },
+  { id: 3, label: 'Scope' },
+  { id: 4, label: 'Review' }
+];
+const PROVENANCE_HINTS = {
+  model_knowledge: 'may be stale — verify'
+};
+
+function dimensionLabel(value) {
+  return String(value || '').replaceAll('_', ' ');
+}
 
 function blankProduct(kind) {
   return {
@@ -21,7 +72,8 @@ function blankProduct(kind) {
     official_website: '',
     sources: [],
     rationale: '',
-    tracked: true
+    tracked: true,
+    scope_kinds: []
   };
 }
 
@@ -29,15 +81,17 @@ function blankSource() {
   return { url: '', kind: 'pricing', provenance: 'user_supplied', note: '', tracked: true };
 }
 
-function withTrackedSources(item) {
+function withTrackedSources(item, scopeKinds) {
   return {
     ...item,
     tracked: item.tracked ?? true,
+    scope_kinds: item.scope_kinds?.length ? item.scope_kinds : [...scopeKinds],
     sources: (item.sources || []).map((source) => ({ ...source, tracked: source.tracked ?? true }))
   };
 }
 
 export default function WatchlistSetup({ onCreated, onCancel }) {
+  const [step, setStep] = useState(1);
   const [prompt, setPrompt] = useState('');
   const [discoveringCompetitors, setDiscoveringCompetitors] = useState(false);
   const [discoveringSources, setDiscoveringSources] = useState(false);
@@ -46,19 +100,36 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
   const [goal, setGoal] = useState('');
   const [dimensions, setDimensions] = useState(['pricing']);
   const [criteria, setCriteria] = useState([{ field: 'price', objective: 'Track public pricing changes', importance: 'high' }]);
-  const [products, setProducts] = useState([{ ...blankProduct('own'), name: '', tracked: true }]);
+  const [products, setProducts] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [createdId, setCreatedId] = useState(null);
   const [error, setError] = useState('');
 
-  const pickedDomains = products
-    .filter((item) => item.tracked && item.official_website?.trim())
+  const pickedProducts = products.filter((item) => item.tracked && item.name.trim());
+  const pickedDomains = pickedProducts
+    .filter((item) => item.official_website?.trim())
     .map((item) => item.official_website.trim());
+  const sourceCount = pickedProducts.reduce(
+    (total, item) => total + (item.sources || []).filter(
+      (source) => source.url?.trim() && source.tracked !== false && scopedKinds(item).includes(source.kind)
+    ).length,
+    0
+  );
+
+  const canAdvance = step === 1
+    ? Boolean(prompt.trim()) && dimensions.length > 0
+    : pickedProducts.length > 0;
+  const canCreate = Boolean(name.trim()) && pickedProducts.length > 0 && dimensions.length > 0;
 
   function toggleDimension(dimension) {
     setDimensions((current) =>
       current.includes(dimension) ? current.filter((item) => item !== dimension) : [...current, dimension]
     );
+  }
+
+  function scopedKinds(item) {
+    return Array.isArray(item.scope_kinds) ? item.scope_kinds : dimensions;
   }
 
   async function handleDiscoverCompetitors(event) {
@@ -68,11 +139,16 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
     try {
       const recommendation = await discoverCompetitors(prompt);
       const competitors = (recommendation.products || []).map((item) =>
-        withTrackedSources({ ...item, kind: item.kind || 'competitor', tracked: true })
+        withTrackedSources(
+          { ...item, kind: item.kind || 'competitor', tracked: true },
+          dimensions.length ? dimensions : ['pricing']
+        )
       );
       setProducts((current) => [...current.filter((item) => item.kind === 'own'), ...competitors]);
       setWarnings(recommendation.warnings || []);
       setDiscovered(true);
+      setName((current) => current || `${competitors[0]?.name || 'Competitive'} watch`);
+      setGoal((current) => current || recommendation.suggested_goal || prompt);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -112,6 +188,17 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
     setProducts((current) => current.map((item, position) => (position === index ? { ...item, ...patch } : item)));
   }
 
+  function addProduct(kind) {
+    setProducts((current) => [
+      ...current,
+      { ...blankProduct(kind), scope_kinds: [...(dimensions.length ? dimensions : ['pricing'])] }
+    ]);
+  }
+
+  function removeProduct(index) {
+    setProducts((current) => current.filter((_, position) => position !== index));
+  }
+
   function updateSource(productIndex, sourceIndex, patch) {
     setProducts((current) =>
       current.map((item, position) => {
@@ -137,17 +224,27 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
     setCriteria((current) => current.map((item, position) => (position === index ? { ...item, ...patch } : item)));
   }
 
+  function goNext() {
+    if (!canAdvance || step >= STEPS.length) return;
+    setStep((current) => current + 1);
+  }
+
+  function goBack() {
+    setStep((current) => Math.max(1, current - 1));
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
+    if (step !== STEPS.length || !canCreate || saving) return;
     setSaving(true);
     setError('');
     try {
       const tracked = products.filter((item) => item.tracked && item.name.trim());
       const watchlist = await createWatchlist({
-        name,
+        name: name.trim(),
         description: '',
         config: {
-          goal,
+          goal: goal.trim() || prompt.trim(),
           dimensions,
           workflow_version_id: null,
           comparison_criteria: criteria.filter((item) => item.field.trim() && item.objective.trim()),
@@ -158,12 +255,12 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             official_website: item.official_website || null,
             profile: { facts: [], target_segments: [] },
             sources: (item.sources || [])
-              .filter((source) => source.url.trim() && source.tracked !== false)
+              .filter((source) => source.url.trim() && source.tracked !== false && scopedKinds(item).includes(source.kind))
               .map((source) => ({ url: source.url.trim(), kind: source.kind, enabled: true }))
           }))
         }
       });
-      onCreated(watchlist.id);
+      setCreatedId(watchlist.id);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -171,175 +268,542 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
     }
   }
 
+  if (createdId) {
+    return (
+      <Card className="wizard-shell wizard-complete" data-testid="setup-created">
+        <span className="wizard-complete__mark" aria-hidden="true"><Check /></span>
+        <p className="page-eyebrow">WATCHLIST READY</p>
+        <h2 className="type-display">{name.trim()} is ready</h2>
+        <p className="wizard-complete__copy">
+          Three short steps turn this draft into a tracked brief. Nothing runs until you approve it.
+        </p>
+        <ol className="wizard-next-steps">
+          <li>
+            <span className="wizard-next-steps__index">1</span>
+            <span><strong>Approve the revision</strong><small>Confirm the sources and scope you just reviewed.</small></span>
+          </li>
+          <li>
+            <span className="wizard-next-steps__index">2</span>
+            <span><strong>Run now</strong><small>Capture a first baseline for every tracked source.</small></span>
+          </li>
+          <li>
+            <span className="wizard-next-steps__index">3</span>
+            <span><strong>Read the brief</strong><small>Most first runs report no change; that is a healthy baseline.</small></span>
+          </li>
+        </ol>
+        <p className="wizard-complete__hint">
+          Tip: suggest a weekly schedule in Settings so future check-ins happen without manual runs.
+        </p>
+        <div className="wizard-nav">
+          <Button type="button" onClick={() => onCreated(createdId)}>
+            Open watchlist
+            <ArrowRight data-icon="inline-end" />
+          </Button>
+          <Button type="button" variant="ghost" onClick={onCancel}>Back to watchlists</Button>
+        </div>
+      </Card>
+    );
+  }
+
   return (
-    <Card className="p-4">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <h2 className="type-display">New watchlist</h2>
+    <Card className="wizard-shell" data-testid="setup-wizard">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+        <header className="wizard-head">
+          <div className="wizard-head__copy">
+            <p className="page-eyebrow">NEW WATCHLIST</p>
+            <h2 className="type-display">Set up competitive tracking</h2>
+            <p className="wizard-head__caption">
+              A short story: tell us who you are, pick competitors, set the scope, then review before anything runs.
+            </p>
+          </div>
+          <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
+        </header>
+
+        <ol className="wizard-stepper" aria-label="Setup steps">
+          {STEPS.map((item) => {
+            const state = step === item.id ? 'active' : step > item.id ? 'done' : 'upcoming';
+            return (
+              <li
+                key={item.id}
+                className="wizard-step"
+                data-state={state}
+                data-testid={`wizard-step-${item.id}`}
+                aria-current={state === 'active' ? 'step' : undefined}
+              >
+                <span className="wizard-step__index">
+                  {state === 'done' ? <Check aria-hidden="true" /> : item.id}
+                </span>
+                <span className="wizard-step__label">{item.label}</span>
+              </li>
+            );
+          })}
+        </ol>
+
         {error && (
           <ErrorNotice message={error} onDismiss={() => setError('')} />
         )}
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="ci-setup-prompt">Describe your product and what to track</Label>
-          <Textarea
-            id="ci-setup-prompt"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="I make TaskFlow, a team task manager. Track pricing of Todoist and ClickUp."
-          />
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">Step 1 — Find competitors</p>
-            <div>
+
+        {step === 1 && (
+          <section className="wizard-panel" data-testid="setup-step-1">
+            <div className="wizard-panel__heading">
+              <span className="wizard-panel__mark" aria-hidden="true"><Sparkles /></span>
+              <div>
+                <h3 className="wizard-panel__title">Who are you, and what should we watch?</h3>
+                <p className="wizard-panel__description">
+                  One or two sentences is enough. Mention your product and the kind of movement that matters.
+                </p>
+              </div>
+            </div>
+            <label className="wizard-field" htmlFor="ci-setup-prompt">
+              <span className="wizard-field__label">Your product and tracking intent</span>
+              <Textarea
+                id="ci-setup-prompt"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="I make TaskFlow, a team task manager. Track pricing of Todoist and ClickUp."
+                aria-label="Describe your product and what to track"
+                rows={3}
+              />
+            </label>
+            <fieldset className="wizard-fieldset">
+              <legend className="wizard-field__label">What dimensions should we compare?</legend>
+              <p className="wizard-field__hint">Pick at least one card. You can refine each competitor in step 3.</p>
+              <div className="wizard-dimension-grid">
+                {DIMENSIONS.map((dimension) => {
+                  const Icon = dimension.icon;
+                  const selected = dimensions.includes(dimension.id);
+                  return (
+                    <button
+                      key={dimension.id}
+                      type="button"
+                      className="wizard-dimension-card"
+                      data-selected={selected}
+                      aria-pressed={selected}
+                      onClick={() => toggleDimension(dimension.id)}
+                    >
+                      <span className="wizard-dimension-card__icon" aria-hidden="true"><Icon /></span>
+                      <span className="wizard-dimension-card__copy">
+                        <strong>{dimension.label}</strong>
+                        <small>{dimension.caption}</small>
+                      </span>
+                      <span className="wizard-dimension-card__check" aria-hidden="true">
+                        {selected ? <Check /> : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          </section>
+        )}
+
+        {step === 2 && (
+          <section className="wizard-panel" data-testid="setup-step-2">
+            <div className="wizard-panel__heading">
+              <span className="wizard-panel__mark" aria-hidden="true"><Globe2 /></span>
+              <div>
+                <h3 className="wizard-panel__title">Who should we watch?</h3>
+                <p className="wizard-panel__description">
+                  Search the web for candidate competitors, or add them manually. Every entry stays editable.
+                </p>
+              </div>
+            </div>
+            <div className="wizard-actions">
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleDiscoverCompetitors}
                 disabled={discoveringCompetitors || !prompt.trim()}
               >
-                {discoveringCompetitors && <Spinner data-icon="inline-start" aria-hidden="true" />}
+                {discoveringCompetitors
+                  ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                  : <Search data-icon="inline-start" />}
                 {discoveringCompetitors ? 'Searching…' : 'Find competitors'}
               </Button>
+              <Button type="button" variant="outline" onClick={() => addProduct('competitor')}>
+                <Plus data-icon="inline-start" />Add competitor
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => addProduct('own')}>
+                <Plus data-icon="inline-start" />Add own product
+              </Button>
             </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">Step 2 — Find source URLs</p>
-            <p className="text-xs text-muted-foreground">
-              Searches only the picked competitor domains for the selected dimension ({dimensions[0] || 'pricing'}).
-            </p>
-            <div>
+
+            {(discovered || warnings.length > 0) && (
+              <Alert className="wizard-unverified">
+                <AlertDescription>
+                  Unverified draft — review every entry before creating. {warnings.join(' ')}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {products.length === 0 ? (
+              <div className="wizard-empty empty-state-fade">
+                <p>No competitors yet. Search by your description, or add one manually to keep going.</p>
+              </div>
+            ) : (
+              <div className="wizard-card-list">
+                {products.map((item, index) => (
+                  <Card
+                    key={index}
+                    size="sm"
+                    className="wizard-competitor-card"
+                    data-tracked={item.tracked}
+                  >
+                    <div className="wizard-competitor-card__head">
+                      <label className="wizard-check">
+                        <input
+                          type="checkbox"
+                          checked={item.tracked}
+                          onChange={(event) => updateProduct(index, { tracked: event.target.checked })}
+                          aria-label={`Track ${item.name || 'product'}`}
+                        />
+                        <span className="wizard-competitor-card__title">
+                          {item.name || (item.kind === 'own' ? 'Your product' : 'New competitor')}
+                        </span>
+                      </label>
+                      <div className="wizard-badge-row">
+                        {item.provenance && (
+                          <Badge
+                            variant="outline"
+                            title={PROVENANCE_HINTS[item.provenance] || undefined}
+                          >
+                            {item.provenance}
+                          </Badge>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => removeProduct(index)}
+                          aria-label={`Remove ${item.name || 'product'}`}
+                          title="Remove"
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </div>
+                    {item.rationale && (
+                      <p className="wizard-competitor-card__rationale">{item.rationale}</p>
+                    )}
+                    <div className="wizard-field-grid">
+                      <Input
+                        value={item.name}
+                        onChange={(event) => updateProduct(index, { name: event.target.value })}
+                        placeholder="Product name"
+                        aria-label="Product name"
+                      />
+                      <Input
+                        value={item.company}
+                        onChange={(event) => updateProduct(index, { company: event.target.value })}
+                        placeholder="Company"
+                        aria-label="Company"
+                      />
+                    </div>
+                    <Input
+                      value={item.official_website || ''}
+                      onChange={(event) => updateProduct(index, { official_website: event.target.value })}
+                      placeholder="https://product.example/"
+                      aria-label="Official website"
+                    />
+                    <label className="wizard-role">
+                      <span>Role</span>
+                      <select
+                        value={item.kind}
+                        onChange={(event) => updateProduct(index, { kind: event.target.value })}
+                        aria-label="Product role"
+                        className="wizard-select"
+                      >
+                        <option value="competitor">competitor</option>
+                        <option value="own">own</option>
+                      </select>
+                    </label>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {step === 3 && (
+          <section className="wizard-panel" data-testid="setup-step-3">
+            <div className="wizard-panel__heading">
+              <span className="wizard-panel__mark" aria-hidden="true"><Boxes /></span>
+              <div>
+                <h3 className="wizard-panel__title">Set the scope for each competitor</h3>
+                <p className="wizard-panel__description">
+                  Choose which source kinds matter, then find or paste exact source URLs.
+                </p>
+              </div>
+            </div>
+            <div className="wizard-actions">
               <Button
                 type="button"
                 variant="outline"
                 onClick={handleDiscoverSources}
                 disabled={discoveringSources || pickedDomains.length === 0}
               >
-                {discoveringSources && <Spinner data-icon="inline-start" aria-hidden="true" />}
+                {discoveringSources
+                  ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                  : <Search data-icon="inline-start" />}
                 {discoveringSources ? 'Searching…' : 'Find source URLs'}
               </Button>
+              <p className="wizard-field__hint">
+                Searches only the picked competitor domains for the selected dimension ({dimensions[0] || 'pricing'}).
+              </p>
             </div>
-          </div>
-        </div>
-        {(discovered || warnings.length > 0) && (
-          <Alert>
-            <AlertDescription>
-              Unverified draft — review every entry before creating. {warnings.join(' ')}
-            </AlertDescription>
-          </Alert>
-        )}
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ci-setup-name">Name</Label>
-          <Input id="ci-setup-name" value={name} onChange={(event) => setName(event.target.value)} required />
-        </div>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ci-setup-goal">Goal</Label>
-          <Textarea id="ci-setup-goal" value={goal} onChange={(event) => setGoal(event.target.value)} required />
-        </div>
-        <fieldset className="flex flex-col gap-1">
-          <legend className="text-sm font-medium">Dimensions</legend>
-          <div className="flex flex-wrap gap-2">
-            {DIMENSIONS.map((dimension) => (
-              <label key={dimension} className="flex items-center gap-1 text-sm">
-                <input type="checkbox" checked={dimensions.includes(dimension)} onChange={() => toggleDimension(dimension)} />
-                {dimension.replaceAll('_', ' ')}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium">Comparison criteria</p>
-          {criteria.map((item, index) => (
-            <div key={index} className="grid grid-cols-[1fr_2fr_auto_auto] items-center gap-2">
-              <Input value={item.field} onChange={(event) => updateCriterion(index, { field: event.target.value })} placeholder="price" aria-label="Criterion field" />
-              <Input value={item.objective} onChange={(event) => updateCriterion(index, { objective: event.target.value })} placeholder="SMB affordability" aria-label="Criterion objective" />
-              <select value={item.importance} onChange={(event) => updateCriterion(index, { importance: event.target.value })} aria-label="Criterion importance" className="rounded border p-1 text-sm">
-                <option value="high">high</option>
-                <option value="medium">medium</option>
-                <option value="low">low</option>
-              </select>
-              <Button type="button" variant="ghost" onClick={() => setCriteria((current) => current.filter((_, position) => position !== index))} aria-label="Remove criterion">
-                ×
-              </Button>
-            </div>
-          ))}
-          <div>
-            <Button type="button" variant="ghost" onClick={() => setCriteria((current) => [...current, { field: '', objective: '', importance: 'medium' }])}>
-              Add criterion
-            </Button>
-          </div>
-        </div>
-        <div className="flex flex-col gap-3">
-          <p className="text-sm font-medium">Products</p>
-          {products.map((item, index) => (
-            <Card key={index} className="flex flex-col gap-2 p-3">
-              <label className="flex items-center gap-2 text-sm font-medium">
-                <input
-                  type="checkbox"
-                  checked={item.tracked}
-                  onChange={(event) => updateProduct(index, { tracked: event.target.checked })}
-                  aria-label={`Track ${item.name || 'product'}`}
-                />
-                {item.kind === 'own' ? 'Own product' : 'Competitor'}
-                {item.provenance && <Badge variant="outline">{item.provenance}</Badge>}
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <Input value={item.name} onChange={(event) => updateProduct(index, { name: event.target.value })} placeholder="Product name" aria-label="Product name" />
-                <Input value={item.company} onChange={(event) => updateProduct(index, { company: event.target.value })} placeholder="Company" aria-label="Company" />
+
+            {pickedProducts.length === 0 ? (
+              <div className="wizard-empty empty-state-fade">
+                <p>Pick at least one competitor in step 2 to continue.</p>
               </div>
-              <Input value={item.official_website || ''} onChange={(event) => updateProduct(index, { official_website: event.target.value })} placeholder="https://product.example/" aria-label="Official website" />
-              <div className="flex flex-col gap-1">
-                {(item.sources || []).map((source, sub) => (
-                  <div key={sub} className="grid grid-cols-[auto_2fr_1fr_auto_auto] items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={source.tracked !== false}
-                      onChange={(event) => updateSource(index, sub, { tracked: event.target.checked })}
-                      aria-label={`Track source ${source.url || 'row'}`}
-                    />
-                    <Input value={source.url} onChange={(event) => updateSource(index, sub, { url: event.target.value })} placeholder="https://rival.example/pricing" aria-label="Source URL" />
-                    <select value={source.kind} onChange={(event) => updateSource(index, sub, { kind: event.target.value })} aria-label="Source kind" className="rounded border p-1 text-sm">
-                      {KINDS.map((kind) => (
-                        <option key={kind} value={kind}>{kind}</option>
-                      ))}
-                    </select>
-                    <Badge variant="outline">{source.provenance || 'user_supplied'}</Badge>
-                    <Button type="button" variant="ghost" onClick={() => removeSource(index, sub)} aria-label="Remove source">
-                      ×
-                    </Button>
-                  </div>
-                ))}
+            ) : (
+              <div className="wizard-card-list">
+                {products.map((item, index) => {
+                  if (!item.tracked || !item.name.trim()) return null;
+                  const activeKinds = scopedKinds(item);
+                  return (
+                    <Card key={index} size="sm" className="wizard-scope-row">
+                      <div className="wizard-scope-row__head">
+                        <div className="wizard-scope-row__identity">
+                          <strong>{item.name}</strong>
+                          <span>{item.official_website || 'No domain yet'}</span>
+                        </div>
+                        {item.provenance && (
+                          <Badge variant="outline" title={PROVENANCE_HINTS[item.provenance] || undefined}>
+                            {item.provenance}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="wizard-kind-row">
+                        <span className="wizard-field__label">Source kinds</span>
+                        <div className="wizard-kind-chips" role="group" aria-label={`Source kinds for ${item.name}`}>
+                          {KINDS.map((kind) => {
+                            const selected = activeKinds.includes(kind);
+                            return (
+                              <button
+                                key={kind}
+                                type="button"
+                                className="wizard-kind-chip"
+                                data-selected={selected}
+                                aria-pressed={selected}
+                                onClick={() => {
+                                  const next = selected
+                                    ? activeKinds.filter((value) => value !== kind)
+                                    : [...activeKinds, kind];
+                                  updateProduct(index, { scope_kinds: next });
+                                }}
+                              >
+                                {dimensionLabel(kind)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="wizard-source-list">
+                        {(item.sources || []).map((source, sub) => (
+                          <div key={sub} className="wizard-source-row">
+                            <input
+                              type="checkbox"
+                              checked={source.tracked !== false}
+                              onChange={(event) => updateSource(index, sub, { tracked: event.target.checked })}
+                              aria-label={`Track source ${source.url || 'row'}`}
+                            />
+                            <Input
+                              value={source.url}
+                              onChange={(event) => updateSource(index, sub, { url: event.target.value })}
+                              placeholder="https://rival.example/pricing"
+                              aria-label="Source URL"
+                            />
+                            <select
+                              value={source.kind}
+                              onChange={(event) => updateSource(index, sub, { kind: event.target.value })}
+                              aria-label="Source kind"
+                              className="wizard-select"
+                            >
+                              {KINDS.map((kind) => (
+                                <option key={kind} value={kind}>{dimensionLabel(kind)}</option>
+                              ))}
+                            </select>
+                            <Badge
+                              variant="outline"
+                              title={PROVENANCE_HINTS[source.provenance] || undefined}
+                            >
+                              {source.provenance || 'user_supplied'}
+                            </Badge>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              onClick={() => removeSource(index, sub)}
+                              aria-label="Remove source"
+                            >
+                              <Trash2 />
+                            </Button>
+                          </div>
+                        ))}
+                        <div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => updateProduct(index, { sources: [...(item.sources || []), blankSource()] })}
+                          >
+                            <Plus data-icon="inline-start" />Add source
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="wizard-criteria">
+              <div className="wizard-criteria__head">
                 <div>
-                  <Button type="button" variant="ghost" onClick={() => updateProduct(index, { sources: [...(item.sources || []), blankSource()] })}>
-                    Add source
+                  <p className="wizard-field__label">Comparison criteria</p>
+                  <p className="wizard-field__hint">Shared across every tracked competitor.</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCriteria((current) => [...current, { field: '', objective: '', importance: 'medium' }])}
+                >
+                  <Plus data-icon="inline-start" />Add criterion
+                </Button>
+              </div>
+              {criteria.map((item, index) => (
+                <div key={index} className="wizard-criterion-row">
+                  <Input
+                    value={item.field}
+                    onChange={(event) => updateCriterion(index, { field: event.target.value })}
+                    placeholder="price"
+                    aria-label="Criterion field"
+                  />
+                  <Input
+                    value={item.objective}
+                    onChange={(event) => updateCriterion(index, { objective: event.target.value })}
+                    placeholder="SMB affordability"
+                    aria-label="Criterion objective"
+                  />
+                  <select
+                    value={item.importance}
+                    onChange={(event) => updateCriterion(index, { importance: event.target.value })}
+                    aria-label="Criterion importance"
+                    className="wizard-select"
+                  >
+                    <option value="high">high</option>
+                    <option value="medium">medium</option>
+                    <option value="low">low</option>
+                  </select>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setCriteria((current) => current.filter((_, position) => position !== index))}
+                    aria-label="Remove criterion"
+                  >
+                    <Trash2 />
                   </Button>
                 </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {step === 4 && (
+          <section className="wizard-panel" data-testid="setup-step-4">
+            <div className="wizard-panel__heading">
+              <span className="wizard-panel__mark" aria-hidden="true"><Check /></span>
+              <div>
+                <h3 className="wizard-panel__title">Review before creating</h3>
+                <p className="wizard-panel__description">
+                  This is a draft. Creating it does not approve or run anything yet.
+                </p>
               </div>
-              {item.kind === 'own' ? null : (
-                <label className="flex items-center gap-1 text-sm">
-                  Role
-                  <select value={item.kind} onChange={(event) => updateProduct(index, { kind: event.target.value })} aria-label="Product role" className="rounded border p-1 text-sm">
-                    <option value="competitor">competitor</option>
-                    <option value="own">own</option>
-                  </select>
-                </label>
-              )}
-            </Card>
-          ))}
-          <div className="flex gap-2">
-            <Button type="button" variant="ghost" onClick={() => setProducts((current) => [...current, { ...blankProduct('competitor') }])}>
-              Add competitor
+            </div>
+
+            <div className="wizard-review-grid">
+              <div className="wizard-review-stat">
+                <strong>{pickedProducts.length}</strong>
+                <span>competitors</span>
+              </div>
+              <div className="wizard-review-stat">
+                <strong>{sourceCount}</strong>
+                <span>sources</span>
+              </div>
+              <div className="wizard-review-stat">
+                <strong>{dimensions.length}</strong>
+                <span>dimensions</span>
+              </div>
+              <div className="wizard-review-stat">
+                <strong>weekly</strong>
+                <span>expected cadence</span>
+              </div>
+            </div>
+
+            <div className="wizard-review-note">
+              <p>
+                <strong>Expected cadence: weekly.</strong> You can suggest a schedule after creating; the wizard never runs
+                a collection on its own.
+              </p>
+              <p>
+                Honest expectation: many check-ins may report <strong>no change</strong>. That is a healthy result, not a
+                failure — a brief only flags movement when a tracked page actually differs.
+              </p>
+            </div>
+
+            <ul className="wizard-review-list">
+              {pickedProducts.map((item, index) => (
+                <li key={index}>
+                  <span className="wizard-review-list__identity">
+                    <strong>{item.name}</strong>
+                    <small>{item.official_website || 'No domain yet'}</small>
+                  </span>
+                  <span className="wizard-review-list__meta">
+                    {(item.sources || []).filter((source) => source.url?.trim()).length} sources ·{' '}
+                    {scopedKinds(item).map(dimensionLabel).join(', ')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <label className="wizard-field" htmlFor="ci-setup-name">
+              <span className="wizard-field__label">Watchlist name</span>
+              <Input
+                id="ci-setup-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="TaskFlow pricing watch"
+                aria-label="Watchlist name"
+                required
+              />
+            </label>
+            <p className="wizard-review-goal">
+              Tracking goal: {goal.trim() || prompt.trim() || 'No description yet.'}
+            </p>
+          </section>
+        )}
+
+        <div className="wizard-nav">
+          {step > 1 ? (
+            <Button type="button" variant="outline" onClick={goBack}>
+              <ArrowLeft data-icon="inline-start" />Back
             </Button>
-            <Button type="button" variant="ghost" onClick={() => setProducts((current) => [...current, { ...blankProduct('own') }])}>
-              Add own product
+          ) : (
+            <span />
+          )}
+          {step < STEPS.length ? (
+            <Button type="button" onClick={goNext} disabled={!canAdvance}>
+              Next<ArrowRight data-icon="inline-end" />
             </Button>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button type="submit" disabled={saving || dimensions.length === 0}>
-            {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
-            {saving ? 'Saving…' : 'Create watchlist'}
-          </Button>
-          <Button type="button" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
+          ) : (
+            <Button type="submit" disabled={!canCreate || saving}>
+              {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
+              {saving ? 'Creating…' : 'Create watchlist'}
+            </Button>
+          )}
         </div>
       </form>
     </Card>

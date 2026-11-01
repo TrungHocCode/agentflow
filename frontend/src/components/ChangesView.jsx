@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { listChanges, listWatchlists } from '../services/ciApi';
-import { Card } from './ui/card';
 import ChangeDetail from './ChangeDetail';
 import EmptyState from './EmptyState';
 import ErrorNotice from './ErrorNotice';
@@ -60,27 +59,34 @@ export default function ChangesView() {
   }
 
   return (
-    <div className="page-frame flex flex-col gap-3">
-      <h2 className="type-display">Changes</h2>
-      <ul className="flex flex-col gap-2">
+    <div className="page-frame ci-page flex flex-col gap-3">
+      <div className="ci-page-heading">
+        <div className="page-heading__copy">
+          <p className="page-eyebrow">INTELLIGENCE</p>
+          <h2 className="page-title">Changes</h2>
+          <p className="page-description">Every detected movement across the watchlists you own.</p>
+        </div>
+      </div>
+      <ul className="ci-list">
         {items.map((change) => (
-          <li key={change.id}>
-            <Card className="p-3">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between gap-2 text-left"
-                onClick={() => setSelectedChangeId(change.id)}
-              >
-                <span>
-                  <span className="block text-sm text-muted-foreground">{change.watchlistName}</span>
-                  <span className="block font-medium">{change.section || 'Preamble'} · {change.kind}</span>
-                  <span className="block truncate text-sm text-muted-foreground">
-                    {change.after_excerpt || change.before_excerpt}
-                  </span>
+          <li key={change.id} className="ci-row-card">
+            <button
+              type="button"
+              className="ci-row-button"
+              onClick={() => setSelectedChangeId(change.id)}
+            >
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="ci-row-meta">
+                  <span className="ci-chip ci-chip--quiet">{change.watchlistName}</span>
                 </span>
-                <OutcomeBadge outcome={change.kind === 'modified' ? 'changed' : change.kind} />
-              </button>
-            </Card>
+                <span className="ci-row-title flex flex-wrap items-center gap-2">
+                  {change.section || 'Preamble'}
+                  <span className="ci-chip ci-chip--quiet">{change.kind}</span>
+                </span>
+                <span className="ci-row-meta truncate">{change.after_excerpt || change.before_excerpt}</span>
+              </span>
+              <OutcomeBadge outcome={change.kind === 'modified' ? 'changed' : change.kind} />
+            </button>
           </li>
         ))}
       </ul>

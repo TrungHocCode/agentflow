@@ -189,7 +189,7 @@ export default function RunResultsDrawer({
           <div className="results-drawer__title-group">
             <p className="page-eyebrow">{selectedIsReport ? 'FINAL REPORT' : hasReportArtifact ? 'CHARTS & FILES' : 'RESULTS BY STEP'}</p>
             <h2 id="run-results-title" className="results-drawer__title">Research results</h2>
-            <Badge variant={runStatus === 'failed' ? 'destructive' : 'secondary'}>{statusLabel}</Badge>
+            <Badge variant={runStatus === 'failed' ? 'destructive' : 'secondary'} className="ci-pill">{statusLabel}</Badge>
           </div>
           <div className="results-drawer__actions">
             {results?.length > 0 && (
@@ -291,7 +291,7 @@ export default function RunResultsDrawer({
                           <h3>
                             Step {item?.task_id || index + 1} · {item?.description || 'Step content'}
                           </h3>
-                          <Badge variant={item?.status === 'failed' ? 'destructive' : 'secondary'}>{item?.status === 'partial' ? 'Partial' : (item?.status || 'done')}</Badge>
+                          <Badge variant={item?.status === 'failed' ? 'destructive' : 'secondary'} className="ci-pill">{item?.status === 'partial' ? 'Partial' : (item?.status || 'done')}</Badge>
                         </div>
                         <StructuredText text={text} />
                       </article>
@@ -314,7 +314,7 @@ export default function RunResultsDrawer({
                         <h3>
                           Step {item?.task_id || index + 1} · {item?.description || 'Step content'}
                         </h3>
-                        <Badge variant={item?.status === 'failed' ? 'destructive' : 'secondary'}>{item?.status === 'partial' ? 'Partial' : (item?.status || 'done')}</Badge>
+                        <Badge variant={item?.status === 'failed' ? 'destructive' : 'secondary'} className="ci-pill">{item?.status === 'partial' ? 'Partial' : (item?.status || 'done')}</Badge>
                       </div>
                       <StructuredText text={resultText(item)} />
                     </article>

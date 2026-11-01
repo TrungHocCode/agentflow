@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { getRuns } from '../services/api';
 import { listBriefs, listWatchlists } from '../services/ciApi';
 import { Button } from './ui/button';
@@ -69,32 +70,45 @@ export default function BriefsHistoryView({ onOpenRun }) {
   }
 
   return (
-    <div className="page-frame flex flex-col gap-4">
-      <h2 className="type-display">Briefs &amp; History</h2>
+    <div className="page-frame ci-page flex flex-col gap-4">
+      <div className="ci-page-heading">
+        <div className="page-heading__copy">
+          <p className="page-eyebrow">INTELLIGENCE</p>
+          <h2 className="page-title">Briefs &amp; History</h2>
+          <p className="page-description">Read finished briefs and reopen the runs that produced them.</p>
+        </div>
+      </div>
 
-      <Card className="p-4">
-        <p className="mb-2 text-sm font-medium">Briefs</p>
+      <Card className="ci-section p-4">
+        <div className="ci-section-head">
+          <p className="ci-section-title">Briefs</p>
+          <span className="ci-chip ci-chip--quiet">{briefs.length} total</span>
+        </div>
         {selectedBrief ? (
           <div className="flex flex-col gap-2">
-            <Button type="button" variant="ghost" onClick={() => setSelectedBrief(null)}>
-              Back to list
-            </Button>
+            <div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedBrief(null)}>
+                <ArrowLeft data-icon="inline-start" />Back to list
+              </Button>
+            </div>
             <BriefView brief={selectedBrief} />
           </div>
         ) : briefs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No briefs yet. A brief is prepared automatically when a run completes.</p>
+          <p className="ci-empty empty-state-fade">No briefs yet. A brief is prepared automatically when a run completes.</p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="ci-list">
             {briefs.map((brief) => (
-              <li key={brief.id}>
+              <li key={brief.id} className="ci-row-card">
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 text-left text-sm"
+                  className="ci-row-button"
                   onClick={() => setSelectedBrief(brief)}
                 >
-                  <OutcomeBadge outcome={brief.outcome} />
-                  <QualityBadge quality={brief.quality} />
-                  <span className="tnum text-muted-foreground">{dateLabel(brief.created_at)}</span>
+                  <span className="ci-chip-row">
+                    <OutcomeBadge outcome={brief.outcome} />
+                    <QualityBadge quality={brief.quality} />
+                  </span>
+                  <span className="tnum text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
                 </button>
               </li>
             ))}
@@ -102,19 +116,22 @@ export default function BriefsHistoryView({ onOpenRun }) {
         )}
       </Card>
 
-      <Card className="p-4">
-        <p className="mb-2 text-sm font-medium">Run history</p>
+      <Card className="ci-section p-4">
+        <div className="ci-section-head">
+          <p className="ci-section-title">Run history</p>
+          <span className="ci-chip ci-chip--quiet">{runs.length} total</span>
+        </div>
         {runs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No runs yet.</p>
+          <p className="ci-empty empty-state-fade">No runs yet.</p>
         ) : (
-          <ul className="flex flex-col gap-2">
+          <ul className="ci-list">
             {runs.map((run) => (
-              <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                <span className="tnum">{runLabel(run)}</span>
+              <li key={run.run_id} className="ci-row-card flex flex-wrap items-center gap-2">
+                <span className="tnum text-sm">{runLabel(run)}</span>
                 <StatusBadge status={run.status} />
                 <span className="flex-1" />
                 {onOpenRun && (
-                  <Button type="button" variant="ghost" onClick={() => onOpenRun(run)}>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => onOpenRun(run)}>
                     View
                   </Button>
                 )}

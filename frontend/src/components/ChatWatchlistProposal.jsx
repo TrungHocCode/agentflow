@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Search, Sparkles } from 'lucide-react';
 import { createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
@@ -10,6 +10,10 @@ import { Label } from './ui/label';
 import { Spinner } from './ui/spinner';
 import ConfirmationBanner from './ConfirmationBanner';
 import ErrorNotice from './ErrorNotice';
+
+const PROVENANCE_HINTS = {
+  model_knowledge: 'may be stale — verify'
+};
 
 function lastUserText(messages) {
   const mine = (messages || []).filter((message) => message.sender === 'user');
@@ -141,7 +145,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
 
   if (createdId) {
     return (
-      <Card className="flex flex-col gap-2 p-3" data-testid="chat-proposal-done">
+      <Card className="wizard-shell wizard-complete" data-testid="chat-proposal-done">
         <ConfirmationBanner message="Watchlist created from this chat." />
         <div>
           <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)}>
@@ -153,18 +157,22 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   }
 
   return (
-    <Card className="p-3" data-testid="chat-proposal">
-      <div className="flex items-center gap-2">
-        <Sparkles aria-hidden="true" />
-        <p className="text-sm font-medium">Turn this chat into a watchlist</p>
+    <Card className="wizard-shell" data-testid="chat-proposal">
+      <div className="wizard-panel__heading">
+        <span className="wizard-panel__mark" aria-hidden="true"><Sparkles /></span>
+        <div>
+          <p className="wizard-panel__title">Turn this chat into a watchlist</p>
+          <p className="wizard-panel__description">
+            AgentFlow searches the web for competitors, then finds same-site source URLs only for the competitors you pick.
+            Review everything before creating.
+          </p>
+        </div>
       </div>
-      <p className="mt-1 text-sm text-muted-foreground">
-        AgentFlow searches the web for competitors, then finds same-site source URLs only for the competitors you pick.
-        Review everything before creating.
-      </p>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="wizard-actions">
         <Button type="button" variant="outline" onClick={handleDiscoverCompetitors} disabled={loading || !prompt}>
-          {loading && <Spinner data-icon="inline-start" aria-hidden="true" />}
+          {loading
+            ? <Spinner data-icon="inline-start" aria-hidden="true" />
+            : <Search data-icon="inline-start" />}
           {loading ? 'Searching…' : 'Find competitors'}
         </Button>
         {recommendation && (
@@ -180,52 +188,76 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
         )}
       </div>
       {error && (
-        <div className="mt-2">
-          <ErrorNotice message={error} onDismiss={() => setError('')} />
-        </div>
+        <ErrorNotice message={error} onDismiss={() => setError('')} />
       )}
       {recommendation && (
-        <div className="mt-2 flex flex-col gap-2">
-          <Alert>
+        <div className="flex flex-col gap-3">
+          <Alert className="wizard-unverified">
             <AlertDescription>Unverified draft — review every entry before creating.</AlertDescription>
           </Alert>
           {(recommendation.warnings || []).length > 0 && (
-            <p className="text-xs text-muted-foreground">{recommendation.warnings.join(' ')}</p>
+            <p className="wizard-field__hint">{recommendation.warnings.join(' ')}</p>
           )}
-          {recommendation.products.map((item, index) => (
-            <label key={index} className="flex flex-col gap-1 rounded border p-2 text-sm">
-              <span className="flex items-center gap-2 font-medium">
-                <input
-                  type="checkbox"
-                  checked={isPicked(index)}
-                  onChange={(event) => setPicks((current) => ({ ...current, [index]: event.target.checked }))}
-                  aria-label={`Track ${item.name}`}
-                />
-                {item.name} ({item.kind})
-                {item.provenance && <Badge variant="outline">{item.provenance}</Badge>}
-              </span>
-              {(item.sources || []).map((source, sub) => {
-                const key = sourceKey(index, sub);
-                return (
-                  <span key={sub} className="flex items-center gap-2">
+          <div className="wizard-card-list">
+            {recommendation.products.map((item, index) => (
+              <Card key={index} size="sm" className="wizard-competitor-card" data-tracked={isPicked(index)}>
+                <div className="wizard-competitor-card__head">
+                  <label className="wizard-check">
                     <input
                       type="checkbox"
-                      checked={isUrlPicked(key)}
-                      onChange={(event) => setUrlPicks((current) => ({ ...current, [key]: event.target.checked }))}
-                      aria-label={`Track source ${source.url}`}
+                      checked={isPicked(index)}
+                      onChange={(event) => setPicks((current) => ({ ...current, [index]: event.target.checked }))}
+                      aria-label={`Track ${item.name}`}
                     />
-                    <Input
-                      value={urls[key] ?? source.url}
-                      onChange={(event) => setUrls((current) => ({ ...current, [key]: event.target.value }))}
-                      aria-label={`Source URL for ${item.name}`}
-                    />
-                    <Badge variant="outline">{source.provenance}</Badge>
-                  </span>
-                );
-              })}
-            </label>
-          ))}
-          <div className="flex flex-col gap-1">
+                    <span className="wizard-competitor-card__title">
+                      {item.name}
+                      <span className="ci-chip ci-chip--quiet ml-2">{item.kind}</span>
+                    </span>
+                  </label>
+                  {item.provenance && (
+                    <Badge
+                      variant="outline"
+                      title={PROVENANCE_HINTS[item.provenance] || undefined}
+                    >
+                      {item.provenance}
+                    </Badge>
+                  )}
+                </div>
+                {item.rationale && (
+                  <p className="wizard-competitor-card__rationale">{item.rationale}</p>
+                )}
+                {(item.sources || []).length > 0 && (
+                  <div className="wizard-source-list">
+                    {item.sources.map((source, sub) => {
+                      const key = sourceKey(index, sub);
+                      return (
+                        <div key={sub} className="wizard-source-row">
+                          <input
+                            type="checkbox"
+                            checked={isUrlPicked(key)}
+                            onChange={(event) => setUrlPicks((current) => ({ ...current, [key]: event.target.checked }))}
+                            aria-label={`Track source ${source.url}`}
+                          />
+                          <Input
+                            value={urls[key] ?? source.url}
+                            onChange={(event) => setUrls((current) => ({ ...current, [key]: event.target.value }))}
+                            aria-label={`Source URL for ${item.name}`}
+                          />
+                          <Badge
+                            variant="outline"
+                            title={PROVENANCE_HINTS[source.provenance] || undefined}
+                          >
+                            {source.provenance}
+                          </Badge>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+          <div className="wizard-field">
             <Label htmlFor="chat-proposal-name">Watchlist name</Label>
             <Input id="chat-proposal-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="TaskFlow pricing watch" />
           </div>

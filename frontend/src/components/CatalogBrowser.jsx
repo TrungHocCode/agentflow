@@ -72,7 +72,7 @@ export default function CatalogBrowser({ tools, agents }) {
 
             <TabsContent value="tools" className="catalog-tab-content">
               {filteredTools.length === 0 ? (
-                <p className="catalog-empty">No matching tools found.</p>
+                <p className="catalog-empty empty-state-fade">No matching tools found.</p>
               ) : (
                 <div className="catalog-grid">
                   {filteredTools.map((tool) => {
@@ -86,7 +86,7 @@ export default function CatalogBrowser({ tools, agents }) {
                               <span className="catalog-item__icon" aria-hidden="true"><Icon /></span>
                               <CardTitle className="catalog-item__title" title={tool.name}>{displayName(tool.name)}</CardTitle>
                             </div>
-                            <Badge variant={isAvailable ? 'secondary' : 'destructive'} className={isAvailable ? 'run-status run-status--done' : undefined} title={tool.unavailable_reason || undefined}>
+                            <Badge variant={isAvailable ? 'secondary' : 'destructive'} className={`ci-pill ${isAvailable ? 'ci-pill--calm' : 'ci-pill--alert'}`} title={tool.unavailable_reason || undefined}>
                               {isAvailable ? 'Available' : 'Disabled'}
                             </Badge>
                           </div>
@@ -106,7 +106,7 @@ export default function CatalogBrowser({ tools, agents }) {
 
             <TabsContent value="agents" className="catalog-tab-content">
               {filteredAgents.length === 0 ? (
-                <p className="catalog-empty">No matching assistants found.</p>
+                <p className="catalog-empty empty-state-fade">No matching assistants found.</p>
               ) : (
                 <div className="catalog-grid">
                   {filteredAgents.map((agent) => {
@@ -120,13 +120,13 @@ export default function CatalogBrowser({ tools, agents }) {
                               <span className="catalog-item__icon" aria-hidden="true"><Layers3 /></span>
                               <CardTitle className="catalog-item__title" title={agent.name}>{displayName(agent.name)}</CardTitle>
                             </div>
-                            <Badge variant="secondary" className="run-status run-status--done">Available</Badge>
+                            <Badge variant="secondary" className="ci-pill ci-pill--calm">Available</Badge>
                           </div>
                           <CardDescription>{availableToolNames.length} authorized tools</CardDescription>
                         </CardHeader>
                         <CardContent className="catalog-tool-list">
                           {availableToolNames.map((toolName) => (
-                            <Badge key={toolName} variant="outline" className="catalog-tool-chip">{toolName}</Badge>
+                            <Badge key={toolName} variant="outline" className="catalog-tool-chip ci-pill ci-pill--quiet">{toolName}</Badge>
                           ))}
                           {blockedToolNames.map((toolName) => (
                             <Badge key={`blocked-${toolName}`} variant="destructive" title="Disabled by deployment policy">

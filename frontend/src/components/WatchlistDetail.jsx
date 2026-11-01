@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Play } from 'lucide-react';
+import { ArrowLeft, Play } from 'lucide-react';
 import { cancelRun, subscribeRunSSEStream } from '../services/api';
 import {
   approveRevision,
@@ -207,13 +207,18 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
   const activeRun = runs.find((run) => ACTIVE_RUN_STATUSES.has(run.status));
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2">
-        <Button type="button" variant="ghost" onClick={onBack}>
-          Back
-        </Button>
-        <h2 className="type-display">{watchlist.name}</h2>
-        <StatusBadge status={watchlist.status} />
+    <div className="ci-page flex flex-col gap-4">
+      <div className="ci-page-heading">
+        <div className="ci-title-row">
+          <Button type="button" variant="ghost" size="sm" onClick={onBack}>
+            <ArrowLeft data-icon="inline-start" />Back
+          </Button>
+          <div>
+            <p className="page-eyebrow">WATCHLIST</p>
+            <h2 className="page-title">{watchlist.name}</h2>
+          </div>
+          <StatusBadge status={watchlist.status} />
+        </div>
       </div>
       {error && (
         <ErrorNotice message={error} onDismiss={() => setError('')} />
@@ -222,7 +227,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         <ConfirmationBanner message={notice} onDismiss={() => setNotice('')} />
       )}
 
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs value={tab} onValueChange={setTab} className="ci-tabs">
         <TabsList aria-label="Watchlist sections">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="changes">Changes</TabsTrigger>
@@ -231,47 +236,60 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         </TabsList>
 
         <TabsContent value="overview" className="flex flex-col gap-4">
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Tracking goal</p>
-            <p className="text-sm">{config.goal || 'No goal set for this revision.'}</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {productCount} products · {sourceCount} sources ·{' '}
-              {revisionLabel(revision)} · {revision?.approval_status}
-            </p>
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <p className="ci-section-title">Tracking goal</p>
+              <div className="ci-chip-row">
+                <span className="ci-chip ci-chip--quiet">{productCount} products</span>
+                <span className="ci-chip ci-chip--quiet">{sourceCount} sources</span>
+              </div>
+            </div>
+            <p className="ci-row-copy">{config.goal || 'No goal set for this revision.'}</p>
+            <div className="ci-chip-row">
+              <span className="ci-chip">{revisionLabel(revision)}</span>
+              <ApprovalBadge status={revision?.approval_status} />
+            </div>
           </Card>
 
-          <Card className="flex flex-wrap items-center gap-2 p-4">
-            <Button type="button" onClick={handleRunNow} disabled={action === 'run' || Boolean(activeRun)}>
-              {action === 'run'
-                ? <Spinner data-icon="inline-start" aria-hidden="true" />
-                : <Play data-icon="inline-start" />}
-              {action === 'run' ? 'Starting…' : activeRun ? 'Run in progress…' : 'Run now'}
-            </Button>
-            {activeRun && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleCancelRun(activeRun.run_id)}
-                disabled={action === `cancel-${activeRun.run_id}`}
-              >
-                {action === `cancel-${activeRun.run_id}` && <Spinner data-icon="inline-start" aria-hidden="true" />}
-                Cancel run
-              </Button>
-            )}
-            <span className="text-sm text-muted-foreground">
-              Runs the current tracked sources and prepares a brief.
-            </span>
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <div>
+                <p className="ci-section-title">Run the current revision</p>
+                <p className="ci-section-caption">Runs the current tracked sources and prepares a brief.</p>
+              </div>
+              <div className="ci-heading-actions">
+                <Button type="button" onClick={handleRunNow} disabled={action === 'run' || Boolean(activeRun)}>
+                  {action === 'run'
+                    ? <Spinner data-icon="inline-start" aria-hidden="true" />
+                    : <Play data-icon="inline-start" />}
+                  {action === 'run' ? 'Starting…' : activeRun ? 'Run in progress…' : 'Run now'}
+                </Button>
+                {activeRun && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleCancelRun(activeRun.run_id)}
+                    disabled={action === `cancel-${activeRun.run_id}`}
+                  >
+                    {action === `cancel-${activeRun.run_id}` && <Spinner data-icon="inline-start" aria-hidden="true" />}
+                    Cancel run
+                  </Button>
+                )}
+              </div>
+            </div>
           </Card>
 
-          <Card className="p-4">
-            <div className="mb-2 flex items-center gap-2">
-              <p className="text-sm font-medium">Latest brief</p>
-              {latestBrief && <OutcomeBadge outcome={latestBrief.outcome} />}
-              {latestBrief && <QualityBadge quality={latestBrief.quality} />}
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <p className="ci-section-title">Latest brief</p>
+              <div className="ci-chip-row">
+                {latestBrief && <OutcomeBadge outcome={latestBrief.outcome} />}
+                {latestBrief && <QualityBadge quality={latestBrief.quality} />}
+              </div>
             </div>
             {latestBrief ? (
               <div className="flex flex-col gap-2">
-                <p className="text-sm">{latestBrief.summary}</p>
+                <p className="ci-row-copy">{latestBrief.summary}</p>
                 <div>
                   <Button type="button" variant="outline" onClick={() => handleOpenBrief(latestBrief)}>
                     Open brief
@@ -279,27 +297,31 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">
+              <p className="ci-empty empty-state-fade">
                 No brief yet. A brief is prepared automatically when a run completes.
               </p>
             )}
           </Card>
 
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Recent runs</p>
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <p className="ci-section-title">Recent runs</p>
+              <span className="ci-chip ci-chip--quiet">{runs.length} total</span>
+            </div>
             {runs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No runs yet.</p>
+              <p className="ci-empty empty-state-fade">No runs yet.</p>
             ) : (
-              <ul className="flex flex-col gap-2">
+              <ul className="ci-list">
                 {runs.slice(0, 5).map((run) => (
-                  <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="tnum">{runLabel(run)}</span>
+                  <li key={run.run_id} className="ci-row-card flex flex-wrap items-center gap-2">
+                    <span className="tnum text-sm">{runLabel(run)}</span>
                     <StatusBadge status={run.status} />
                     <span className="flex-1" />
                     {ACTIVE_RUN_STATUSES.has(run.status) && (
                       <Button
                         type="button"
                         variant="ghost"
+                        size="sm"
                         onClick={() => handleCancelRun(run.run_id)}
                         disabled={action === `cancel-${run.run_id}`}
                       >
@@ -315,7 +337,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         </TabsContent>
 
         <TabsContent value="changes">
-          <Card className="p-4">
+          <Card className="ci-section p-4">
             {selectedChangeId ? (
               <ChangeDetail changeId={selectedChangeId} onBack={() => setSelectedChangeId(null)} />
             ) : (
@@ -325,30 +347,32 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         </TabsContent>
 
         <TabsContent value="briefs">
-          <Card className="p-4">
+          <Card className="ci-section p-4">
             {selectedBrief ? (
               <div className="flex flex-col gap-2">
-                <Button type="button" variant="ghost" onClick={() => setSelectedBrief(null)}>
-                  Back to list
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedBrief(null)}>
+                  <ArrowLeft data-icon="inline-start" />Back to list
                 </Button>
                 <BriefView brief={selectedBrief} />
               </div>
             ) : briefs.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="ci-empty empty-state-fade">
                 No briefs yet. A brief is prepared automatically when a run completes.
               </p>
             ) : (
-              <ul className="flex flex-col gap-2">
+              <ul className="ci-list">
                 {briefs.map((brief) => (
-                  <li key={brief.id}>
+                  <li key={brief.id} className="ci-row-card">
                     <button
                       type="button"
-                      className="flex w-full items-center gap-2 text-left text-sm"
+                      className="ci-row-button"
                       onClick={() => handleOpenBrief(brief)}
                     >
-                      <OutcomeBadge outcome={brief.outcome} />
-                      <QualityBadge quality={brief.quality} />
-                      <span className="tnum text-muted-foreground">{dateLabel(brief.created_at)}</span>
+                      <span className="ci-chip-row">
+                        <OutcomeBadge outcome={brief.outcome} />
+                        <QualityBadge quality={brief.quality} />
+                      </span>
+                      <span className="tnum text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
                     </button>
                   </li>
                 ))}
@@ -358,36 +382,40 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
         </TabsContent>
 
         <TabsContent value="settings" className="flex flex-col gap-4">
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Current revision</p>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span>{revisionLabel(revision)}</span>
-              <ApprovalBadge status={revision?.approval_status} />
-              <span className="flex-1" />
-              {!approved && revision?.config?.workflow_version_id && (
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <p className="ci-section-title">Current revision</p>
+              <div className="ci-chip-row">
+                <span className="ci-chip">{revisionLabel(revision)}</span>
+                <ApprovalBadge status={revision?.approval_status} />
+              </div>
+            </div>
+            {!approved && revision?.config?.workflow_version_id && (
+              <div className="ci-heading-actions">
                 <Button type="button" variant="outline" onClick={handleApprove} disabled={action === 'approve'}>
                   {action === 'approve' && <Spinner data-icon="inline-start" aria-hidden="true" />}
                   {action === 'approve' ? 'Approving…' : 'Approve current revision'}
                 </Button>
-              )}
-            </div>
+              </div>
+            )}
           </Card>
 
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Source fetches without a brief</p>
+          <Card className="ci-section p-4">
+            <p className="ci-section-title">Source fetches without a brief</p>
             {runs.filter((run) => run.status === 'completed' && !briefs.some((brief) => brief.run_id === run.run_id)).length === 0 ? (
-              <p className="text-sm text-muted-foreground">Every completed run has a brief.</p>
+              <p className="ci-empty empty-state-fade">Every completed run has a brief.</p>
             ) : (
-              <ul className="flex flex-col gap-2">
+              <ul className="ci-list">
                 {runs
                   .filter((run) => run.status === 'completed' && !briefs.some((brief) => brief.run_id === run.run_id))
                   .map((run) => (
-                    <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                      <span className="tnum">{runLabel(run)}</span>
+                    <li key={run.run_id} className="ci-row-card flex flex-wrap items-center gap-2">
+                      <span className="tnum text-sm">{runLabel(run)}</span>
                       <span className="flex-1" />
                       <Button
                         type="button"
                         variant="outline"
+                        size="sm"
                         onClick={() => handleBuildBrief(run)}
                         disabled={action === `brief-${run.run_id}`}
                       >
@@ -400,25 +428,25 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
             )}
           </Card>
 
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Revision history</p>
-            <ul className="flex flex-col gap-1 text-sm">
+          <Card className="ci-section p-4">
+            <p className="ci-section-title">Revision history</p>
+            <ul className="ci-list">
               {revisions.map((item) => (
-                <li key={item.id} className="flex items-center gap-2">
-                  <span>{revisionLabel(item)}</span>
+                <li key={item.id} className="ci-row-card flex flex-wrap items-center gap-2">
+                  <span className="text-sm">{revisionLabel(item)}</span>
                   <ApprovalBadge status={item.approval_status} />
                 </li>
               ))}
             </ul>
           </Card>
 
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Schedules</p>
+          <Card className="ci-section p-4">
+            <p className="ci-section-title">Schedules</p>
             <ScheduleSection watchlistId={watchlistId} />
           </Card>
 
-          <Card className="p-4">
-            <p className="mb-2 text-sm font-medium">Timeline and history Q&A</p>
+          <Card className="ci-section p-4">
+            <p className="ci-section-title">Timeline and history Q&amp;A</p>
             <TimelineAndAsk watchlistId={watchlistId} />
           </Card>
         </TabsContent>
