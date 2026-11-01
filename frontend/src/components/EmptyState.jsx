@@ -33,10 +33,12 @@ export default function EmptyState({ state }) {
   const config = STATES[state] || STATES.unavailable;
   const Icon = config.icon;
   return (
-    <Card className="empty-state-fade flex flex-col items-center gap-2 p-6 text-center" data-testid={`empty-state-${state}`}>
-      <Icon aria-hidden="true" />
-      <p className="font-medium">{config.title}</p>
-      <p className="text-sm text-muted-foreground">{config.body}</p>
+    <Card className="empty-state-fade empty-state" data-testid={`empty-state-${state}`}>
+      <span className="empty-state__icon">
+        <Icon aria-hidden="true" />
+      </span>
+      <p className="empty-state__title">{config.title}</p>
+      <p className="empty-state__description">{config.body}</p>
     </Card>
   );
 }

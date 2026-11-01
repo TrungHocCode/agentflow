@@ -177,8 +177,9 @@ export default function ChatStudio({
                     disabled={isRestoring}
                     onClick={() => setInputPrompt(suggestion)}
                   >
-                    <span>{suggestion}</span>
-                    <ArrowRight aria-hidden="true" />
+                    <span className="prompt-suggestion__icon" aria-hidden="true"><Sparkles /></span>
+                    <span className="prompt-suggestion__text">{suggestion}</span>
+                    <ArrowUpRight className="prompt-suggestion__arrow" aria-hidden="true" />
                   </Button>
                 ))}
               </div>
@@ -228,7 +229,7 @@ export default function ChatStudio({
                             ) : message.isGenerating ? (
                               <Marker role="status" className="chat-status-row">
                                 <MarkerIcon><Spinner /></MarkerIcon>
-                                <MarkerContent>Preparing a response…</MarkerContent>
+                                <MarkerContent className="streaming-shimmer">Preparing a response…</MarkerContent>
                               </Marker>
                             ) : null}
                             {isError && (
@@ -258,7 +259,7 @@ export default function ChatStudio({
           {isProcessing && !isStreaming && !hasStreamingAssistantMessage && (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
-              <MarkerContent>
+              <MarkerContent className="streaming-shimmer">
                 {isRestoring ? 'Restoring workflow' : 'Analyzing request'} · {liveThinkingSeconds}s
               </MarkerContent>
               {activeTurnId && (
@@ -275,7 +276,7 @@ export default function ChatStudio({
           {isStreaming && !runStatus && (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
-              <MarkerContent>Running research steps · {liveThinkingSeconds}s</MarkerContent>
+              <MarkerContent className="streaming-shimmer">Running research steps · {liveThinkingSeconds}s</MarkerContent>
             </Marker>
           )}
 
