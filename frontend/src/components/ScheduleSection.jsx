@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { createSchedule, listSchedules, updateSchedule } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Spinner } from './ui/spinner';
+import ConfirmationBanner from './ConfirmationBanner';
+import ErrorNotice from './ErrorNotice';
+import LoadingState from './LoadingState';
 
 const TIMEZONES = ['UTC', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Europe/London', 'America/New_York'];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -18,6 +20,8 @@ export default function ScheduleSection({ watchlistId }) {
   const [runAt, setRunAt] = useState('08:00');
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState('');
+  const [notice, setNotice] = useState('');
 
   async function load() {
     setLoading(true);
@@ -48,6 +52,7 @@ export default function ScheduleSection({ watchlistId }) {
         day_of_week: cadence === 'weekly' ? Number(dayOfWeek) : null
       });
       await load();
+      setNotice('Schedule added.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -56,23 +61,28 @@ export default function ScheduleSection({ watchlistId }) {
   }
 
   async function handleToggle(schedule) {
+    setTogglingId(schedule.id);
     setError('');
     try {
       await updateSchedule(watchlistId, schedule.id, { active: !schedule.active });
       await load();
+      setNotice('Schedule updated.');
     } catch (err) {
       setError(err.message);
+    } finally {
+      setTogglingId('');
     }
   }
 
-  if (loading) return <Spinner aria-label="Loading schedules" />;
+  if (loading) return <LoadingState label="Loading schedules" />;
 
   return (
     <div className="flex flex-col gap-3">
       {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <ErrorNotice message={error} onRetry={load} onDismiss={() => setError('')} />
+      )}
+      {notice && (
+        <ConfirmationBanner message={notice} onDismiss={() => setNotice('')} />
       )}
       {schedules.length > 0 && (
         <ul className="flex flex-col gap-1 text-sm">
@@ -82,10 +92,16 @@ export default function ScheduleSection({ watchlistId }) {
                 {schedule.cadence} {schedule.day_of_week !== null && schedule.cadence === 'weekly'
                   ? `on ${WEEKDAYS[schedule.day_of_week]} ` : ''}at {schedule.run_at} ({schedule.timezone})
               </span>
-              <span className="text-muted-foreground">
+              <span className="tnum text-muted-foreground">
                 {schedule.active ? `next due ${schedule.next_due_at}` : 'disabled'}
               </span>
-              <Button type="button" variant="ghost" onClick={() => handleToggle(schedule)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => handleToggle(schedule)}
+                disabled={togglingId === schedule.id}
+              >
+                {togglingId === schedule.id && <Spinner data-icon="inline-start" aria-hidden="true" />}
                 {schedule.active ? 'Disable' : 'Enable'}
               </Button>
             </li>
@@ -124,6 +140,7 @@ export default function ScheduleSection({ watchlistId }) {
         )}
         <div className="col-span-2">
           <Button type="submit" disabled={saving}>
+            {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
             {saving ? 'Saving…' : 'Add schedule'}
           </Button>
         </div>

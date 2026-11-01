@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { getRuns } from '../services/api';
 import { listBriefs, listWatchlists } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { Spinner } from './ui/spinner';
 import BriefView from './BriefView';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 import { OutcomeBadge, QualityBadge, StatusBadge } from './OutcomeBadge';
 import { dateLabel, runLabel } from '../lib/labels';
 
@@ -16,6 +16,7 @@ export default function BriefsHistoryView({ onOpenRun }) {
   const [selectedBrief, setSelectedBrief] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,20 +47,30 @@ export default function BriefsHistoryView({ onOpenRun }) {
     }
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
-  if (loading) return <Spinner aria-label="Loading briefs and history" />;
+  if (loading) {
+    return (
+      <div className="page-frame">
+        <ListSkeleton label="Loading briefs and history" rows={3} />
+      </div>
+    );
+  }
   if (error) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <div className="page-frame">
+        <ErrorNotice
+          message={error}
+          onRetry={() => setReloadKey((key) => key + 1)}
+          onDismiss={() => setError('')}
+        />
+      </div>
     );
   }
 
   return (
     <div className="page-frame flex flex-col gap-4">
-      <h2 className="text-lg font-semibold">Briefs &amp; History</h2>
+      <h2 className="type-display">Briefs &amp; History</h2>
 
       <Card className="p-4">
         <p className="mb-2 text-sm font-medium">Briefs</p>
@@ -83,7 +94,7 @@ export default function BriefsHistoryView({ onOpenRun }) {
                 >
                   <OutcomeBadge outcome={brief.outcome} />
                   <QualityBadge quality={brief.quality} />
-                  <span className="text-muted-foreground">{dateLabel(brief.created_at)}</span>
+                  <span className="tnum text-muted-foreground">{dateLabel(brief.created_at)}</span>
                 </button>
               </li>
             ))}
@@ -99,7 +110,7 @@ export default function BriefsHistoryView({ onOpenRun }) {
           <ul className="flex flex-col gap-2">
             {runs.map((run) => (
               <li key={run.run_id} className="flex flex-wrap items-center gap-2 text-sm">
-                <span>{runLabel(run)}</span>
+                <span className="tnum">{runLabel(run)}</span>
                 <StatusBadge status={run.status} />
                 <span className="flex-1" />
                 {onOpenRun && (

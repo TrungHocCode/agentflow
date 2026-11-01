@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { listChanges, listWatchlists } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Card } from './ui/card';
-import { Spinner } from './ui/spinner';
 import ChangeDetail from './ChangeDetail';
 import EmptyState from './EmptyState';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 import { OutcomeBadge } from './OutcomeBadge';
 
 // App-level change feed across every watchlist the user owns.
@@ -13,6 +13,7 @@ export default function ChangesView() {
   const [selectedChangeId, setSelectedChangeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,14 +38,18 @@ export default function ChangesView() {
     }
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
-  if (loading) return <Spinner aria-label="Loading changes" />;
+  if (loading) return <div className="page-frame"><ListSkeleton label="Loading changes" rows={4} /></div>;
   if (error) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <div className="page-frame">
+        <ErrorNotice
+          message={error}
+          onRetry={() => setReloadKey((key) => key + 1)}
+          onDismiss={() => setError('')}
+        />
+      </div>
     );
   }
   if (selectedChangeId) {
@@ -56,7 +61,7 @@ export default function ChangesView() {
 
   return (
     <div className="page-frame flex flex-col gap-3">
-      <h2 className="text-lg font-semibold">Changes</h2>
+      <h2 className="type-display">Changes</h2>
       <ul className="flex flex-col gap-2">
         {items.map((change) => (
           <li key={change.id}>

@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 import { listChanges } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Card } from './ui/card';
-import { Spinner } from './ui/spinner';
 import EmptyState from './EmptyState';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 import { OutcomeBadge } from './OutcomeBadge';
 
 export default function ChangeFeed({ watchlistId, onSelect }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,14 +30,16 @@ export default function ChangeFeed({ watchlistId, onSelect }) {
     return () => {
       cancelled = true;
     };
-  }, [watchlistId]);
+  }, [watchlistId, reloadKey]);
 
-  if (loading) return <Spinner aria-label="Loading changes" />;
+  if (loading) return <ListSkeleton label="Loading changes" rows={3} />;
   if (error) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <ErrorNotice
+        message={error}
+        onRetry={() => setReloadKey((key) => key + 1)}
+        onDismiss={() => setError('')}
+      />
     );
   }
   if (items.length === 0) return <EmptyState state="no_change" />;

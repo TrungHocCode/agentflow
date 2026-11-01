@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Download } from 'lucide-react';
 import { downloadBrief, saveBlob } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
+import { Spinner } from './ui/spinner';
+import ErrorNotice from './ErrorNotice';
 import { OutcomeBadge, QualityBadge, VerificationBadge } from './OutcomeBadge';
 import { dateLabel, sourceLabel } from '../lib/labels';
 
@@ -29,16 +30,21 @@ export default function BriefView({ brief }) {
       <div className="flex flex-wrap items-center gap-2">
         <OutcomeBadge outcome={brief.outcome} />
         <QualityBadge quality={brief.quality} />
-        <span className="text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
+        <span className="tnum text-sm text-muted-foreground">{dateLabel(brief.created_at)}</span>
         <span className="flex-1" />
         <Button type="button" variant="outline" onClick={handleDownload} disabled={downloading}>
-          <Download data-icon="inline-start" /> {downloading ? 'Downloading…' : 'Download Markdown'}
+          {downloading
+            ? <Spinner data-icon="inline-start" aria-hidden="true" />
+            : <Download data-icon="inline-start" />}
+          {downloading ? 'Downloading…' : 'Download Markdown'}
         </Button>
       </div>
       {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <ErrorNotice
+          message={error}
+          onRetry={handleDownload}
+          onDismiss={() => setError('')}
+        />
       )}
       <Card className="p-4">
         <p className="mb-1 text-sm font-medium">Summary</p>

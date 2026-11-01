@@ -20,6 +20,27 @@ describe('NotificationBell', () => {
     fireEvent.click(screen.getByRole('button', { name: /notifications/i }));
     await waitFor(() => expect(screen.getByTestId('notification-list')).toBeInTheDocument());
   });
+
+  it('shows skeleton cards while notifications load', async () => {
+    let resolveFetch;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise((resolve) => {
+      resolveFetch = resolve;
+    })));
+
+    render(<NotificationBell />);
+    fireEvent.click(screen.getByRole('button', { name: /notifications/i }));
+
+    expect(screen.getByRole('status', { name: /loading notifications/i })).toBeInTheDocument();
+    expect(screen.getByTestId('list-skeleton')).toBeInTheDocument();
+
+    resolveFetch({
+      ok: true,
+      json: async () => ({ items: [], pagination: { limit: 20, offset: 0, total: 0 } })
+    });
+
+    await waitFor(() => expect(screen.queryByTestId('list-skeleton')).not.toBeInTheDocument());
+    expect(screen.getByText(/no notifications yet/i)).toBeInTheDocument();
+  });
 });
 
 describe('ScheduleSection', () => {

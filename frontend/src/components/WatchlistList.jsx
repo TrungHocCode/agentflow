@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { listWatchlists } from '../services/ciApi';
-import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { Spinner } from './ui/spinner';
+import ErrorNotice from './ErrorNotice';
+import ListSkeleton from './ListSkeleton';
 import { StatusBadge } from './OutcomeBadge';
 import { revisionLabel } from '../lib/labels';
 
@@ -12,6 +12,7 @@ export default function WatchlistList({ onSelect, onCreate }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,21 +32,23 @@ export default function WatchlistList({ onSelect, onCreate }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
-  if (loading) return <Spinner aria-label="Loading watchlists" />;
+  if (loading) return <ListSkeleton label="Loading watchlists" rows={4} />;
   if (error) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <ErrorNotice
+        message={error}
+        onRetry={() => setReloadKey((key) => key + 1)}
+        onDismiss={() => setError('')}
+      />
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Watchlists</h2>
+        <h2 className="type-display">Watchlists</h2>
         <Button type="button" onClick={onCreate}>
           <Plus data-icon="inline-start" /> New watchlist
         </Button>
@@ -65,8 +68,8 @@ export default function WatchlistList({ onSelect, onCreate }) {
                   onClick={() => onSelect(watchlist.id)}
                 >
                   <span>
-                    <span className="block font-medium">{watchlist.name}</span>
-                    <span className="block text-sm text-muted-foreground">
+                    <span className="type-display block">{watchlist.name}</span>
+                    <span className="type-caption tnum block">
                       {revisionLabel(watchlist.current_revision)} ·{' '}
                       {watchlist.current_revision?.approval_status}
                     </span>
