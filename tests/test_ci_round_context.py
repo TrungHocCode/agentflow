@@ -3,14 +3,18 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
+from app.core.config import settings
 from app.execution.agents.base import ROUND_EVIDENCE_MAX_CHARS, WorkerAgent, _round_context
+from app.execution.agents.resolver import AgentResolver
+from app.execution.context_budget import observation_allowance, project_tool_result, request_estimate
+from app.execution.tools.contracts import success_result
 from app.execution.state import Task
 from app.modules.competitive_intelligence.brief_contracts import BriefSourceCoverage, IntelligenceBrief
 from app.modules.competitive_intelligence.brief_render import render_markdown
@@ -20,6 +24,8 @@ from app.modules.competitive_intelligence.investigation_service import Investiga
 from app.modules.runs.models import RunDocument
 
 SOURCE_ID = uuid4()
+WATCHLIST_ID = uuid4()
+REVISION_ID = uuid4()
 CONFIG = {
     "products": [
         {"name": "NoteNest", "kind": "own", "description": "Notes for teams",
@@ -62,9 +68,57 @@ class TestRoundContext(unittest.TestCase):
         task = round_task(input_mapping={"evidence_excerpts": ["x" * (ROUND_EVIDENCE_MAX_CHARS * 2)]})
         self.assertLessEqual(_round_context(state(task), task).count("x"), ROUND_EVIDENCE_MAX_CHARS + 2)
 
+    def test_collecting_roles_never_see_private_product_context(self) -> None:
+        for role in ("source_researcher", "evidence_verifier"):
+            with self.subTest(role=role):
+                task = round_task(node=role)
+                context = _round_context(state(task), task)
+                self.assertIn("Before: $5", context)
+                self.assertNotIn("NoteNest", context)
+                self.assertNotIn("SMB", context)
+                self.assertNotIn("Affordability", context)
+
     def test_ordinary_tasks_get_nothing_extra(self) -> None:
         task = Task(id=1, node="source_researcher", status="running", description="Collect")
         self.assertEqual(_round_context(state(task), task), "")
+
+
+class TestRoundPromptFitsTheContextBudget(unittest.IsolatedAsyncioTestCase):
+    async def test_researcher_with_full_evidence_and_a_full_observation_fits(self) -> None:
+        """Reproduces a live failure: a round researcher exceeded the budget on its second call."""
+        task = round_task(node="source_researcher", agent_id="source_researcher", description="d" * 200,
+                          input_mapping={"evidence_excerpts": ["x" * (ROUND_EVIDENCE_MAX_CHARS * 2)]})
+        resolved = await AgentResolver().resolve(task)
+        agent = AgentResolver.create_agent(resolved=resolved, llm=MagicMock(spec=BaseChatModel), task=task)
+        call = {"id": "call", "name": "news_crawler", "args": {"url": "https://example.com/" + "p" * 80}}
+        messages = [
+            SystemMessage(content=agent.system_prompt + _round_context(state(task), task)),
+            AIMessage(content="", tool_calls=[call]),
+        ]
+        page = success_result({"body": "y" * 20000}, tool_name="news_crawler")
+        projected = project_tool_result(page, observation_allowance(messages, resolved.tools))
+        self.assertIn("projection_partial", projected)
+        messages.append(ToolMessage(content=f"<tool_output>\n{projected}\n</tool_output>", tool_call_id="call"))
+        budget = settings.LLM_CONTEXT_TOKENS - settings.LLM_OUTPUT_TOKENS - settings.LLM_CONTEXT_MARGIN_TOKENS
+        self.assertLessEqual(request_estimate(messages, resolved.tools), budget)
+
+
+class TestObservationAllowance(unittest.TestCase):
+    def test_short_conversations_keep_the_full_allowance(self) -> None:
+        self.assertEqual(observation_allowance([SystemMessage(content="short")], []), 5000)
+
+    def test_shrinks_with_used_context_and_is_shared_between_pending_calls(self) -> None:
+        prompt = SystemMessage(content="z" * 9000)
+        one = observation_allowance([prompt], [])
+        self.assertLess(one, 5000)
+        self.assertLess(observation_allowance([prompt], [], pending_observations=2), one)
+
+    def test_never_drops_below_a_usable_preview(self) -> None:
+        self.assertEqual(observation_allowance([SystemMessage(content="z" * 40000)], []), 600)
+
+    def test_small_results_stay_complete(self) -> None:
+        result = success_result({"body": "short"}, tool_name="news_crawler")
+        self.assertNotIn("projection_partial", project_tool_result(result, 600))
 
 
 class TestWorkerPromptIncludesRoundContext(unittest.IsolatedAsyncioTestCase):
@@ -78,6 +132,52 @@ class TestWorkerPromptIncludesRoundContext(unittest.IsolatedAsyncioTestCase):
         system_prompt = llm.ainvoke.await_args.args[0][0].content
         self.assertIn("Before: $5", system_prompt)
         self.assertIn("Affordability", system_prompt)
+
+
+class TestRoundTasksMustAnswer(unittest.IsolatedAsyncioTestCase):
+    async def test_last_turn_has_no_tools_so_the_task_finishes(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        def text_summarizer(text: str) -> str:
+            """Summarize."""
+            return text
+
+        with_tools = MagicMock()
+        call = {"id": "c1", "name": "text_summarizer", "args": {"text": "x"}, "type": "tool_call"}
+        with_tools.ainvoke = AsyncMock(return_value=AIMessage(content="", tool_calls=[call]))
+        llm = MagicMock(spec=BaseChatModel)
+        llm.bind_tools.return_value = with_tools
+        llm.ainvoke = AsyncMock(return_value=AIMessage(content="Observed: the price rose."))
+        agent = WorkerAgent(name="evidence_verifier", system_prompt="Verify.", llm=llm, tools=[text_summarizer])
+
+        output = await agent.execute(state(round_task(node="evidence_verifier", max_iterations=2)))
+
+        self.assertEqual(with_tools.ainvoke.await_count, 1)
+        self.assertEqual(llm.ainvoke.await_count, 1)
+        self.assertEqual(output["plan"][0].status, "done")
+        self.assertIn("the price rose", output["result_storage"][0]["result"])
+
+    async def test_other_tasks_keep_the_iteration_limit(self) -> None:
+        from langchain_core.tools import tool
+
+        @tool
+        def text_summarizer(text: str) -> str:
+            """Summarize."""
+            return text
+
+        with_tools = MagicMock()
+        call = {"id": "c1", "name": "text_summarizer", "args": {"text": "x"}, "type": "tool_call"}
+        with_tools.ainvoke = AsyncMock(return_value=AIMessage(content="", tool_calls=[call]))
+        llm = MagicMock(spec=BaseChatModel)
+        llm.bind_tools.return_value = with_tools
+        agent = WorkerAgent(name="worker", system_prompt="Do.", llm=llm, tools=[text_summarizer])
+        task = Task(id=1, node="worker", status="running", description="Do", max_iterations=2)
+
+        output = await agent.execute(state(task))
+
+        self.assertEqual(output["plan"][0].status, "failed")
+        self.assertIn("maximum tool execution iterations", output["plan"][0].error)
 
 
 class TestMaterializeTasks(unittest.IsolatedAsyncioTestCase):
@@ -100,6 +200,26 @@ class TestMaterializeTasks(unittest.IsolatedAsyncioTestCase):
         excerpt = tasks[0].input_mapping["evidence_excerpts"][0]
         self.assertIn("Before: $5", excerpt)
         self.assertIn("After: $7", excerpt)
+
+
+class TestBriefReportsUnfinishedRounds(unittest.IsolatedAsyncioTestCase):
+    async def test_unfinished_investigation_steps_become_limitations(self) -> None:
+        verifier = Task(id=3, node="evidence_verifier", status="failed", description="Verify",
+                        config={"investigation_round_id": "r1"}, error="Ran out of iterations.")
+        run = TestBriefUsesAnalysisAndNames.run_document(plan=[verifier], watchlist_id=str(WATCHLIST_ID),
+                                                         watchlist_revision_id=str(REVISION_ID))
+        runs, snapshots, briefs, blobs = AsyncMock(), AsyncMock(), AsyncMock(), MagicMock()
+        runs.get_run.return_value = run
+        snapshots.list_comparisons.return_value = []
+        snapshots.list_candidates.return_value = []
+        briefs.save_brief.side_effect = lambda brief, owner: brief
+        blobs.write.return_value = ("uri", "0" * 64)
+        await BriefService(briefs, snapshots, blobs, runs).build_brief(
+            WATCHLIST_ID, REVISION_ID, UUID(run.run_id), "owner", datetime.now(timezone.utc))
+
+        saved = briefs.save_brief.call_args.args[0]
+        self.assertEqual(saved.limitations,
+                         ["Investigation step by evidence verifier did not finish: Ran out of iterations."])
 
 
 class TestBriefUsesAnalysisAndNames(unittest.TestCase):

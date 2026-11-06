@@ -16,7 +16,9 @@ from app.execution.model_router import model_name_for
 from app.execution.llm import classify_model_failure
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
-from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
+from app.execution.context_budget import (
+    ContextBudgetExceeded, guard_context, observation_allowance, project_tool_result,
+)
 from app.execution.research_evidence import EvidenceProcessor, EvidenceStore
 from app.execution.research_contracts import EvidenceAnalysis, ResearchResult
 from app.execution.research_reduction import EvidenceReducer
@@ -33,8 +35,10 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
 logger = logging.getLogger(__name__)
 
 
-ROUND_EVIDENCE_MAX_CHARS = 3000
+ROUND_EVIDENCE_MAX_CHARS = 1800
 ROUND_COMPARISON_MAX_CHARS = 1500
+# Private product context stays away from roles that collect from the web.
+ROUND_COMPARISON_ROLES = frozenset({"competitive_analyst", "product_analyst"})
 
 
 def _run_input_context(state: State) -> str:
@@ -90,6 +94,8 @@ def _round_context(state: State, task: Task) -> str:
         sections.append(f"Observed evidence for this task:\n<tool_output>\n{evidence}\n</tool_output>")
     input_data = (state.get("metadata") or {}).get("input_data") or {}
     config = (input_data.get("competitive_intelligence") or {}).get("config") or {}
+    if task.node not in ROUND_COMPARISON_ROLES:
+        config = {}
     own_products = [
         {"name": product.get("name"), "description": product.get("description"),
          "target_segments": (product.get("profile") or {}).get("target_segments"),
@@ -454,8 +460,11 @@ class WorkerAgent(BaseAgent):
             iteration = 0
             tool_map = {tool.name: tool for tool in self.tools}
 
+            is_round_task = bool((current_task.config or {}).get("investigation_round_id"))
             while iteration < max_iterations:
                 iteration += 1
+                # A round task must produce an answer: on its last turn it cannot ask for more tools.
+                turn_llm = self.llm if is_round_task and iteration == max_iterations else llm_with_tools
                 if self.evidence_store is not None and metadata.get("run_id"):
                     await self.evidence_store.check_active(metadata["run_id"])
                 estimated_input = guard_context(messages, self.tools)
@@ -498,9 +507,9 @@ class WorkerAgent(BaseAgent):
                             },
                         )
                         response = (
-                            await bounded_invoke(llm_with_tools, messages, tools=self.tools, config=llm_config)
+                            await bounded_invoke(turn_llm, messages, tools=self.tools, config=llm_config)
                             if llm_config
-                            else await bounded_invoke(llm_with_tools, messages, tools=self.tools)
+                            else await bounded_invoke(turn_llm, messages, tools=self.tools)
                         )
                         llm_duration_ms = round(
                             (perf_counter() - llm_call_started) * 1000,
@@ -583,7 +592,7 @@ class WorkerAgent(BaseAgent):
 
                 if hasattr(response, "tool_calls") and response.tool_calls:
                     logs.append(f"[{self.name}] Tool calls requested: {len(response.tool_calls)}.")
-                    for tool_call in response.tool_calls:
+                    for call_index, tool_call in enumerate(response.tool_calls):
                         tool_name = tool_call["name"]
                         tool_args = tool_call["args"]
                         tool_id = tool_call["id"]
@@ -744,7 +753,9 @@ class WorkerAgent(BaseAgent):
                             observation = await processor.process_http(
                                 normalized_tool_result, _research_question(state, current_task),
                                 method=str(tool_args.get("method") or "GET"))
-                        wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
+                        allowance = observation_allowance(messages, self.tools,
+                                                          len(response.tool_calls) - call_index)
+                        wrapped_output = f"<tool_output>\n{project_tool_result(observation, allowance)}\n</tool_output>"
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
@@ -834,7 +845,7 @@ class WorkerAgent(BaseAgent):
                     "code": error_code,
                     "category": "dependency" if model_failure else "execution",
                     "retryable": not context_error and not isinstance(e, (RunBudgetExceeded, RunNoLongerActive)),
-                    "message": model_failure.message if model_failure else None,
+                    "message": error_msg if model_failure or context_error else None,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }

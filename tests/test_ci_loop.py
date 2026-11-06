@@ -182,6 +182,18 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         self.hooks.snapshots.capture.assert_awaited()
 
 
+class TestRoundTasksDoNotCapture(unittest.IsolatedAsyncioTestCase):
+    async def test_round_researcher_does_not_compare_a_source_again(self) -> None:
+        hooks = hooks_fixture()
+        hooks.research.list_results = AsyncMock()
+        task = researcher_task(2).model_copy(update={"config": {"investigation_round_id": "r1"}})
+
+        self.assertEqual(await hooks.on_task_completed(run_fixture(), task, "done"), [])
+
+        hooks.research.list_results.assert_not_awaited()
+        hooks.snapshots.capture.assert_not_awaited()
+
+
 class TestRoundsReachTheAnalyst(unittest.TestCase):
     """The real coordinator, fed what the hook builds: changes must reach the analyst and end coverage."""
 

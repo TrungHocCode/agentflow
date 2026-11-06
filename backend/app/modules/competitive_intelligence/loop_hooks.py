@@ -71,8 +71,7 @@ class CILoopHooks:
                    changed: list[ChangeCandidate]) -> list[InvestigationQuestion]:
         """Criteria are shared across products, so every observed change bears on every criterion.
 
-        This link is what brings the analyst into a round and lets coverage complete; without
-        it a run keeps planning rounds until its budget runs out.
+        This link is what brings the analyst into a round and lets coverage complete.
         """
         config = WatchlistConfig.model_validate(scope["config"])
         candidate_ids = [candidate.id for candidate in changed][:50]
@@ -128,6 +127,10 @@ class CILoopHooks:
         """Capture researcher fetches, compare, record, and append one accepted round at most."""
         scope = self.ci_scope(run)
         if scope is None:
+            return []
+        # A run holds one comparison per source, made from its initial collection. Round
+        # researchers confirm that change; capturing again would conflict with it.
+        if (task.config or {}).get("investigation_round_id"):
             return []
         if await self._task_role(task) != COLLECTION_ROLE:
             return []

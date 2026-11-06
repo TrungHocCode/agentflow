@@ -72,8 +72,8 @@ def plan_round(run_id: UUID, watchlist_id: UUID, revision_id: UUID, round_number
         researcher_keys = [task.task_key for task in tasks
                            if task.role == "source_researcher" and str(task.source_ids[0]) == source_id]
         tasks.append(RoundTask(task_key=analyst_key, role="competitive_analyst",
-            description=f"Compare the confirmed source observations for {source_id} with the own-product "
-                        f"profile and the recorded customer segments and comparison criteria.",
+            description="Compare the observed change with the own-product profile, customer segments and "
+                        "comparison criteria provided, and say what it means for the own product.",
             tool_names=list(CI_ROLE_TOOLS["competitive_analyst"]), source_ids=[UUID(source_id)],
             question_ids=sorted(set(question_ids)), candidate_ids=sorted(set(analyst_candidates[source_id])),
             depends_on_keys=researcher_keys, max_iterations=4,

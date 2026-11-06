@@ -117,6 +117,13 @@ class BriefService:
         limitations = [f"Source {labels.get(str(comparison.source_id), comparison.source_id)} {comparison.outcome}: "
                        f"{', '.join(comparison.reason_codes) or 'no detail'}."
                        for comparison in comparisons if comparison.outcome in ("unavailable", "rebaseline_required")]
+        limitations.extend(
+            f"Investigation step by {str(task.node).replace('_', ' ')} did not finish: "
+            f"{task.error or task.status}"[:500]
+            for task in run.plan or []
+            if (task.config or {}).get("investigation_round_id")
+            and task.status in ("failed", "interrupted", "skipped"))
+        limitations = limitations[:16]
         changed_sources = sorted({labels.get(str(c.source_id), str(c.source_id))
                                   for c in comparisons if c.outcome == "changed"})
         summary = (f"Run compared {len(comparisons)} source(s): "
