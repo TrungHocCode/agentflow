@@ -4,7 +4,7 @@ import WatchlistDetail from './WatchlistDetail';
 import WatchlistList from './WatchlistList';
 import WatchlistSetup from './WatchlistSetup';
 
-export default function Intelligence() {
+export default function Intelligence({ onOpenRun }) {
   const [view, setView] = useState({ name: 'list', watchlistId: null });
   const [notice, setNotice] = useState('');
 
@@ -33,6 +33,7 @@ export default function Intelligence() {
       <WatchlistDetail
         watchlistId={view.watchlistId}
         onBack={() => setView({ name: 'list', watchlistId: null })}
+        onOpenRun={onOpenRun}
       />
       </div>
     );

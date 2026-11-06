@@ -874,6 +874,13 @@ export default function App() {
     }
   };
 
+  // A finished run's own record is authoritative; the live plan belongs to the current chat.
+  const finishedRun = TERMINAL_RUN_STATUSES.has(currentRun?.status) ? currentRun : null;
+  const openRun = (run) => {
+    setCurrentRun(run);
+    setActiveTab('runs');
+  };
+
   const handleCancelRun = async () => {
     const runToCancel = conversationRun && ACTIVE_RUN_STATUSES.has(conversationRun.status)
       ? conversationRun
@@ -1037,10 +1044,7 @@ export default function App() {
 
           {activeTab === 'briefs' && (
             <BriefsHistoryView
-              onOpenRun={(run) => {
-                setCurrentRun(run);
-                setActiveTab('runs');
-              }}
+              onOpenRun={openRun}
             />
           )}
 
@@ -1051,8 +1055,8 @@ export default function App() {
           {activeTab === 'runs' && (
             <ExecutionTracker
               currentRun={currentRun}
-              results={executionResults}
-              plan={activePlan}
+              results={finishedRun?.result_storage?.length ? finishedRun.result_storage : executionResults}
+              plan={finishedRun?.plan?.length ? finishedRun.plan : activePlan}
               isStreaming={isStreaming}
               executionDuration={executionDuration}
               onCancelRun={handleCancelRun}
@@ -1064,7 +1068,7 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'watchlists' && <Intelligence />}
+          {activeTab === 'watchlists' && <Intelligence onOpenRun={openRun} />}
         </main>
       </div>
       <ConfirmDialog

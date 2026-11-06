@@ -39,11 +39,28 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-        self.assertIn("chưa thể tạo phản hồi hợp lệ", result["messages"][0].lower())
+        self.assertIn("ollama could not be reached", result["messages"][0].lower())
         self.assertTrue(result["metadata"]["planning_failed"])
-        self.assertEqual(result["metadata"]["planning_error_code"], "supervisor_planning_failed")
+        self.assertEqual(result["metadata"]["planning_error_code"], "model_unreachable")
+        self.assertEqual(result["metadata"]["planning_error_category"], "dependency")
+        self.assertEqual(result["metadata"]["planning_user_message"], result["messages"][0])
         self.assertTrue(result["metadata"]["planning_error_id"])
         self.assertEqual(result["plan"], {"__replace__": True, "tasks": []})
+
+    async def test_supervisor_failure_unrelated_to_the_model_stays_generic(self) -> None:
+        with patch("app.execution.llm.get_llm", side_effect=ValueError("bad schema")):
+            result = await supervisor_node(
+                {
+                    "messages": ["Research vector databases"],
+                    "plan": [],
+                    "mode": "conversation",
+                    "metadata": {"use_llm": True},
+                }
+            )
+
+        self.assertIn("valid response", result["messages"][0])
+        self.assertEqual(result["metadata"]["planning_error_code"], "supervisor_planning_failed")
+        self.assertIsNone(result["metadata"]["planning_user_message"])
 
     async def test_worker_timeout_returns_failed_task(self) -> None:
         task = Task(

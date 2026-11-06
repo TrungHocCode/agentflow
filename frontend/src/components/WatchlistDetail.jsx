@@ -6,6 +6,7 @@ import {
   archiveWatchlist,
   buildBrief,
   createCollectionWorkflow,
+  getModelHealth,
   getWatchlist,
   listBriefs,
   listRevisions,
@@ -32,7 +33,7 @@ import { dateLabel, revisionLabel, runLabel } from '../lib/labels';
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'pending']);
 
-export default function WatchlistDetail({ watchlistId, onBack }) {
+export default function WatchlistDetail({ watchlistId, onBack, onOpenRun }) {
   const [watchlist, setWatchlist] = useState(null);
   const [revisions, setRevisions] = useState([]);
   const [runs, setRuns] = useState([]);
@@ -111,6 +112,13 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
     setAction('run');
     setError('');
     try {
+      // Stop before approving when the model is known to be down; if the check itself
+      // cannot answer, proceed and let the run report what happened.
+      const model = await getModelHealth().catch(() => null);
+      if (model && model.status !== 'ok') {
+        setError(model.message || 'The local model is unavailable.');
+        return;
+      }
       // Editing the watchlist to attach a workflow version creates a new revision,
       // so always re-read the current revision before approving or starting.
       let current = await getWatchlist(watchlistId);
@@ -348,6 +356,14 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
                     <span className="tnum text-sm">{runLabel(run)}</span>
                     <StatusBadge status={run.status} />
                     <span className="flex-1" />
+                    {onOpenRun && !ACTIVE_RUN_STATUSES.has(run.status) && (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => onOpenRun(run)}>
+                        View
+                      </Button>
+                    )}
+                    {run.error_message && (
+                      <p className="ci-row-meta w-full">{run.error_message}</p>
+                    )}
                     {ACTIVE_RUN_STATUSES.has(run.status) && (
                       <Button
                         type="button"

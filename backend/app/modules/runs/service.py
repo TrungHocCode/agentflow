@@ -946,9 +946,8 @@ class RunService:
                 previous_error = run_doc.metadata.get("last_error") or {}
                 run_doc.error_code = previous_error.get("code", "task_execution_failed")
                 failure_id = previous_error.get("error_id") or str(uuid.uuid4())
-                run_doc.error_message = (
-                    f"One or more workflow tasks failed. Reference: {failure_id}."
-                )
+                failure_summary = previous_error.get("message") or "One or more workflow tasks failed."
+                run_doc.error_message = f"{failure_summary} Reference: {failure_id}."
                 run_doc.metadata["last_error"] = {
                     **previous_error,
                     "error_id": failure_id,
