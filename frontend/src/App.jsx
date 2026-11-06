@@ -1046,7 +1046,19 @@ export default function App() {
     window.location.reload();
   };
 
-  const handleDeleteListItem = async (id) => {
+  // Deleting is permanent, so a list row asks first, like the header's delete button.
+  const handleDeleteListItem = (id) => {
+    setConfirmDialog({
+      title: 'Delete conversation',
+      description: 'Permanently delete this conversation and its messages?',
+      confirmLabel: 'Delete',
+      tone: 'destructive',
+      onConfirm: () => performDeleteListItem(id)
+    });
+  };
+
+  const performDeleteListItem = async (id) => {
+    setConfirmDialog(null);
     try {
       await deleteConversation(id);
     } catch (error) {
