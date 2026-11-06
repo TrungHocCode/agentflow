@@ -102,6 +102,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
   const [criteria, setCriteria] = useState([{ field: 'price', objective: 'Track public pricing changes', importance: 'high' }]);
   const [products, setProducts] = useState([]);
   const [warnings, setWarnings] = useState([]);
+  const [sourceNotice, setSourceNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [createdId, setCreatedId] = useState(null);
   const [error, setError] = useState('');
@@ -140,7 +141,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
       const recommendation = await discoverCompetitors(prompt);
       const competitors = (recommendation.products || []).map((item) =>
         withTrackedSources(
-          { ...item, kind: item.kind || 'competitor', tracked: true },
+          { ...item, kind: item.kind || 'competitor', tracked: item.suggested === true },
           dimensions.length ? dimensions : ['pricing']
         )
       );
@@ -166,6 +167,12 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
       const dimension = dimensions[0] || 'pricing';
       const requested = new Set(pickedDomains);
       const sourcesByDomain = await discoverSources([...requested], dimension);
+      const missing = pickedProducts
+        .filter((item) => item.official_website && !sourcesByDomain[item.official_website.trim()]?.length)
+        .map((item) => item.name.trim());
+      setSourceNotice(missing.length
+        ? `No ${dimensionLabel(dimension)} pages were found for ${missing.join(', ')}. Paste the URLs below if you know them.`
+        : '');
       setProducts((current) =>
         current.map((item) => {
           const found = item.official_website && requested.has(item.official_website)
@@ -435,7 +442,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             {(discovered || warnings.length > 0) && (
               <Alert className="wizard-unverified">
                 <AlertDescription>
-                  Unverified draft — review every entry before creating. {warnings.join(' ')}
+                  Unverified draft — tick what you want to track. Only products you named are ticked for you. {warnings.join(' ')}
                 </AlertDescription>
               </Alert>
             )}
@@ -555,6 +562,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
                 Searches only the picked competitor domains for the selected dimension ({dimensions[0] || 'pricing'}).
               </p>
             </div>
+            {sourceNotice && <p className="wizard-field__hint" role="status">{sourceNotice}</p>}
 
             {pickedProducts.length === 0 ? (
               <div className="wizard-empty empty-state-fade">

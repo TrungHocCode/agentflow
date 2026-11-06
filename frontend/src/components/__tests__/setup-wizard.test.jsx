@@ -11,7 +11,8 @@ const COMPETITORS = {
       official_website: 'https://todoist.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'web_search'
+      provenance: 'web_search',
+      suggested: true
     },
     {
       name: 'ClickUp',
@@ -20,7 +21,8 @@ const COMPETITORS = {
       official_website: 'https://clickup.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'model_knowledge'
+      provenance: 'model_knowledge',
+      suggested: true
     }
   ],
   suggested_goal: '',
@@ -138,6 +140,35 @@ describe('setup wizard story', () => {
     fireEvent.click(nextButton());
 
     expect(screen.getByLabelText('Watchlist name')).toHaveValue('Todoist Renamed watch');
+  });
+
+  it('only pre-ticks products the user named', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      ...COMPETITORS,
+      products: [COMPETITORS.products[0], { ...COMPETITORS.products[1], suggested: false }]
+    })));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+
+    await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeChecked());
+    expect(screen.getByLabelText('Track ClickUp')).not.toBeChecked();
+  });
+
+  it('says which picked products had no source pages', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
+      ? { 'https://todoist.com/': SOURCES['https://todoist.com/'], 'https://clickup.com/': [] }
+      : COMPETITORS)));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByDisplayValue('Todoist')).toBeInTheDocument());
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
+
+    expect(await screen.findByText(/no pricing pages were found for clickup/i)).toBeInTheDocument();
   });
 
   it('creates the watchlist with the existing payload shape', async () => {

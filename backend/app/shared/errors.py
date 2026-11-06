@@ -72,6 +72,15 @@ class RateLimitExceeded(ApplicationError):
     retryable = True
 
 
+class DependencyUnavailableError(ApplicationError):
+    """An external service the request relies on refused or failed; retrying later may work."""
+
+    code = "dependency_unavailable"
+    category = "dependency"
+    status_code = 503
+    retryable = True
+
+
 class PersistenceError(ApplicationError):
     """Raised when the application cannot read or write durable state."""
 

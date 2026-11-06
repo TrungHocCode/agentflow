@@ -11,7 +11,8 @@ const COMPETITORS = {
       official_website: 'https://todoist.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'web_search'
+      provenance: 'web_search',
+      suggested: true
     },
     {
       name: 'ClickUp',
@@ -20,7 +21,8 @@ const COMPETITORS = {
       official_website: 'https://clickup.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'web_search'
+      provenance: 'web_search',
+      suggested: true
     }
   ],
   suggested_goal: '',

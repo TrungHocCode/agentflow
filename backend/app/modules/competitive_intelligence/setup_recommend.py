@@ -32,6 +32,8 @@ class RecommendedProduct(Contract):
     sources: list[RecommendedSource] = Field(default_factory=list, max_length=20)
     rationale: str = Field(default="", max_length=500)
     provenance: RecommendationProvenance = "model_knowledge"
+    # True when the user named this product, so the UI may pre-select it.
+    suggested: bool = False
 
 
 class SuggestedCriterion(Contract):

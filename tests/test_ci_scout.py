@@ -15,9 +15,9 @@ from app.api.dependencies import get_current_user_id, get_intelligence_service
 from app.core.config import settings
 from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
 from app.main import app
-from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
+from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery, _product_name
 from app.modules.competitive_intelligence.service import IntelligenceService
-from app.shared.errors import RateLimitExceeded
+from app.shared.errors import DependencyUnavailableError, RateLimitExceeded
 
 PROMPT = "I make TaskFlow, a team task manager. Track pricing of Todoist and ClickUp."
 
@@ -65,6 +65,42 @@ SOURCE_RESULTS = [
 ]
 
 
+NOTE_PROMPT = "I make NoteNest, a note-taking app for small teams. Track pricing of Notion and Obsidian."
+
+# Real results recorded from a trial search for NOTE_PROMPT.
+NOTE_RESULTS = [
+    {"url": "https://www.notion.com/pricing", "title": "Notion Pricing Plans: Free, Plus, Business, & Enterprise.",
+     "snippet": "Learn more about our different pricing plans."},
+    {"url": "https://notenest.com/pricing", "title": "NoteNest Pricing",
+     "snippet": "Discover affordable pricing plans for NoteNest."},
+    {"url": "https://startupcost.ai/notion-vs-obsidian", "title": "Notion vs Obsidian",
+     "snippet": "Side-by-side true cost comparison."},
+    {"url": "https://tryeyrie.com/blog/obsidian", "title": "The 9 best Obsidian alternatives in 2026 (honestly compared)",
+     "snippet": "Nine tools compared by price."},
+    {"url": "https://myflexnote.com/blog/notion", "title": "The 10 Best Notion Alternatives in 2026 (Tested and Ranked)",
+     "snippet": "Ranked by why people leave."},
+    {"url": "https://productivetemply.com/obsidian-vs-notion",
+     "title": "Obsidian vs Notion: Honest comparison in 2026 (I tried both)", "snippet": "Compared."},
+    {"url": "https://builder.io/blog/notion", "title": "The 12 Best Notion Alternatives in 2026",
+     "snippet": "Compare the 12 best."},
+    {"url": "https://obsidian.md/pricing", "title": "Obsidian", "snippet": "Commercial license details."},
+    {"url": "https://thedigitalprojectmanager.com/obsidian", "title": "10 Best Obsidian Alternatives for Note-Taking in 2026",
+     "snippet": "Top alternatives."},
+]
+
+
+def refused_batch(*_args):
+    """The batch tool's real shape when the provider answers HTTP 202 to every query."""
+    return json.dumps({"ok": False, "status": "empty", "error": {"code": "all_queries_failed"},
+                       "data": {"results": [], "queries": [{"query": "q", "status": "http_error", "results": [],
+                                                            "error": {"code": "unexpected_search_status"}}]}})
+
+
+def no_results_batch(*_args):
+    return json.dumps({"ok": False, "status": "empty", "error": {"code": "all_queries_failed"},
+                       "data": {"results": [], "queries": [{"query": "q", "status": "empty", "results": []}]}})
+
+
 class TestScoutProfile(unittest.TestCase):
     def test_scout_profile_is_search_only_and_not_a_round_role(self) -> None:
         from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
@@ -103,6 +139,51 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(websites[1], "https://clickup.com/")
         self.assertEqual(websites[-1], "https://unrelated.example/")
 
+    async def test_keeps_real_products_and_drops_comparison_articles(self) -> None:
+        scout = ScoutDiscovery(StubBatchTool(NOTE_RESULTS))
+        products = await scout.stage_a(NOTE_PROMPT)
+
+        self.assertEqual({product.official_website for product in products},
+                         {"https://notion.com/", "https://notenest.com/", "https://obsidian.md/"})
+        self.assertTrue(any("Skipped 6 comparison" in warning for warning in scout.warnings))
+
+    async def test_uses_the_named_product_and_recognizes_your_own(self) -> None:
+        products = await ScoutDiscovery(StubBatchTool(NOTE_RESULTS)).stage_a(NOTE_PROMPT)
+        by_site = {product.official_website: product for product in products}
+
+        self.assertEqual(by_site["https://notion.com/"].name, "Notion")
+        self.assertEqual(by_site["https://obsidian.md/"].name, "Obsidian")
+        self.assertEqual(by_site["https://notenest.com/"].kind, "own")
+        self.assertEqual(by_site["https://notion.com/"].kind, "competitor")
+        self.assertTrue(all(product.suggested for product in products))
+
+    async def test_searches_each_named_competitor_but_not_your_own_product(self) -> None:
+        tool = StubBatchTool(NOTE_RESULTS)
+        await ScoutDiscovery(tool).stage_a(NOTE_PROMPT)
+        self.assertEqual(tool.calls[0][0], ["Notion pricing page", "Obsidian pricing page"])
+
+    async def test_unnamed_candidates_are_not_suggested(self) -> None:
+        results = [{"url": "https://rival.example/", "title": "Rival - Team tasks", "snippet": "Tasks"}]
+        products = await ScoutDiscovery(StubBatchTool(results)).stage_a(PROMPT)
+        self.assertEqual(products[0].name, "Rival")
+        self.assertFalse(products[0].suggested)
+
+    def test_product_name_drops_page_words_and_taglines(self) -> None:
+        self.assertEqual(_product_name("Acme Pricing Plans: Free and Pro", "acme.com"), "Acme")
+        self.assertEqual(_product_name("Acme | Team chat", "acme.com"), "Acme")
+        self.assertEqual(_product_name("Pricing", "acme.com"), "Acme")
+
+    async def test_provider_refusal_is_an_error_not_an_empty_result(self) -> None:
+        with self.assertRaises(DependencyUnavailableError) as caught:
+            await ScoutDiscovery(refused_batch).stage_a(PROMPT)
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertEqual(caught.exception.code, "search_provider_unavailable")
+
+    async def test_search_that_found_nothing_is_not_a_provider_failure(self) -> None:
+        scout = ScoutDiscovery(no_results_batch)
+        self.assertEqual(await scout.stage_a(PROMPT), [])
+        self.assertTrue(any("No web search results" in warning for warning in scout.warnings))
+
     async def test_empty_results_return_no_candidates_and_a_warning(self) -> None:
         scout = ScoutDiscovery(StubBatchTool([]))
         products = await scout.stage_a(PROMPT)
@@ -123,6 +204,45 @@ class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(source.kind == "pricing" for source in found["todoist.com"]))
         self.assertTrue(all(source.provenance == "web_search" for source in found["todoist.com"]))
         self.assertTrue(any("Dropped syntactically invalid URL" in warning for warning in scout.warnings))
+
+
+class TestScoutRoundCharging(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def service(search):
+        limiter = AsyncMock()
+        return IntelligenceService(AsyncMock(), MagicMock(), scout=ScoutDiscovery(search), rate_limiter=limiter), limiter
+
+    async def test_successful_round_keeps_its_charge(self) -> None:
+        service, limiter = self.service(StubBatchTool(COMPETITOR_RESULTS))
+        await service.discover_competitors(PROMPT, "owner")
+        limiter.consume.assert_awaited_once()
+        limiter.release.assert_not_awaited()
+
+    async def test_refused_search_is_free_and_still_reports_the_failure(self) -> None:
+        service, limiter = self.service(refused_batch)
+        with self.assertRaises(DependencyUnavailableError):
+            await service.discover_sources(["todoist.com"], "pricing", "owner")
+        limiter.release.assert_awaited_once_with("ci-scout", "owner")
+
+    async def test_empty_rounds_are_free_in_both_stages(self) -> None:
+        service, limiter = self.service(StubBatchTool([]))
+        await service.discover_competitors(PROMPT, "owner")
+        self.assertEqual(await service.discover_sources(["todoist.com"], "pricing", "owner"), {"todoist.com": []})
+        self.assertEqual(limiter.release.await_count, 2)
+
+    async def test_failed_refund_does_not_replace_the_result(self) -> None:
+        service, limiter = self.service(StubBatchTool([]))
+        limiter.release.side_effect = ConnectionError("redis down")
+        self.assertEqual((await service.discover_competitors(PROMPT, "owner")).products, [])
+
+    async def test_redis_release_decrements_the_same_key(self) -> None:
+        client = AsyncMock()
+        client.eval.return_value = 1
+        with patch("app.infrastructure.redis.rate_limiter.get_redis", AsyncMock(return_value=client)):
+            limiter = RedisRateLimiter()
+            await limiter.consume("ci-scout", "owner", 3, 86400)
+            await limiter.release("ci-scout", "owner")
+        self.assertEqual(client.eval.await_args_list[0].args[2], client.eval.await_args_list[1].args[2])
 
 
 class TestScoutRoundGuard(unittest.IsolatedAsyncioTestCase):
