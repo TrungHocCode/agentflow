@@ -223,7 +223,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://localhost:5173>, register or sign in, create a research workflow in chat, review and approve it, then follow the run in the execution view. Vite proxies `/api` requests to the backend at `http://localhost:8000`.
+Open <http://localhost:5173>, register or sign in, create a research workflow in chat, review and approve it, then follow the run in the execution view. Vite proxies `/api` requests to the backend at `http://localhost:8000`; if your API listens elsewhere, set `VITE_API_PROXY_TARGET` before `npm run dev`.
 
 Reports, charts, evidence storage, and downloads use `ARTIFACT_ROOT` (default: `workspace_data`, relative to the process working directory). Set the same absolute path for API and worker when starting them from different directories; both processes must have access to that location. Producers use unique staging paths (`reports/<run-scope>/<generation>/...`); `relative_path` is storage-root-relative. After owned artifact metadata is saved, staging files are released and downloads use the durable artifact copy.
 

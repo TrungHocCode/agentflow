@@ -82,9 +82,29 @@ describe('setup wizard story', () => {
     fireEvent.click(nextButton());
 
     expect(screen.getByTestId('wizard-step-4')).toHaveAttribute('data-state', 'active');
-    expect(screen.getByRole('button', { name: /create watchlist/i })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Watchlist name'), { target: { value: 'Rival watch' } });
+    expect(screen.getByLabelText('Watchlist name')).toHaveValue('Rival watch');
     expect(screen.getByRole('button', { name: /create watchlist/i })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Watchlist name'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: /create watchlist/i })).toBeDisabled();
+  });
+
+  it('never reuses the Next button node for the submit button', () => {
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /add competitor/i }));
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Rival' } });
+    fireEvent.click(nextButton());
+
+    // A real click commits React's update before the browser runs the button's default
+    // action. If this node became type="submit" during that gap, the form would submit and
+    // skip Review, so Next and Create must be distinct DOM nodes.
+    const next = nextButton();
+    fireEvent.click(next);
+
+    expect(screen.getByTestId('wizard-step-4')).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('button', { name: /create watchlist/i })).not.toBe(next);
+    expect(next).not.toBeInTheDocument();
   });
 
   it('lets the user tick competitors and only discovers their sources', async () => {
@@ -104,6 +124,20 @@ describe('setup wizard story', () => {
 
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.queryByDisplayValue('https://clickup.com/pricing')).not.toBeInTheDocument();
+  });
+
+  it('suggests the name from reviewed products rather than search titles', async () => {
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByDisplayValue('Todoist')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('Todoist'), { target: { value: 'Todoist Renamed' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(nextButton());
+
+    expect(screen.getByLabelText('Watchlist name')).toHaveValue('Todoist Renamed watch');
   });
 
   it('creates the watchlist with the existing payload shape', async () => {

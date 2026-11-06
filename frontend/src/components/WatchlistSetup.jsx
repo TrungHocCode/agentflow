@@ -147,7 +147,6 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
       setProducts((current) => [...current.filter((item) => item.kind === 'own'), ...competitors]);
       setWarnings(recommendation.warnings || []);
       setDiscovered(true);
-      setName((current) => current || `${competitors[0]?.name || 'Competitive'} watch`);
       setGoal((current) => current || recommendation.suggested_goal || prompt);
     } catch (err) {
       setError(err.message);
@@ -226,6 +225,11 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
 
   function goNext() {
     if (!canAdvance || step >= STEPS.length) return;
+    if (step === STEPS.length - 1 && !name.trim()) {
+      // Suggest from the products the user reviewed, never from a raw search-result title.
+      const anchor = pickedProducts.find((item) => item.kind === 'own') || pickedProducts[0];
+      if (anchor) setName(`${anchor.name.trim()} watch`);
+    }
     setStep((current) => current + 1);
   }
 
@@ -795,11 +799,13 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             <span />
           )}
           {step < STEPS.length ? (
-            <Button type="button" onClick={goNext} disabled={!canAdvance}>
+            // Distinct keys keep these as separate DOM nodes; reusing one would turn the clicked
+            // Next into type="submit" before the browser runs its default action.
+            <Button key="next" type="button" onClick={goNext} disabled={!canAdvance}>
               Next<ArrowRight data-icon="inline-end" />
             </Button>
           ) : (
-            <Button type="submit" disabled={!canCreate || saving}>
+            <Button key="create" type="submit" disabled={!canCreate || saving}>
               {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
               {saving ? 'Creating…' : 'Create watchlist'}
             </Button>
