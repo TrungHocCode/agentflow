@@ -34,8 +34,31 @@ class BriefService:
         themselves (that would be circular). Verification recomputes it from the
         stored record with the same exclusion.
         """
-        payload = brief.model_dump(mode="json", exclude={"artifact_uri", "artifact_hash"})
+        # source_label is display-only; excluding it keeps earlier briefs verifiable.
+        payload = brief.model_dump(mode="json", exclude={
+            "artifact_uri": True, "artifact_hash": True, "source_coverage": {"__all__": {"source_label"}}})
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+    @staticmethod
+    def _source_labels(run) -> dict[str, str]:
+        """Name sources from the configuration frozen for this run."""
+        scope = (run.input_data or {}).get("competitive_intelligence")
+        config = scope.get("config") if isinstance(scope, dict) else None
+        return {str(source["id"]): f"{product.get('name')} ({str(source.get('kind')).replace('_', ' ')})"[:300]
+                for product in (config or {}).get("products") or []
+                for source in product.get("sources") or [] if source.get("id")}
+
+    @staticmethod
+    def _analyst_findings(run) -> list[BriefFinding]:
+        """Carry analyst interpretations, labelled unresolved because no quotation backs them."""
+        analysts = {task.id for task in run.plan or []
+                    if task.node == "competitive_analyst" and task.status in ("done", "partial")}
+        return [BriefFinding(id=uuid4(), text=f"Analysis: {result['result'].strip()}"[:1000],
+                             verification="unresolved",
+                             rationale="Model interpretation of the observed change, not verified against the page.")
+                for result in run.result_storage or []
+                if result.get("task_id") in analysts and isinstance(result.get("result"), str)
+                and result["result"].strip()]
 
     @staticmethod
     def derive_outcome(outcomes: list[str]) -> tuple[str, str]:
@@ -69,7 +92,9 @@ class BriefService:
         comparisons = await self.snapshots.list_comparisons(str(run_id), owner_id)
         candidates = await self.snapshots.list_candidates(str(run_id), owner_id)
         outcome, quality = self.derive_outcome([comparison.outcome for comparison in comparisons])
+        labels = self._source_labels(run)
         coverage = [BriefSourceCoverage(source_id=comparison.source_id,
+            source_label=labels.get(str(comparison.source_id), ""),
             baseline_snapshot_id=comparison.baseline_snapshot_id,
             current_snapshot_id=comparison.current_snapshot_id, outcome=comparison.outcome,
             quality="complete" if comparison.quality == "complete" else "insufficient",
@@ -87,12 +112,15 @@ class BriefService:
                               if offset is not None])
             for candidate in candidates
             if next((c.outcome == "changed" for c in comparisons if c.source_id == candidate.source_id), False)]
-        limitations = [f"Source {comparison.source_id} {comparison.outcome}: "
+        observed_count = len(findings)
+        findings = (findings + self._analyst_findings(run))[:50]
+        limitations = [f"Source {labels.get(str(comparison.source_id), comparison.source_id)} {comparison.outcome}: "
                        f"{', '.join(comparison.reason_codes) or 'no detail'}."
                        for comparison in comparisons if comparison.outcome in ("unavailable", "rebaseline_required")]
-        changed_sources = sorted({str(c.source_id) for c in comparisons if c.outcome == "changed"})
+        changed_sources = sorted({labels.get(str(c.source_id), str(c.source_id))
+                                  for c in comparisons if c.outcome == "changed"})
         summary = (f"Run compared {len(comparisons)} source(s): "
-                   f"{len(changed_sources)} changed, {len(findings)} finding(s). "
+                   f"{len(changed_sources)} changed, {observed_count} finding(s). "
                    f"Changed sources: {', '.join(changed_sources) or 'none'}.")[:8000]
         decided = [comparison.decided_at for comparison in comparisons] or [created_at]
         brief_id = uuid4()

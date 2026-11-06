@@ -36,6 +36,7 @@ class BriefFinding(Contract):
 
 class BriefSourceCoverage(Contract):
     source_id: UUID
+    source_label: str = Field(default="", max_length=300)
     baseline_snapshot_id: UUID | None = None
     current_snapshot_id: UUID | None = None
     outcome: str = Field(min_length=1, max_length=32)

@@ -33,6 +33,10 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
 logger = logging.getLogger(__name__)
 
 
+ROUND_EVIDENCE_MAX_CHARS = 3000
+ROUND_COMPARISON_MAX_CHARS = 1500
+
+
 def _run_input_context(state: State) -> str:
     """Render user-provided run input as explicit execution context."""
 
@@ -69,6 +73,37 @@ def _run_input_context(state: State) -> str:
     lines.append("Do not replace a provided URL with example.com or another invented URL.")
     lines.append("---------------------------------------\n")
     return "\n".join(lines)
+
+
+def _round_context(state: State, task: Task) -> str:
+    """Give an investigation round task the evidence and comparison context its scope refers to.
+
+    Excerpts come from collected pages, so they are wrapped as untrusted tool output. They are
+    capped because a request over the context budget fails the task instead of being trimmed.
+    """
+    if not (task.config or {}).get("investigation_round_id"):
+        return ""
+    sections: list[str] = []
+    excerpts = [str(text) for text in (task.input_mapping or {}).get("evidence_excerpts") or [] if text]
+    if excerpts:
+        evidence = "\n---\n".join(excerpts)[:ROUND_EVIDENCE_MAX_CHARS]
+        sections.append(f"Observed evidence for this task:\n<tool_output>\n{evidence}\n</tool_output>")
+    input_data = (state.get("metadata") or {}).get("input_data") or {}
+    config = (input_data.get("competitive_intelligence") or {}).get("config") or {}
+    own_products = [
+        {"name": product.get("name"), "description": product.get("description"),
+         "target_segments": (product.get("profile") or {}).get("target_segments"),
+         "facts": (product.get("profile") or {}).get("facts")}
+        for product in config.get("products") or [] if product.get("kind") == "own"
+    ]
+    criteria = [{"field": item.get("field"), "objective": item.get("objective")}
+                for item in config.get("comparison_criteria") or []]
+    if own_products or criteria:
+        comparison = json.dumps({"own_products": own_products, "comparison_criteria": criteria},
+                                ensure_ascii=False)[:ROUND_COMPARISON_MAX_CHARS]
+        sections.append(f"Comparison context from the approved watchlist:\n{comparison}")
+    return "\n".join(["", "--- Investigation Context ---", *sections, "-----------------------------", ""]) \
+        if sections else ""
 
 
 def _research_question(state: State, task: Task) -> str:
@@ -356,6 +391,7 @@ class WorkerAgent(BaseAgent):
             f"---------------------------------\n"
         )
         task_context += _run_input_context(state)
+        task_context += _round_context(state, current_task)
 
         # Build context from previous results
         results = state.get("result_storage") or []

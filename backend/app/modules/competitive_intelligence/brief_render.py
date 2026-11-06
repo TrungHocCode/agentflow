@@ -26,7 +26,7 @@ def render_markdown(brief: IntelligenceBrief) -> str:
                   "| Source | Outcome | Quality | Baseline | Current | Reasons |",
                   "| --- | --- | --- | --- | --- | --- |"])
     for entry in sorted(brief.source_coverage, key=lambda item: str(item.source_id)):
-        lines.append(f"| {entry.source_id} | {entry.outcome} | {entry.quality} | "
+        lines.append(f"| {entry.source_label or entry.source_id} | {entry.outcome} | {entry.quality} | "
                      f"{entry.baseline_snapshot_id or '-'} | {entry.current_snapshot_id or '-'} | "
                      f"{', '.join(entry.reason_codes) or '-'} |")
     lines.extend(["", "## Findings", ""])

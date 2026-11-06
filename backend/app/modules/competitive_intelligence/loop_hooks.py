@@ -25,10 +25,11 @@ class CILoopHooks:
     """Domain observer for CI runs; no-ops on runs without frozen CI scope."""
 
     def __init__(self, snapshots, investigations, briefs, research, artifacts,
-                 agent_profiles=None) -> None:
+                 agent_profiles=None, notifications=None) -> None:
         self.snapshots, self.investigations, self.briefs = snapshots, investigations, briefs
         self.research, self.artifacts = research, artifacts
         self.agent_profiles = agent_profiles
+        self.notifications = notifications
 
     async def _task_role(self, task: Task) -> str | None:
         """Resolve the task's agent role. Runtime tasks may carry a catalog UUID in
@@ -66,11 +67,18 @@ class CILoopHooks:
         return mapping
 
     @staticmethod
-    def _questions(scope: dict, watchlist_id: UUID) -> list[InvestigationQuestion]:
+    def _questions(scope: dict, watchlist_id: UUID,
+                   changed: list[ChangeCandidate]) -> list[InvestigationQuestion]:
+        """Criteria are shared across products, so every observed change bears on every criterion.
+
+        This link is what brings the analyst into a round and lets coverage complete; without
+        it a run keeps planning rounds until its budget runs out.
+        """
         config = WatchlistConfig.model_validate(scope["config"])
+        candidate_ids = [candidate.id for candidate in changed][:50]
         return [InvestigationQuestion(id=uuid5(NAMESPACE_URL, f"ci:question:{watchlist_id}:{criterion.field}"),
                                       text=f"{criterion.field}: {criterion.objective}",
-                                      dimension=criterion.field[:64])
+                                      dimension=criterion.field[:64], candidate_ids=candidate_ids)
                 for criterion in config.comparison_criteria]
 
     @staticmethod
@@ -154,7 +162,7 @@ class CILoopHooks:
         if not changed:
             return []
         budget = InvestigationBudget.model_validate(scope["config"]["budget"])
-        questions = self._questions(scope, UUID(scope["watchlist_id"]))
+        questions = self._questions(scope, UUID(scope["watchlist_id"]), changed)
         accepted = [round for round in await self.investigations.list_rounds(
             UUID(run.run_id), run.user_id) if round.status in ("accepted", "completed")]
         spent_calls, spent_tokens, spent_tasks = self._spent(run)
@@ -191,6 +199,15 @@ class CILoopHooks:
         if comparisons:
             await self.briefs.build_brief(UUID(scope["watchlist_id"]), UUID(scope["revision_id"]),
                                           UUID(run.run_id), run.user_id, datetime.now(timezone.utc))
+
+    async def on_run_failed(self, run) -> None:
+        """Tell the owner when a CI run did not finish; scheduled runs have no one watching."""
+        scope = self.ci_scope(run)
+        if scope is None or self.notifications is None:
+            return
+        await self.notifications.notify(run.user_id, "run_failed", "A watchlist run did not finish.",
+                                        (run.error_message or "Open the run for details.")[:1000],
+                                        scope.get("watchlist_id"), run.run_id)
 
     @staticmethod
     def _pinned(frozen: dict, source_id: UUID) -> UUID | None:

@@ -997,6 +997,8 @@ class RunService:
                 await self._notify_run_completed(run_doc)
                 run_doc.updated_at = datetime.now(timezone.utc)
                 await self.save_run_doc(run_doc)
+            else:
+                await self._notify_run_failed(run_doc)
             logger.info(
                 "Workflow run reached terminal state",
                 extra={
@@ -1105,6 +1107,7 @@ class RunService:
                     exc_info=(type(event_exc), event_exc, event_exc.__traceback__),
                     extra={"run_id": run_id, "error_id": error_id},
                 )
+            await self._notify_run_failed(run_doc)
         return run_doc
 
     async def _require_owned_run(self, run_id: str, user_id: str) -> RunDocument:
@@ -1415,6 +1418,19 @@ class RunService:
             except Exception as exc:
                 run_doc.logs.append(f"[observers] Run hook failed: {type(exc).__name__}.")
                 logger.error("Run completed observer failed",
+                             exc_info=(type(exc), exc, exc.__traceback__),
+                             extra={"run_id": run_doc.run_id})
+
+    async def _notify_run_failed(self, run_doc: RunDocument) -> None:
+        """Offer unfinished runs to observers that handle them; failures never change the outcome."""
+        for observer in self.run_observers:
+            handler = getattr(observer, "on_run_failed", None)
+            if handler is None:
+                continue
+            try:
+                await handler(run_doc)
+            except Exception as exc:
+                logger.error("Run failed observer failed",
                              exc_info=(type(exc), exc, exc.__traceback__),
                              extra={"run_id": run_doc.run_id})
 

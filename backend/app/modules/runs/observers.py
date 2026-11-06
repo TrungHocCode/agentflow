@@ -18,3 +18,9 @@ class RunCompletedObserver(Protocol):
     """Called once a run reaches completed; must never rewrite the terminal state."""
 
     async def on_run_completed(self, run: RunDocument) -> None: ...
+
+
+class RunFailedObserver(Protocol):
+    """Called once a run ends failed or interrupted; must never rewrite the terminal state."""
+
+    async def on_run_failed(self, run: RunDocument) -> None: ...
