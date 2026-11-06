@@ -11,6 +11,10 @@ from app.core.config import settings
 from app.execution.tools.contracts import ToolResult
 
 
+MAX_OBSERVATION_CHARS = 5000
+MIN_OBSERVATION_CHARS = 600
+
+
 class ContextBudgetExceeded(ValueError):
     """A request cannot fit without losing required inputs."""
 
@@ -65,7 +69,20 @@ def guard_structured_context(messages: list[BaseMessage], schema: dict) -> int:
     return guard_context(messages + [SystemMessage(content=json.dumps(schema, ensure_ascii=False))], [])
 
 
-def project_tool_result(result: ToolResult, max_chars: int = 5000) -> str:
+def observation_allowance(messages: list[BaseMessage], tools: list[BaseTool], pending_observations: int = 1,
+                          max_chars: int = MAX_OBSERVATION_CHARS) -> int:
+    """Characters one tool result may use so the next request still fits the context budget.
+
+    Without this a role with a long prompt fails on its second call, once a tool answers.
+    Assumes about 1.33 bytes per character, since the budget counts UTF-8 bytes.
+    """
+    budget = settings.LLM_CONTEXT_TOKENS - settings.LLM_OUTPUT_TOKENS - settings.LLM_CONTEXT_MARGIN_TOKENS
+    spare_tokens = budget - request_estimate(messages, tools) - 64 * pending_observations
+    allowance = spare_tokens * 3 // 2 // max(pending_observations, 1)
+    return max(MIN_OBSERVATION_CHARS, min(max_chars, allowance))
+
+
+def project_tool_result(result: ToolResult, max_chars: int = MAX_OBSERVATION_CHARS) -> str:
     """Return bounded JSON without cutting serialized JSON or duplicating search candidates."""
     payload: dict[str, Any] = {"ok": result.ok, "status": result.status}
     reference = (result.metadata.model_extra or {}).get("discovery_id")

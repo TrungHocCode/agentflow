@@ -11,9 +11,13 @@ from uuid import UUID, uuid4
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
 from app.execution.state import Task
+from app.modules.competitive_intelligence.investigation_coordinator import (
+    coverage_status, plan_round, should_terminate,
+)
 from app.modules.competitive_intelligence.loop_hooks import CILoopHooks
+from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
 from app.modules.competitive_intelligence.models import (
-    CreateWatchlist, WatchlistConfig, digest,
+    CreateWatchlist, InvestigationBudget, WatchlistConfig, digest,
 )
 from app.modules.runs.models import RunDocument
 from app.modules.runs.service import RunService
@@ -103,7 +107,7 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         self.hooks.snapshots.capture = AsyncMock(return_value=(MagicMock(), snapshot))
         comparison = MagicMock()
         comparison.outcome = "changed"
-        candidate = MagicMock()
+        candidate = MagicMock(id=uuid4())
         self.hooks.snapshots.compare_source = AsyncMock(return_value=(comparison, [candidate]))
         self.hooks.snapshots.finalize_source = AsyncMock(return_value=comparison)
         self.hooks.investigations.list_rounds = AsyncMock(return_value=[])
@@ -176,6 +180,81 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
         await self.hooks.on_task_completed(self.run, task, "done")
         provider.get_agent.assert_awaited_with(agent_uuid)
         self.hooks.snapshots.capture.assert_awaited()
+
+
+class TestRoundTasksDoNotCapture(unittest.IsolatedAsyncioTestCase):
+    async def test_round_researcher_does_not_compare_a_source_again(self) -> None:
+        hooks = hooks_fixture()
+        hooks.research.list_results = AsyncMock()
+        task = researcher_task(2).model_copy(update={"config": {"investigation_round_id": "r1"}})
+
+        self.assertEqual(await hooks.on_task_completed(run_fixture(), task, "done"), [])
+
+        hooks.research.list_results.assert_not_awaited()
+        hooks.snapshots.capture.assert_not_awaited()
+
+
+class TestRoundsReachTheAnalyst(unittest.TestCase):
+    """The real coordinator, fed what the hook builds: changes must reach the analyst and end coverage."""
+
+    @staticmethod
+    def candidate(source_id) -> ChangeCandidate:
+        now = datetime.now(timezone.utc)
+        return ChangeCandidate(id=uuid4(), run_id=uuid4(), source_id=source_id,
+                               before_snapshot_id=uuid4(), after_snapshot_id=uuid4(), kind="modified",
+                               section="Pricing", before_excerpt="$5", after_excerpt="$7",
+                               diff_algorithm_version="v1", diff_hash="a" * 64, detected_at=now)
+
+    def plan(self, scope, candidates):
+        questions = CILoopHooks._questions(scope, UUID(scope["watchlist_id"]), candidates)
+        return questions, plan_round(uuid4(), UUID(scope["watchlist_id"]), UUID(scope["revision_id"]), 1, None,
+                                     questions, candidates, CILoopHooks._round_scope(scope),
+                                     InvestigationBudget(), False, datetime.now(timezone.utc))
+
+    def test_changed_source_gets_an_analyst_after_its_researcher(self) -> None:
+        scope = frozen_fixture()
+        source_id = UUID(next(iter(scope["baselines"])))
+        _, planned = self.plan(scope, [self.candidate(source_id)])
+
+        roles = [task.role for task in planned.tasks]
+        self.assertEqual(roles, ["source_researcher", "evidence_verifier", "competitive_analyst"])
+        analyst = planned.tasks[-1]
+        self.assertEqual(analyst.depends_on_keys, [planned.tasks[0].task_key])
+        self.assertEqual(analyst.tool_names, ["text_summarizer"])
+        self.assertTrue(analyst.question_ids)
+        self.assertTrue(analyst.candidate_ids)
+
+    def test_accepted_round_completes_coverage_so_the_loop_stops(self) -> None:
+        scope = frozen_fixture()
+        source_id = UUID(next(iter(scope["baselines"])))
+        questions, planned = self.plan(scope, [self.candidate(source_id)])
+        self.assertFalse(should_terminate(1, coverage_status(questions, []), InvestigationBudget(), 0)[0])
+        finished, reason = should_terminate(2, coverage_status(questions, [planned]), InvestigationBudget(), 0)
+        self.assertTrue(finished)
+        self.assertEqual(reason, "coverage_complete")
+
+
+class TestRunFailedHook(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_ci_run_notifies_its_owner(self) -> None:
+        notifications = AsyncMock()
+        hooks = CILoopHooks(AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), MagicMock(),
+                            notifications=notifications)
+        run = run_fixture()
+        run.error_message = "The machine is out of memory."
+        await hooks.on_run_failed(run)
+
+        args = notifications.notify.await_args.args
+        self.assertEqual(args[0:2], ("owner", "run_failed"))
+        self.assertEqual(args[3], "The machine is out of memory.")
+        self.assertEqual(args[5], run.run_id)
+
+    async def test_other_runs_do_not_notify(self) -> None:
+        notifications = AsyncMock()
+        hooks = CILoopHooks(AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), MagicMock(),
+                            notifications=notifications)
+        plain = RunDocument(run_id=str(uuid4()), flow_id="flow", user_id="owner", status="failed", plan=[])
+        await hooks.on_run_failed(plain)
+        notifications.notify.assert_not_awaited()
 
 
 class TestRunHook(unittest.IsolatedAsyncioTestCase):

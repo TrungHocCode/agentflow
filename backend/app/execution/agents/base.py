@@ -16,7 +16,9 @@ from app.execution.model_router import model_name_for
 from app.execution.llm import classify_model_failure
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
-from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
+from app.execution.context_budget import (
+    ContextBudgetExceeded, guard_context, observation_allowance, project_tool_result,
+)
 from app.execution.research_evidence import EvidenceProcessor, EvidenceStore
 from app.execution.research_contracts import EvidenceAnalysis, ResearchResult
 from app.execution.research_reduction import EvidenceReducer
@@ -31,6 +33,13 @@ from app.shared.task_metrics import TaskExecutionMetric
 
 _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
 logger = logging.getLogger(__name__)
+
+
+_TOOL_OUTPUT_TAG = re.compile(r"<\s*/?\s*tool_output[^>]*>", re.IGNORECASE)
+ROUND_EVIDENCE_MAX_CHARS = 1800
+ROUND_COMPARISON_MAX_CHARS = 1500
+# Private product context stays away from roles that collect from the web.
+ROUND_COMPARISON_ROLES = frozenset({"competitive_analyst", "product_analyst"})
 
 
 def _run_input_context(state: State) -> str:
@@ -69,6 +78,58 @@ def _run_input_context(state: State) -> str:
     lines.append("Do not replace a provided URL with example.com or another invented URL.")
     lines.append("---------------------------------------\n")
     return "\n".join(lines)
+
+
+def fence_untrusted(text: str) -> str:
+    """Wrap external text as tool output, removing any tag that could close the fence early."""
+    return f"<tool_output>\n{_TOOL_OUTPUT_TAG.sub('[removed tag]', text)}\n</tool_output>"
+
+
+def _bounded_excerpts(excerpts: list[str]) -> str:
+    """Share the evidence budget between excerpts and say so when anything was cut."""
+    share = ROUND_EVIDENCE_MAX_CHARS // len(excerpts)
+    shown = "\n---\n".join(excerpt[:share] for excerpt in excerpts)
+    if any(len(excerpt) > share for excerpt in excerpts):
+        shown += "\n---\n[Excerpts shortened to fit; do not assume this is all of the evidence.]"
+    return shown
+
+
+def _comparison_context(config: Dict[str, Any]) -> str:
+    """Render criteria first and whole; drop product detail rather than cut JSON mid-value."""
+    criteria = [{"field": item.get("field"), "objective": item.get("objective")}
+                for item in config.get("comparison_criteria") or []]
+    own = [product for product in config.get("products") or [] if product.get("kind") == "own"]
+    detailed = [{"name": product.get("name"), "description": product.get("description"),
+                 "target_segments": (product.get("profile") or {}).get("target_segments"),
+                 "facts": (product.get("profile") or {}).get("facts")} for product in own]
+    brief = [{"name": product.get("name"), "target_segments": (product.get("profile") or {}).get("target_segments")}
+             for product in own]
+    for products in (detailed, brief, [{"name": product.get("name")} for product in own]):
+        rendered = json.dumps({"comparison_criteria": criteria, "own_products": products}, ensure_ascii=False)
+        if len(rendered) <= ROUND_COMPARISON_MAX_CHARS:
+            return rendered
+    return json.dumps({"comparison_criteria": [item.get("field") for item in criteria],
+                       "own_products": [product.get("name") for product in own]}, ensure_ascii=False)
+
+
+def _round_context(state: State, task: Task) -> str:
+    """Give an investigation round task the evidence and comparison context its scope refers to.
+
+    Excerpts come from collected pages, so they are wrapped as untrusted tool output. They are
+    capped because a request over the context budget fails the task instead of being trimmed.
+    """
+    if not (task.config or {}).get("investigation_round_id"):
+        return ""
+    sections: list[str] = []
+    excerpts = [str(text) for text in (task.input_mapping or {}).get("evidence_excerpts") or [] if text]
+    if excerpts:
+        sections.append(f"Observed evidence for this task:\n{fence_untrusted(_bounded_excerpts(excerpts))}")
+    input_data = (state.get("metadata") or {}).get("input_data") or {}
+    config = (input_data.get("competitive_intelligence") or {}).get("config") or {}
+    if task.node in ROUND_COMPARISON_ROLES and (config.get("products") or config.get("comparison_criteria")):
+        sections.append(f"Comparison context from the approved watchlist:\n{_comparison_context(config)}")
+    return "\n".join(["", "--- Investigation Context ---", *sections, "-----------------------------", ""]) \
+        if sections else ""
 
 
 def _research_question(state: State, task: Task) -> str:
@@ -356,6 +417,7 @@ class WorkerAgent(BaseAgent):
             f"---------------------------------\n"
         )
         task_context += _run_input_context(state)
+        task_context += _round_context(state, current_task)
 
         # Build context from previous results
         results = state.get("result_storage") or []
@@ -418,8 +480,11 @@ class WorkerAgent(BaseAgent):
             iteration = 0
             tool_map = {tool.name: tool for tool in self.tools}
 
+            is_round_task = bool((current_task.config or {}).get("investigation_round_id"))
             while iteration < max_iterations:
                 iteration += 1
+                # A round task must produce an answer: on its last turn it cannot ask for more tools.
+                turn_llm = self.llm if is_round_task and iteration == max_iterations else llm_with_tools
                 if self.evidence_store is not None and metadata.get("run_id"):
                     await self.evidence_store.check_active(metadata["run_id"])
                 estimated_input = guard_context(messages, self.tools)
@@ -462,9 +527,9 @@ class WorkerAgent(BaseAgent):
                             },
                         )
                         response = (
-                            await bounded_invoke(llm_with_tools, messages, tools=self.tools, config=llm_config)
+                            await bounded_invoke(turn_llm, messages, tools=self.tools, config=llm_config)
                             if llm_config
-                            else await bounded_invoke(llm_with_tools, messages, tools=self.tools)
+                            else await bounded_invoke(turn_llm, messages, tools=self.tools)
                         )
                         llm_duration_ms = round(
                             (perf_counter() - llm_call_started) * 1000,
@@ -547,7 +612,7 @@ class WorkerAgent(BaseAgent):
 
                 if hasattr(response, "tool_calls") and response.tool_calls:
                     logs.append(f"[{self.name}] Tool calls requested: {len(response.tool_calls)}.")
-                    for tool_call in response.tool_calls:
+                    for call_index, tool_call in enumerate(response.tool_calls):
                         tool_name = tool_call["name"]
                         tool_args = tool_call["args"]
                         tool_id = tool_call["id"]
@@ -708,7 +773,9 @@ class WorkerAgent(BaseAgent):
                             observation = await processor.process_http(
                                 normalized_tool_result, _research_question(state, current_task),
                                 method=str(tool_args.get("method") or "GET"))
-                        wrapped_output = f"<tool_output>\n{project_tool_result(observation)}\n</tool_output>"
+                        allowance = observation_allowance(messages, self.tools,
+                                                          len(response.tool_calls) - call_index)
+                        wrapped_output = fence_untrusted(project_tool_result(observation, allowance))
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
@@ -798,7 +865,7 @@ class WorkerAgent(BaseAgent):
                     "code": error_code,
                     "category": "dependency" if model_failure else "execution",
                     "retryable": not context_error and not isinstance(e, (RunBudgetExceeded, RunNoLongerActive)),
-                    "message": model_failure.message if model_failure else None,
+                    "message": error_msg if model_failure or context_error else None,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }

@@ -121,7 +121,7 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
             "own-product profile and recorded customer segments. Ground every "
             "comparison in cited snapshot evidence."
         ),
-        tool_names=["http_request", "text_summarizer"],
+        tool_names=["text_summarizer"],
     ),
 }
 

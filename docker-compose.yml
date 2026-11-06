@@ -16,6 +16,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://localhost:5173
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
       - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
       - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
@@ -55,6 +56,7 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
       - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
       - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}
@@ -88,6 +90,7 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
       - LLM_PLANNER_MODEL=${LLM_PLANNER_MODEL:-qwen3:8b}
       - LLM_WORKER_MODEL=${LLM_WORKER_MODEL:-qwen3:8b}

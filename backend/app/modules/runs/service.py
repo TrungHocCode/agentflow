@@ -52,6 +52,9 @@ from app.shared.observability import bind_context, current_context
 
 logger = logging.getLogger(__name__)
 
+# The first pass plus at most ten investigation rounds; a safety bound, not a budget.
+MAX_EXECUTION_PASSES = 12
+
 
 TERMINAL_RUN_STATUSES = {
     "completed",
@@ -895,8 +898,44 @@ class RunService:
             initial_state["execution_timings"] = []
         execution_started_at = time.perf_counter()
 
+        followups_added = False
+
+        async def execution_chunks() -> AsyncGenerator[Any, None]:
+            """Run the graph again for tasks observers add, since it cannot see them mid-stream."""
+            nonlocal followups_added
+            stream_input: State = initial_state
+            for execution_pass in range(MAX_EXECUTION_PASSES):
+                followups_added = False
+                try:
+                    async for chunk in bounded_stream(self.execution_port.execute_run(run_id, stream_input)):
+                        yield chunk
+                except RunNoLongerActive:
+                    raise
+                except Exception as exc:
+                    if execution_pass == 0:
+                        raise
+                    # The collection already finished; losing follow-up work must not discard it.
+                    logger.error("Follow-up execution stopped early",
+                                 exc_info=(type(exc), exc, exc.__traceback__), extra={"run_id": run_id})
+                    self._interrupt_round_tasks(run_doc, type(exc).__name__)
+                    return
+                pending = [task for task in run_doc.plan if task.status == "pending"]
+                if not followups_added or not pending:
+                    return
+                # The checkpointed thread keeps earlier results and messages, and its append
+                # reducers would duplicate them if resent. Metadata has no reducer and is replaced.
+                stream_input = {
+                    "plan": pending,
+                    "mode": "executing",
+                    "metadata": {
+                        **run_doc.metadata,
+                        "input_data": run_doc.input_data,
+                        "resolved_model_config": run_doc.resolved_model_config,
+                    },
+                }
+
         try:
-            async for chunk in bounded_stream(self.execution_port.execute_run(run_id, initial_state)):
+            async for chunk in execution_chunks():
                 latest = await self.get_run(run_id)
                 if latest and latest.status == "cancelled":
                     return latest
@@ -930,6 +969,7 @@ class RunService:
                             await self._record_event_object(event)
                         hook_events = await self._notify_task_completed(run_doc, node_output)
                         if hook_events:
+                            followups_added = True
                             run_doc.updated_at = datetime.now(timezone.utc)
                             await self.save_run_doc(run_doc)
                             for event in hook_events:
@@ -939,8 +979,17 @@ class RunService:
                 task.status in ("done", "partial", "failed", "skipped", "interrupted")
                 for task in run_doc.plan
             )
-            has_failed_task = any(task.status in ("failed", "interrupted") for task in run_doc.plan)
-            partial_task_ids = [task.id for task in run_doc.plan if task.status == "partial"]
+            has_failed_task = any(
+                task.status in ("failed", "interrupted") and not self._is_round_task(task)
+                for task in run_doc.plan
+            )
+            # Rounds enrich a finished collection. If one fails, the comparison and its baseline
+            # still stand, so the run completes and reports the gap instead of discarding them.
+            partial_task_ids = [
+                task.id for task in run_doc.plan
+                if task.status == "partial"
+                or (self._is_round_task(task) and task.status in ("failed", "interrupted", "skipped"))
+            ]
             if has_failed_task:
                 run_doc.status = "failed"
                 previous_error = run_doc.metadata.get("last_error") or {}
@@ -963,7 +1012,7 @@ class RunService:
                     run_doc.metadata["has_partial_results"] = True
                     existing_warnings = list(run_doc.metadata.get("execution_warnings") or [])
                     for task in run_doc.plan:
-                        if task.status != "partial":
+                        if task.id not in partial_task_ids:
                             continue
                         warning = task.error or f"Task {task.id} completed with incomplete source coverage."
                         if warning not in existing_warnings:
@@ -997,6 +1046,8 @@ class RunService:
                 await self._notify_run_completed(run_doc)
                 run_doc.updated_at = datetime.now(timezone.utc)
                 await self.save_run_doc(run_doc)
+            else:
+                await self._notify_run_failed(run_doc)
             logger.info(
                 "Workflow run reached terminal state",
                 extra={
@@ -1105,6 +1156,7 @@ class RunService:
                     exc_info=(type(event_exc), event_exc, event_exc.__traceback__),
                     extra={"run_id": run_id, "error_id": error_id},
                 )
+            await self._notify_run_failed(run_doc)
         return run_doc
 
     async def _require_owned_run(self, run_id: str, user_id: str) -> RunDocument:
@@ -1417,6 +1469,31 @@ class RunService:
                 logger.error("Run completed observer failed",
                              exc_info=(type(exc), exc, exc.__traceback__),
                              extra={"run_id": run_doc.run_id})
+
+    async def _notify_run_failed(self, run_doc: RunDocument) -> None:
+        """Offer unfinished runs to observers that handle them; failures never change the outcome."""
+        for observer in self.run_observers:
+            handler = getattr(observer, "on_run_failed", None)
+            if handler is None:
+                continue
+            try:
+                await handler(run_doc)
+            except Exception as exc:
+                logger.error("Run failed observer failed",
+                             exc_info=(type(exc), exc, exc.__traceback__),
+                             extra={"run_id": run_doc.run_id})
+
+    @classmethod
+    def _interrupt_round_tasks(cls, run_doc: RunDocument, reason: str) -> None:
+        run_doc.plan = [
+            task.model_copy(update={"status": "interrupted", "error": f"Stopped early ({reason})."})
+            if cls._is_round_task(task) and task.status in ("pending", "running") else task
+            for task in run_doc.plan
+        ]
+
+    @staticmethod
+    def _is_round_task(task: Task) -> bool:
+        return bool((task.config or {}).get("investigation_round_id"))
 
     @staticmethod
     def _finalize_execution_metrics(run_doc: RunDocument) -> None:

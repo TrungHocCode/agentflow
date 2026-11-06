@@ -44,7 +44,7 @@ class IntelligenceService:
         self.scout = scout if scout is not None else ScoutDiscovery()
         # Composition injects the shared limiter, which hashes the identifier into
         # "agentflow:rate:v1:ci-scout:<sha256(owner_id)>"; passing the owner as the
-        # identifier gives the required per-owner 3/86400 window without a new store.
+        # identifier gives the per-owner daily window without a new store.
         # A missing port means "no shared limiter configured" (unit/service wiring only);
         # production composition always supplies Redis via build_intelligence_service.
         self.rate_limiter = rate_limiter
@@ -126,7 +126,7 @@ class IntelligenceService:
     async def _scout_round(self, owner_id: str, search: Callable[[], Awaitable[Found]]) -> Found:
         """Charge one round only when it finds something; a failed or empty search stays free."""
         if self.rate_limiter is not None:
-            await self.rate_limiter.consume(SCOUT_SCOPE, owner_id, 3, 86400)
+            await self.rate_limiter.consume(SCOUT_SCOPE, owner_id, settings.CI_SCOUT_ROUNDS_PER_DAY, 86400)
         try:
             found = await search()
         except Exception:

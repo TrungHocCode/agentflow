@@ -45,15 +45,15 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
             <div className="brand-mark" aria-hidden="true"><Sparkles /></div>
             <div className="brand-name">AgentFlow</div>
           </div>
-          <p className="page-eyebrow">YOUR RESEARCH ASSISTANT</p>
-          <h1>Turn big questions into clear research.</h1>
+          <p className="page-eyebrow">COMPETITIVE INTELLIGENCE</p>
+          <h1>Know what your competitors changed.</h1>
           <p className="auth-story__description">
-            Organize source discovery, cross-checking and report writing in one workflow you can follow.
+            Track competitor pages, see what actually changed, and read a brief backed by evidence.
           </p>
           <div className="auth-story__steps" aria-label="Research workflow">
-            <span><i>01</i> Find relevant sources</span>
-            <span><i>02</i> Synthesize with structure</span>
-            <span><i>03</i> Get a usable report</span>
+            <span><i>01</i> Track the pages that matter</span>
+            <span><i>02</i> Detect real changes</span>
+            <span><i>03</i> Read a cited brief</span>
           </div>
         </section>
 
@@ -62,12 +62,12 @@ export default function AuthScreen({ onAuthenticated, initialMessage = '' }) {
             <div className="auth-mark" aria-hidden="true"><KeyRound /></div>
             <p className="page-eyebrow">PERSONAL WORKSPACE</p>
             <CardTitle className="auth-card__title">
-              {isRegistering ? 'Create account' : 'Welcome back'}
+              {isRegistering ? 'Create account' : 'Sign in'}
             </CardTitle>
             <CardDescription className="auth-copy">
               {isRegistering
-                ? 'Create an account to save your research and results.'
-                : 'Sign in to continue with your saved research and workflows.'}
+                ? 'Create an account to track competitors and keep your briefs.'
+                : 'Sign in to your watchlists and briefs.'}
             </CardDescription>
           </CardHeader>
 

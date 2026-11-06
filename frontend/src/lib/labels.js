@@ -18,8 +18,12 @@ export function runLabel(run) {
   return id ? `Run · ${when} · ${id}` : `Run · ${when}`;
 }
 
+export function countLabel(count, noun) {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
 export function sourceLabel(source) {
-  const name = source?.name || source?.title;
+  const name = source?.source_label || source?.name || source?.title;
   if (name) return name;
   const id = shortId(source?.source_id || source?.id);
   return id ? `Source ${id}` : 'Source';

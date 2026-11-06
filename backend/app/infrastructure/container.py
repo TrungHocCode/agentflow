@@ -166,7 +166,8 @@ def build_ci_loop_hooks(run_service: RunService) -> CILoopHooks:
     briefs = BriefService(PostgresBriefRepository(), snapshot_repository, BriefFileStore(), run_service)
     return CILoopHooks(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshot_repository),
                        briefs, PostgresResearchRepository(), LocalArtifactStorage(),
-                       agent_profiles=PostgresAgentProfileProvider())
+                       agent_profiles=PostgresAgentProfileProvider(),
+                       notifications=PostgresScheduleRepository())
 
 
 def build_research_result_service(session: AsyncSession | None = None) -> ResearchResultService:

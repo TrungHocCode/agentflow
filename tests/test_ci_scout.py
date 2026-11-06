@@ -258,6 +258,9 @@ class TestScoutRoundCharging(unittest.IsolatedAsyncioTestCase):
         limiter.release.side_effect = ConnectionError("redis down")
         self.assertEqual((await service.discover_competitors(PROMPT, "owner")).products, [])
 
+    def test_default_allowance_fits_several_wizard_passes(self) -> None:
+        self.assertGreaterEqual(settings.CI_SCOUT_ROUNDS_PER_DAY, 6)
+
     async def test_redis_release_decrements_the_same_key(self) -> None:
         client = AsyncMock()
         client.eval.return_value = 1
@@ -288,10 +291,11 @@ class TestScoutRoundGuard(unittest.IsolatedAsyncioTestCase):
                 rate_limiter=RedisRateLimiter(),
             )
             owner = str(uuid4())
-            for _ in range(3):
-                await service.discover_competitors(PROMPT, owner)
-            with self.assertRaises(RateLimitExceeded):
-                await service.discover_competitors(PROMPT, owner)
+            with patch.object(settings, "CI_SCOUT_ROUNDS_PER_DAY", 3):
+                for _ in range(3):
+                    await service.discover_competitors(PROMPT, owner)
+                with self.assertRaises(RateLimitExceeded):
+                    await service.discover_competitors(PROMPT, owner)
 
         self.assertEqual(len(client.keys), 4)
         self.assertEqual(len(set(client.keys)), 1)

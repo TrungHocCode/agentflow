@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bell } from 'lucide-react';
 import { listNotifications, markNotificationRead } from '../services/ciApi';
 import { Button } from './ui/button';
@@ -7,6 +7,7 @@ import ErrorNotice from './ErrorNotice';
 import ListSkeleton from './ListSkeleton';
 
 export default function NotificationBell() {
+  const containerRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -33,6 +34,23 @@ export default function NotificationBell() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Dismiss like any popover, so it cannot linger over the next page.
+  useEffect(() => {
+    if (!open) return undefined;
+    function closeOnOutsidePress(event) {
+      if (!containerRef.current?.contains(event.target)) setOpen(false);
+    }
+    function closeOnEscape(event) {
+      if (event.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePress);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePress);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
   async function handleRead(id) {
     try {
       await markNotificationRead(id);
@@ -44,7 +62,7 @@ export default function NotificationBell() {
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <Button type="button" variant="ghost" size="sm" onClick={() => setOpen((value) => !value)} aria-label="Notifications">
         <Bell data-icon="inline-start" />
         {unread > 0 && <span className="notification-count" data-testid="notification-count">{unread}</span>}

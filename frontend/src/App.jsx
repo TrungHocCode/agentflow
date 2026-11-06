@@ -154,6 +154,8 @@ export default function App() {
   const [executionDuration, setExecutionDuration] = useState(null);
   const [authMessage, setAuthMessage] = useState('');
   const conversationStreamRef = useRef(null);
+  const authUserRef = useRef(authUser);
+  authUserRef.current = authUser;
   const conversationRunIdRef = useRef(null);
   const runStreamRef = useRef(null);
   const runStartedAtRef = useRef(null);
@@ -569,8 +571,9 @@ export default function App() {
         runStreamRef.current();
         runStreamRef.current = null;
       }
+      // Only someone who was signed in has a session that could expire.
+      setAuthMessage(authUserRef.current ? 'Your session has expired. Please sign in again to continue.' : '');
       setAuthUser(null);
-      setAuthMessage('Your session has expired. Please sign in again to continue.');
       setConversationId(null);
       setConversationClosed(false);
       setCurrentRun(null);
@@ -601,7 +604,7 @@ export default function App() {
     setAuthUser(null);
   };
 
-  if (backendStatus && !authUser) {
+  if (!authUser) {
     return <AuthScreen onAuthenticated={handleAuthenticated} initialMessage={authMessage} />;
   }
 

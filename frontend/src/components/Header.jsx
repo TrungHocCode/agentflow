@@ -5,8 +5,8 @@ const SECTIONS = {
   watchlists: { crumb: 'Intelligence', title: 'Watchlists' },
   changes: { crumb: 'Intelligence', title: 'Changes' },
   briefs: { crumb: 'Intelligence', title: 'Briefs & History' },
-  studio: { crumb: 'Workspace', title: 'Research studio' },
-  runs: { crumb: 'Execution', title: 'Run history' },
+  studio: { crumb: 'Workspace', title: 'Assistant' },
+  runs: { crumb: 'Intelligence', title: 'Run details' },
   settings: { crumb: 'Workspace', title: 'Settings' }
 };
 

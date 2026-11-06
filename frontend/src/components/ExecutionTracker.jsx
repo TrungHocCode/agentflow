@@ -3,6 +3,7 @@ import { Activity, Clock3, Download, FileText, Timer, XCircle } from 'lucide-rea
 import ErrorNotice from './ErrorNotice';
 import StructuredText from './StructuredText';
 import TaskStatusBadge from './TaskStatusBadge';
+import { countLabel } from '../lib/labels';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -21,8 +22,18 @@ const STATUS_LABELS = {
   abandoned: 'Abandoned'
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function resultText(result) {
-  if (typeof result?.result === 'object') return JSON.stringify(result.result, null, 2);
+  const value = result?.result;
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.documents) && Array.isArray(value.claims)) {
+      const sources = value.documents.length;
+      const claims = value.claims.length;
+      return `Collected ${countLabel(sources, 'source')} and extracted ${countLabel(claims, 'evidence claim')}.`;
+    }
+    return JSON.stringify(value, null, 2);
+  }
   return String(result?.result ?? (typeof result === 'object' ? JSON.stringify(result, null, 2) : result));
 }
 
@@ -58,8 +69,8 @@ export default function ExecutionTracker({
     <section className="page-frame" aria-labelledby="runs-title">
       <div className="page-heading">
         <div className="page-heading__copy">
-          <p className="page-eyebrow">EXECUTION MONITOR</p>
-          <h1 id="runs-title" className="page-title">Workflow progress</h1>
+          <p className="page-eyebrow">RUN DETAILS</p>
+          <h1 id="runs-title" className="page-title">Run progress</h1>
           <p className="page-description">
             {currentRun ? STATUS_LABELS[currentRun.status] || 'Updating status' : 'No run selected yet.'}
           </p>
@@ -120,7 +131,9 @@ export default function ExecutionTracker({
                   </span>
                   <div className="run-task-card__content">
                     <p className="execution-task-description">{task?.description || `Step ${index + 1}`}</p>
-                    {task?.node && task.node !== 'worker' && <span className="run-task-agent">{task.node}</span>}
+                    {task?.node && task.node !== 'worker' && !UUID_PATTERN.test(task.node) && (
+                      <span className="run-task-agent">{task.node.replaceAll('_', ' ')}</span>
+                    )}
                   </div>
                   <TaskStatusBadge status={task?.status} />
                 </article>

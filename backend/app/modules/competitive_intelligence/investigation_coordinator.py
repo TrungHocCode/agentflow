@@ -56,6 +56,7 @@ def plan_round(run_id: UUID, watchlist_id: UUID, revision_id: UUID, round_number
                                                         candidate.detected_at.isoformat()))
     tasks: list[RoundTask] = []
     analyst_sources: dict[str, list[UUID]] = {}
+    analyst_candidates: dict[str, list[UUID]] = {}
     for candidate in ordered:
         if len(tasks) + 2 > MAX_ROUND_TASKS:
             break
@@ -63,6 +64,7 @@ def plan_round(run_id: UUID, watchlist_id: UUID, revision_id: UUID, round_number
         for question in questions:
             if candidate.id in question.candidate_ids:
                 analyst_sources.setdefault(str(candidate.source_id), []).append(question.id)
+                analyst_candidates.setdefault(str(candidate.source_id), []).append(candidate.id)
     for source_id, question_ids in sorted(analyst_sources.items()):
         if len(tasks) + 1 > MAX_ROUND_TASKS:
             break
@@ -70,10 +72,11 @@ def plan_round(run_id: UUID, watchlist_id: UUID, revision_id: UUID, round_number
         researcher_keys = [task.task_key for task in tasks
                            if task.role == "source_researcher" and str(task.source_ids[0]) == source_id]
         tasks.append(RoundTask(task_key=analyst_key, role="competitive_analyst",
-            description=f"Compare the confirmed source observations for {source_id} with the own-product "
-                        f"profile and the recorded customer segments and comparison criteria.",
+            description="Compare the observed change with the own-product profile, customer segments and "
+                        "comparison criteria provided, and say what it means for the own product.",
             tool_names=list(CI_ROLE_TOOLS["competitive_analyst"]), source_ids=[UUID(source_id)],
-            question_ids=sorted(set(question_ids)), depends_on_keys=researcher_keys, max_iterations=4,
+            question_ids=sorted(set(question_ids)), candidate_ids=sorted(set(analyst_candidates[source_id])),
+            depends_on_keys=researcher_keys, max_iterations=4,
             estimated_calls=4))
     if final:
         report_key = f"r{round_number}-report"
@@ -198,7 +201,7 @@ def to_runtime_tasks(round: InvestigationRound, start_id: int, evidence_excerpts
     keys = [task.task_key for task in round.tasks]
     for offset, task in enumerate(round.tasks):
         references = [evidence_excerpts.get(str(identity), "") for identity in
-                      [*task.snapshot_ids, *task.candidate_ids]]
+                      [*task.candidate_ids, *task.snapshot_ids]]
         runtime.append(Task(id=start_id + offset, task_key=task.task_key, node=task.role, agent_id=task.role,
             tool_names=list(task.tool_names), status="pending", description=task.description,
             dependencies=[start_id + keys.index(key) for key in task.depends_on_keys],

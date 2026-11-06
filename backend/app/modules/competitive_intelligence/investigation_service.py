@@ -63,8 +63,12 @@ class InvestigationService:
                                 default_timeout_seconds: int | None = None) -> list[Task]:
         """Resolve scoped snapshot excerpts (owner-checked) into runtime task inputs."""
         excerpts: dict[str, str] = {}
+        # A candidate's before/after text is the change itself, so it outranks whole snapshots.
+        for candidate in await self.snapshots.list_candidates(str(round.run_id), owner_id):
+            excerpts[str(candidate.id)] = (f"Change in section '{candidate.section or 'preamble'}' ({candidate.kind}).\n"
+                                           f"Before: {candidate.before_excerpt}\nAfter: {candidate.after_excerpt}")
         for task in round.tasks:
-            for identity in [*task.snapshot_ids, *task.candidate_ids]:
+            for identity in task.snapshot_ids:
                 key = str(identity)
                 if key not in excerpts:
                     try:
