@@ -220,6 +220,7 @@ class TestRoundsReachTheAnalyst(unittest.TestCase):
         self.assertEqual(roles, ["source_researcher", "evidence_verifier", "competitive_analyst"])
         analyst = planned.tasks[-1]
         self.assertEqual(analyst.depends_on_keys, [planned.tasks[0].task_key])
+        self.assertEqual(analyst.tool_names, ["text_summarizer"])
         self.assertTrue(analyst.question_ids)
         self.assertTrue(analyst.candidate_ids)
 

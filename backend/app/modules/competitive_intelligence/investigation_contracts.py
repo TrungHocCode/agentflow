@@ -19,7 +19,8 @@ CI_ROLE_TOOLS: dict[str, list[str]] = {
     "source_researcher": ["news_crawler", "news_crawler_batch", "http_request"],
     "product_analyst": ["http_request", "text_summarizer"],
     "evidence_verifier": ["text_summarizer"],
-    "competitive_analyst": ["http_request", "text_summarizer"],
+    # Works from the evidence in its prompt; a fetch could only fail against the approved scope.
+    "competitive_analyst": ["text_summarizer"],
     "report_agent": ["markdown_report_generator", "chart_generator"],
 }
 ROUND_VERSION = "ci-round-v1"
