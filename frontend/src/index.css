@@ -825,6 +825,19 @@ h1, h2, h3, h4 {
 /* Conversation studio: one calm, centered reading column. */
 .studio-page { display: flex; min-height: 0; flex: 1; flex-direction: column; align-items: center; gap: 1.1rem; overflow: hidden; padding: clamp(1.25rem, 2.4vw, 2rem); }
 .studio-heading { display: flex; width: min(900px, 100%); align-items: flex-end; justify-content: space-between; gap: 1rem; }
+.studio-heading .page-title { font-size: clamp(1.3rem, 1.8vw, 1.6rem); }
+.chat-history { width: min(900px, 100%); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); padding: 0.55rem 0.85rem; }
+.chat-history > summary { cursor: pointer; color: var(--muted-foreground); font-size: 0.8rem; font-weight: 600; }
+.chat-history__list { display: flex; max-height: 12rem; flex-direction: column; gap: 0.15rem; margin-top: 0.45rem; overflow-y: auto; }
+.chat-history__item { display: flex; align-items: center; gap: 0.35rem; border-radius: 0.6rem; }
+.chat-history__item:hover { background: var(--muted); }
+.chat-history__select { min-width: 0; flex: 1; overflow: hidden; border-radius: 0.6rem; padding: 0.4rem 0.55rem; color: var(--foreground); font-size: 0.8rem; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.chat-history__delete { display: inline-grid; width: 1.6rem; height: 1.6rem; flex: 0 0 auto; place-items: center; border-radius: 0.5rem; color: var(--muted-foreground); }
+.chat-history__delete:hover { color: var(--danger); }
+.chat-history__delete svg { width: 14px; height: 14px; }
+.chat-proposal { width: min(820px, 100%); align-self: center; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-secondary); padding: 0.6rem 0.9rem; }
+.chat-proposal > summary { cursor: pointer; font-size: 0.85rem; font-weight: 650; }
+.chat-proposal > summary + * { margin-top: 0.6rem; }
 .chat-workspace { display: flex; width: min(900px, 100%); min-height: 0; flex: 1; flex-direction: column; gap: 0; overflow: hidden; border-color: var(--border); border-radius: var(--radius-xl); padding: 0; box-shadow: var(--shadow-card); animation: panelIn 220ms ease-out both; }
 .chat-workspace__header { display: flex; min-height: 62px; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg-secondary) 55%, transparent); padding: 0.75rem 1.25rem; }
 .chat-workspace__identity { display: flex; min-width: 0; align-items: center; gap: 0.7rem; }

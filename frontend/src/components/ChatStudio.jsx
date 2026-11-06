@@ -10,9 +10,11 @@ import {
   GitMerge,
   MessageSquareText,
   Play,
+  Plus,
   Sparkles,
   Trash2,
   UserRound,
+  X,
   XCircle
 } from 'lucide-react';
 import StructuredText from './StructuredText';
@@ -68,6 +70,10 @@ export default function ChatStudio({
   onCancelRun,
   onCancelTurn,
   onDeleteConversation,
+  conversations = [],
+  onNewChat,
+  onSelectConversation,
+  onDeleteListItem,
   conversationId,
   isCancelling,
   isDeletingConversation,
@@ -117,9 +123,11 @@ export default function ChatStudio({
     <section className="studio-page" aria-labelledby="studio-title">
       <div className="studio-heading">
         <div className="page-heading__copy">
-          <p className="page-eyebrow">RESEARCH STUDIO</p>
-          <h1 id="studio-title" className="page-title">Start research from your question</h1>
-          <p className="page-description">Describe what you want to learn. AgentFlow will propose steps for you to review before running.</p>
+          <p className="page-eyebrow">CI ASSISTANT</p>
+          <h1 id="studio-title" className="page-title">Ask about your competitors</h1>
+          {messages.length === 0 && (
+            <p className="page-description">Ask what changed, why it matters to your products, or describe rivals to track. AgentFlow answers from approved sources with cited evidence.</p>
+          )}
         </div>
         {conversationId && (
           <Button
@@ -134,15 +142,55 @@ export default function ChatStudio({
             <span className="delete-conversation-label">{isDeletingConversation ? 'Deleting…' : 'Delete conversation'}</span>
           </Button>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onNewChat}
+          disabled={isRestoring || isProcessing}
+          title="Start a new chat"
+        >
+          <Plus data-icon="inline-start" />
+          <span>New chat</span>
+        </Button>
       </div>
+
+      {conversations.length > 0 && (
+        <details className="chat-history">
+          <summary>Recent chats ({conversations.length})</summary>
+          <ul className="chat-history__list">
+            {conversations.map((item) => (
+              <li key={item.id} className="chat-history__item">
+                <button
+                  type="button"
+                  className="chat-history__select"
+                  onClick={() => onSelectConversation(item.id)}
+                  title={item.title || item.id}
+                >
+                  {(item.title || item.id.slice(0, 8)) + (item.id === conversationId ? ' · current' : '')}
+                </button>
+                <button
+                  type="button"
+                  className="chat-history__delete"
+                  onClick={() => onDeleteListItem(item.id)}
+                  title={`Delete chat ${item.title || item.id}`}
+                  aria-label={`Delete chat ${item.title || item.id}`}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       <Card className="chat-workspace">
         <header className="chat-workspace__header">
           <div className="chat-workspace__identity">
             <div className="chat-assistant-mark" aria-hidden="true"><Sparkles /></div>
             <div>
-              <p className="chat-workspace__title">Research assistant</p>
-              <p className="chat-workspace__subtitle">Search · synthesize · report</p>
+              <p className="chat-workspace__title">CI assistant</p>
+              <p className="chat-workspace__subtitle">Track · compare · brief</p>
             </div>
           </div>
           {status && (
@@ -153,7 +201,7 @@ export default function ChatStudio({
           )}
         </header>
 
-        <div className="chat-thread" role="log" aria-label="Research conversation" aria-live="polite" aria-busy={isProcessing}>
+        <div className="chat-thread" role="log" aria-label="Competitor intelligence conversation" aria-live="polite" aria-busy={isProcessing}>
           {isRestoring && messages.length === 0 ? (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
@@ -199,7 +247,7 @@ export default function ChatStudio({
                       </MessageAvatar>
                       <MessageContent>
                         <MessageHeader className="chat-message__header">
-                          <span>{isUser ? 'You' : 'Research assistant'}</span>
+                          <span>{isUser ? 'You' : 'CI assistant'}</span>
                           {message.isGenerating && activeTurnId && (
                             <Button
                               type="button"
@@ -252,8 +300,11 @@ export default function ChatStudio({
             ))
           )}
 
-          {messages.some(message => message.sender === 'user') && !runStatus && (
-            <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
+          {messages.some(message => message.sender === 'user') && !runStatus && !activePlan?.length && (
+            <details className="chat-proposal" {...(messages.length <= 2 ? { open: true } : {})}>
+              <summary>Set up tracking from this chat</summary>
+              <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
+            </details>
           )}
 
           {isProcessing && !isStreaming && !hasStreamingAssistantMessage && (
@@ -276,7 +327,7 @@ export default function ChatStudio({
           {isStreaming && !runStatus && (
             <Marker role="status" className="chat-status-row">
               <MarkerIcon><Spinner /></MarkerIcon>
-              <MarkerContent className="streaming-shimmer">Running research steps · {liveThinkingSeconds}s</MarkerContent>
+              <MarkerContent className="streaming-shimmer">Working · {liveThinkingSeconds}s</MarkerContent>
             </Marker>
           )}
 
@@ -354,8 +405,8 @@ export default function ChatStudio({
               value={inputPrompt}
               onChange={event => setInputPrompt(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="What would you like to research or synthesize?"
-              aria-label="Research request"
+              placeholder="Ask about a competitor change, or describe products to track…"
+              aria-label="Competitor intelligence request"
               disabled={isProcessing || isRestoring}
               rows={2}
             />
