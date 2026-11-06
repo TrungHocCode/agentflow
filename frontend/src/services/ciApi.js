@@ -19,14 +19,15 @@ function formatCiError(statusCode, body, fallback) {
     const error = payload?.error;
     if (error && typeof error === 'object') {
       message = error.message || error.detail || message;
-      if (error.error_id) message = `${message} (reference: ${error.error_id})`;
+      // A reference only helps with server faults; a rejected request explains itself.
+      if (error.error_id && statusCode >= 500) message = `${message} (reference: ${error.error_id})`;
     } else if (typeof payload?.detail === 'string') {
       message = payload.detail;
     }
   } catch {
     // Preserve non-JSON error bodies.
   }
-  return new Error(`${statusCode}: ${message || fallback}`);
+  return Object.assign(new Error(message || fallback), { status: statusCode });
 }
 
 async function ciRequest(path, options = {}) {

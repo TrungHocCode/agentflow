@@ -56,7 +56,7 @@ export default function Sidebar({ activeTab, setActiveTab, user, onLogout }) {
           </div>
           <div>
             <div className="sidebar-brand__name">AgentFlow</div>
-            <p className="sidebar-brand__caption">Intelligent research workspace</p>
+            <p className="sidebar-brand__caption">Competitive intelligence</p>
           </div>
         </div>
 

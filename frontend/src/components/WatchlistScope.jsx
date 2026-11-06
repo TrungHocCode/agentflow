@@ -6,13 +6,10 @@ import { Card } from './ui/card';
 import { Input } from './ui/input';
 import { Spinner } from './ui/spinner';
 import ErrorNotice from './ErrorNotice';
+import { countLabel } from '../lib/labels';
 
 function kindLabel(value) {
   return String(value || '').replaceAll('_', ' ');
-}
-
-function plural(count, noun) {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function toPayloadProducts(draftProducts, originalProducts) {
@@ -114,7 +111,7 @@ export default function WatchlistScope({ watchlist, onSaved }) {
               <div className="ci-chip-row">
                 <span className="ci-row-title">{product.name}</span>
                 <span className="ci-chip ci-chip--quiet">{product.kind === 'own' ? 'your product' : 'competitor'}</span>
-                <span className="ci-chip ci-chip--quiet">{plural((product.sources || []).length, 'source')}</span>
+                <span className="ci-chip ci-chip--quiet">{countLabel((product.sources || []).length, 'source')}</span>
               </div>
               {(product.sources || []).length === 0 ? (
                 <p className="ci-row-meta">No sources yet, so this product is not collected.</p>

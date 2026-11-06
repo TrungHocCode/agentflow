@@ -29,7 +29,7 @@ import { ApprovalBadge, OutcomeBadge, QualityBadge, StatusBadge } from './Outcom
 import ScheduleSection from './ScheduleSection';
 import TimelineAndAsk from './TimelineAndAsk';
 import WatchlistScope from './WatchlistScope';
-import { dateLabel, revisionLabel, runLabel } from '../lib/labels';
+import { countLabel, dateLabel, revisionLabel, runLabel } from '../lib/labels';
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'pending']);
 
@@ -271,8 +271,8 @@ export default function WatchlistDetail({ watchlistId, onBack, onOpenRun }) {
             <div className="ci-section-head">
               <p className="ci-section-title">Tracking goal</p>
               <div className="ci-chip-row">
-                <span className="ci-chip ci-chip--quiet">{productCount} products</span>
-                <span className="ci-chip ci-chip--quiet">{sourceCount} sources</span>
+                <span className="ci-chip ci-chip--quiet">{countLabel(productCount, 'product')}</span>
+                <span className="ci-chip ci-chip--quiet">{countLabel(sourceCount, 'source')}</span>
               </div>
             </div>
             <p className="ci-row-copy">{config.goal || 'No goal set for this revision.'}</p>

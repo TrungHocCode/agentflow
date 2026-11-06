@@ -14,6 +14,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
+import { countLabel } from '../lib/labels';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -307,7 +308,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
           </li>
         </ol>
         <p className="wizard-complete__hint">
-          Tip: suggest a weekly schedule in Settings so future check-ins happen without manual runs.
+          Tip: add a weekly schedule in the watchlist's Settings tab so future check-ins run on their own.
         </p>
         <div className="wizard-nav">
           <Button type="button" onClick={() => onCreated(createdId)}>
@@ -743,7 +744,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             <div className="wizard-review-grid">
               <div className="wizard-review-stat">
                 <strong>{pickedProducts.length}</strong>
-                <span>competitors</span>
+                <span>products</span>
               </div>
               <div className="wizard-review-stat">
                 <strong>{sourceCount}</strong>
@@ -761,7 +762,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
 
             <div className="wizard-review-note">
               <p>
-                <strong>Expected cadence: weekly.</strong> You can suggest a schedule after creating; the wizard never runs
+                <strong>Expected cadence: weekly.</strong> You can add a schedule after creating; the wizard never runs
                 a collection on its own.
               </p>
               <p>
@@ -778,7 +779,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
                     <small>{item.official_website || 'No domain yet'}</small>
                   </span>
                   <span className="wizard-review-list__meta">
-                    {(item.sources || []).filter((source) => source.url?.trim()).length} sources ·{' '}
+                    {countLabel((item.sources || []).filter((source) => source.url?.trim()).length, 'source')} ·{' '}
                     {scopedKinds(item).map(dimensionLabel).join(', ')}
                   </span>
                 </li>

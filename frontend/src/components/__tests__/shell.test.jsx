@@ -70,7 +70,7 @@ describe('application shell', () => {
     render(<Header activeTab="studio" />);
 
     const header = screen.getByTestId('app-header');
-    expect(within(header).getByTestId('header-title')).toHaveTextContent('Research studio');
+    expect(within(header).getByTestId('header-title')).toHaveTextContent('Assistant');
     expect(within(header).getByText('Workspace')).toBeInTheDocument();
   });
 });

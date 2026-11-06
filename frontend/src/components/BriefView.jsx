@@ -7,7 +7,7 @@ import { Spinner } from './ui/spinner';
 import ErrorNotice from './ErrorNotice';
 import StructuredText from './StructuredText';
 import { OutcomeBadge, QualityBadge, VerificationBadge } from './OutcomeBadge';
-import { dateLabel, sourceLabel } from '../lib/labels';
+import { countLabel, dateLabel, sourceLabel } from '../lib/labels';
 
 export default function BriefView({ brief }) {
   const [downloading, setDownloading] = useState(false);
@@ -55,7 +55,7 @@ export default function BriefView({ brief }) {
       <Card className="ci-section p-4">
         <div className="ci-section-head">
           <p className="ci-section-title">Per-source coverage</p>
-          <span className="ci-chip ci-chip--quiet">{(brief.source_coverage || []).length} sources</span>
+          <span className="ci-chip ci-chip--quiet">{countLabel((brief.source_coverage || []).length, 'source')}</span>
         </div>
         <ul className="coverage-list">
           {(brief.source_coverage || []).map((entry) => (

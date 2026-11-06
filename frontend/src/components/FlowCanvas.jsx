@@ -27,7 +27,7 @@ export default function FlowCanvas({ plan }) {
           <span className="empty-state__icon" aria-hidden="true"><GitMerge /></span>
           <CardTitle className="empty-state__title">No workflow diagram yet</CardTitle>
           <CardDescription className="empty-state__description">
-            Start by describing your research request in the chat. The plan will then appear here.
+            A plan you review in the Assistant appears here.
           </CardDescription>
         </Card>
       ) : (
