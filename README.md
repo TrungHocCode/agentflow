@@ -247,6 +247,10 @@ Static fetching can work without browser fallback. Browser rendering is bounded 
 | `AGENTFLOW_CRAWLER_BROWSER_MAX_CONCURRENCY` | `1` | Maximum simultaneous browser pages per worker |
 | `AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS` | `2` | Maximum wait for an available browser slot |
 
+### Web search
+
+Setup discovery and research use DuckDuckGo's unauthenticated HTML page by default. It can refuse requests from an IP for long periods; discovery then reports the failure, does not spend a round, and products and URLs can still be entered by hand. For dependable search, set `BRAVE_SEARCH_API_KEY` to a [Brave Search API](https://brave.com/search/api/) key on the API and worker. Brave is tried first and DuckDuckGo remains the fallback. Queries go to the configured provider, so check its current pricing and attribution terms.
+
 ## Run with Docker Compose
 
 The Compose stack includes the frontend, API, worker, PostgreSQL, Redis, database initialization, and MongoDB/Mongo Express development services:

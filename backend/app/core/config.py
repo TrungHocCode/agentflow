@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # the operator explicitly accepts that risk for this deployment.
     ENABLE_UNSANDBOXED_PYTHON_EXECUTION: bool = False
     ENABLE_EXTERNAL_SIDE_EFFECT_TOOLS: bool = False
+    # Optional keyed search; without it, search uses the unauthenticated DuckDuckGo HTML page,
+    # which can refuse requests from an IP for long periods.
+    BRAVE_SEARCH_API_KEY: str = ""
+    # One setup wizard pass spends two rounds; failed and empty searches are refunded.
+    CI_SCOUT_ROUNDS_PER_DAY: int = Field(default=10, ge=1, le=1000)
 
     @model_validator(mode="after")
     def validate_context_policy(self) -> "Settings":

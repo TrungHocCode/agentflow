@@ -1,4 +1,4 @@
-"""Structured DuckDuckGo HTML search tool."""
+"""Structured web search: keyed Brave API when configured, DuckDuckGo HTML otherwise."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import requests
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
@@ -19,6 +20,8 @@ from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient
 
 
 SEARCH_URL = "https://html.duckduckgo.com/html/"
+BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+_MARKUP = re.compile(r"<[^>]+>")
 SEARCH_TIMEOUT = (5, 12)
 MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
 
@@ -125,6 +128,35 @@ def _parse_results(html: str, max_results: int) -> list[dict[str, str | int]]:
     return normalized
 
 
+def _brave_results(query: str, max_results: int) -> list[dict[str, str | int]]:
+    """Return ranked Brave results, or nothing so the caller can fall back to DuckDuckGo."""
+
+    try:
+        response = requests.get(
+            BRAVE_SEARCH_URL,
+            headers={"X-Subscription-Token": settings.BRAVE_SEARCH_API_KEY, "Accept": "application/json"},
+            params={"q": query, "count": max_results},
+            timeout=SEARCH_TIMEOUT,
+        )
+        if response.status_code != 200:
+            return []
+        records = response.json().get("web", {}).get("results", [])
+    except (requests.RequestException, ValueError, AttributeError):
+        return []
+    normalized: list[dict[str, str | int]] = []
+    for record in records if isinstance(records, list) else []:
+        url = str(record.get("url") or "") if isinstance(record, dict) else ""
+        if not url.startswith(("http://", "https://")):
+            continue
+        normalized.append({
+            "rank": len(normalized) + 1,
+            "title": unescape(_MARKUP.sub("", str(record.get("title") or ""))),
+            "url": url,
+            "snippet": unescape(_MARKUP.sub("", str(record.get("description") or ""))),
+        })
+    return normalized[:max_results]
+
+
 @ToolRegistry.register_tool(name="web_search")
 @tool("web_search", args_schema=WebSearchInput)
 def web_search(query: str, max_results: int = 5) -> str:
@@ -144,6 +176,23 @@ def web_search(query: str, max_results: int = 5) -> str:
     cached_result = get_cached(cache_key)
     if isinstance(cached_result, str):
         return cached_result
+
+    if settings.BRAVE_SEARCH_API_KEY:
+        brave_results = _brave_results(normalized_query, max_results)
+        if brave_results:
+            result = success_result(
+                {"query": normalized_query, "results": brave_results},
+                tool_name="web_search",
+                source=SourceMetadata(requested_url=BRAVE_SEARCH_URL, final_url=BRAVE_SEARCH_URL, status_code=200,
+                                      content_type="application/json"),
+                metadata={
+                    "duration_ms": round((perf_counter() - started) * 1000),
+                    "result_count": len(brave_results),
+                    "parser": "agentflow_brave_api_v1",
+                },
+            ).to_json()
+            set_cached(cache_key, result)
+            return result
 
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowWebSearch/2.0",
