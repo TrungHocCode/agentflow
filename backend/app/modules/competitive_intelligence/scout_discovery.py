@@ -20,8 +20,10 @@ from app.execution.tools.base import ToolRegistry
 from app.modules.competitive_intelligence.models import public_url
 from app.modules.competitive_intelligence.setup_recommend import RecommendedProduct, RecommendedSource
 from app.shared.collection_scope import normalized_url, same_site
+from app.shared.errors import DependencyUnavailableError
 
 MAX_BATCH_QUERIES = 5
+MAX_NAMED_QUERIES = 5
 MAX_RESULTS_PER_QUERY = 5
 MAX_PRODUCTS = 10
 MAX_SOURCES_PER_DOMAIN = 5
@@ -40,9 +42,10 @@ _DIMENSION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "release_notes": ("release notes", "releases", "changelog", "what's new"),
 }
 _GENERIC_CAPITALIZED = {
-    "A", "An", "Build", "Compare", "Competitor", "Competitors", "Find", "Focus", "I",
-    "Make", "Monitor", "My", "Our", "Plan", "Pricing", "Product", "Products", "The",
-    "Track", "Tracking", "Use", "We",
+    "A", "An", "And", "Build", "Check", "Compare", "Competitor", "Competitors", "Find", "Focus", "Follow",
+    "Help", "Hi", "Hello", "How", "I", "Keep", "Make", "Monitor", "My", "Need", "Our", "Plan", "Please",
+    "Pricing", "Product", "Products", "Show", "Tell", "The", "They", "Track", "Tracking", "Use", "Want",
+    "Watch", "We", "What", "Who", "Why",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
@@ -50,6 +53,14 @@ _STOPWORDS = {
     "want", "with",
 }
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9&.+_-]*")
+_OWN_PRODUCT = re.compile(
+    r"\b(?i:i|we)(?i:'m|'re| am| are)?\s+(?i:make|making|build|building|built|run|running|sell|selling|own|develop|"
+    r"developing|created?)\s+([A-Z][A-Za-z0-9&.+_-]*)")
+# Editorial pages rank highly for competitor searches but are not products to track.
+_ARTICLE_TITLE = re.compile(
+    r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked)\b", re.IGNORECASE)
+_NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
+_TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
 
 SearchToolCaller = Callable[[list[str], int], Any | Awaitable[Any]]
@@ -85,6 +96,29 @@ def _extract_records(raw: Any) -> list[dict[str, Any]]:
     return [record for record in results if isinstance(record, dict)] if isinstance(results, list) else []
 
 
+def _provider_refused(raw: Any) -> bool:
+    """Tell a provider failure from a search that honestly found nothing."""
+
+    payload = raw.model_dump() if hasattr(raw, "model_dump") else raw
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(payload, dict) or payload.get("ok") is not False:
+        return False
+    queries = (payload.get("data") or {}).get("queries") or []
+    return not queries or any(record.get("status") != "empty" for record in queries)
+
+
+def _search_unavailable() -> DependencyUnavailableError:
+    return DependencyUnavailableError(
+        "The web search provider is not accepting requests right now. "
+        "Try again in a few minutes, or add the products and URLs manually.",
+        code="search_provider_unavailable",
+    )
+
+
 def _dimensions(prompt: str) -> list[str]:
     lowered = prompt.casefold()
     return [
@@ -99,14 +133,14 @@ def _product_terms(prompt: str) -> list[str]:
     seen: set[str] = set()
     dimension_words = {word for words in _DIMENSION_KEYWORDS.values() for word in words}
     for match in _WORD.finditer(prompt):
-        token = match.group()
+        token = match.group().rstrip("&.+_-")
         key = token.casefold()
         if (not token[0].isupper() or token in _GENERIC_CAPITALIZED or key in seen
                 or token in dimension_words):
             continue
         seen.add(key)
         terms.append(token)
-    return terms[:4]
+    return terms
 
 
 def _fallback_keywords(prompt: str) -> list[str]:
@@ -115,6 +149,23 @@ def _fallback_keywords(prompt: str) -> list[str]:
         if len(token) > 1 and token not in _STOPWORDS and token not in keywords:
             keywords.append(token)
     return keywords[:5]
+
+
+def _own_product(prompt: str) -> str | None:
+    match = _OWN_PRODUCT.search(prompt)
+    return match.group(1).rstrip("&.+_-") if match else None
+
+
+def _compact(value: str) -> str:
+    return "".join(_TOKEN.findall(value.casefold()))
+
+
+def _named_term(domain: str, terms: list[str]) -> str | None:
+    """Return the prompt's product name when a result's domain is that product's own."""
+
+    # Compare the whole domain too, so a name like "Monday.com" matches monday.com.
+    names = {_compact(domain.split(".")[0]), _compact(domain)}
+    return next((term for term in terms if _compact(term) in names), None)
 
 
 def _ranking_terms(prompt: str, product_terms: list[str]) -> set[str]:
@@ -152,7 +203,9 @@ def _tokens(value: str) -> set[str]:
 
 def _product_name(title: str, domain: str) -> str:
     cleaned = " ".join(str(title or "").split())
-    candidate = re.split(r"\s+[|:–—-]\s+", cleaned, maxsplit=1)[0].strip()
+    candidate = _NAME_SEPARATOR.split(cleaned, maxsplit=1)[0].strip()
+    while _TRAILING_PAGE_WORD.search(candidate):
+        candidate = _TRAILING_PAGE_WORD.sub("", candidate).strip()
     if candidate.casefold() in {"home", "official site", "plans", "pricing", "welcome"}:
         candidate = ""
     if len(candidate) < 2:
@@ -185,16 +238,27 @@ class ScoutDiscovery:
             raw = self.search_tool_caller(list(queries), max_results)
             if inspect.isawaitable(raw):
                 raw = await raw
-        except Exception as exc:  # A provider failure yields no candidates, not a 500.
-            self._warn(f"Web search failed: {exc}")
-            return []
+        except Exception as exc:
+            raise _search_unavailable() from exc
+        if _provider_refused(raw):
+            raise _search_unavailable()
         return _extract_records(raw)
 
     def _competitor_queries(self, prompt: str) -> list[str]:
         terms = _product_terms(prompt)
         dimensions = _dimensions(prompt)
+        own = _own_product(prompt)
+        named = [term for term in terms if term != own]
         queries: list[str] = []
-        if terms:
+        if named:
+            # Named competitors: look each one up, since a combined "alternatives" query
+            # mostly returns comparison articles about them.
+            suffix = DIMENSION_QUERY_TERMS[dimensions[0]] if dimensions else "official website"
+            queries = [f"{term} {suffix}" for term in named[:MAX_NAMED_QUERIES]]
+            if len(named) > MAX_NAMED_QUERIES:
+                self._warn(f"Searched the first {MAX_NAMED_QUERIES} named products; add the rest manually: "
+                           f"{', '.join(named[MAX_NAMED_QUERIES:])}.")
+        elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:
                 queries.append(" ".join(terms[:3] + [DIMENSION_QUERY_TERMS[dimensions[0]]]))
@@ -213,7 +277,7 @@ class ScoutDiscovery:
                 item.casefold() for item in deduped
             }:
                 deduped.append(normalized)
-        return deduped[:2]
+        return deduped[:MAX_NAMED_QUERIES]
 
     async def stage_a(self, prompt: str) -> list[RecommendedProduct]:
         """Discover competitor candidates from up to two bounded search queries."""
@@ -228,21 +292,30 @@ class ScoutDiscovery:
             self._warn("No web search results were returned for competitor discovery.")
             return []
 
-        ranking_terms = _ranking_terms(prompt, _product_terms(prompt))
-        ranked: list[tuple[int, int, str, dict[str, Any], set[str]]] = []
+        terms = _product_terms(prompt)
+        own = _own_product(prompt)
+        ranking_terms = _ranking_terms(prompt, terms)
+        ranked: list[tuple[bool, int, int, str, dict[str, Any], set[str], str | None]] = []
+        skipped_articles = 0
         for index, record in enumerate(records):
             domain = _registrable_domain(str(record.get("url") or ""))
             if not domain:
                 continue
+            named = _named_term(domain, terms)
+            if named is None and _ARTICLE_TITLE.search(str(record.get("title") or "")):
+                skipped_articles += 1
+                continue
             matched = _tokens(
                 f"{record.get('title') or ''} {record.get('snippet') or ''} {record.get('url') or ''}"
             ) & ranking_terms
-            ranked.append((len(matched), -index, domain, record, matched))
-        ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            ranked.append((named is not None, len(matched), -index, domain, record, matched, named))
+        ranked.sort(key=lambda item: item[:3], reverse=True)
+        if skipped_articles:
+            self._warn(f"Skipped {skipped_articles} comparison or review articles; they are not products to track.")
 
         products: list[RecommendedProduct] = []
         seen_domains: set[str] = set()
-        for score, _, domain, record, matched in ranked:
+        for _, _, _, domain, record, matched, named in ranked:
             if domain in seen_domains:
                 continue
             seen_domains.add(domain)
@@ -254,8 +327,9 @@ class ScoutDiscovery:
                 rationale += f": {snippet[:240]}"
             products.append(
                 RecommendedProduct(
-                    name=_product_name(str(record.get("title") or ""), domain),
-                    kind="competitor",
+                    name=named or _product_name(str(record.get("title") or ""), domain),
+                    kind="own" if named and named == own else "competitor",
+                    suggested=named is not None,
                     company="",
                     official_website=f"https://{domain}/",
                     sources=[],

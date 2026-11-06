@@ -74,6 +74,21 @@ class TestAPIEndpoints(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("message", response.json())
 
+    async def test_model_health_endpoint_reports_probe_result(self):
+        from app.api.dependencies import get_model_health_probe
+        from app.modules.system.health import ModelHealth
+
+        class DownProbe:
+            async def check(self):
+                return ModelHealth(status="unavailable", code="model_unreachable", message="Ollama is down.")
+
+        app.dependency_overrides[get_model_health_probe] = DownProbe
+        self.addCleanup(app.dependency_overrides.pop, get_model_health_probe, None)
+        response = await self.client.get("/api/v1/health/model")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "unavailable", "code": "model_unreachable",
+                                           "message": "Ollama is down."})
+
     async def test_health_endpoint(self):
         response = await self.client.get("/api/v1/health")
         self.assertEqual(response.status_code, 200)

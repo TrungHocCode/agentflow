@@ -21,7 +21,7 @@ export default function WatchlistList({ onSelect, onCreate }) {
       setError('');
       try {
         const page = await listWatchlists();
-        if (!cancelled) setItems(page.items || []);
+        if (!cancelled) setItems((page.items || []).filter((item) => item.status !== 'archived'));
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {

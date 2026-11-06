@@ -102,6 +102,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
   const [criteria, setCriteria] = useState([{ field: 'price', objective: 'Track public pricing changes', importance: 'high' }]);
   const [products, setProducts] = useState([]);
   const [warnings, setWarnings] = useState([]);
+  const [sourceNotice, setSourceNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [createdId, setCreatedId] = useState(null);
   const [error, setError] = useState('');
@@ -140,14 +141,17 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
       const recommendation = await discoverCompetitors(prompt);
       const competitors = (recommendation.products || []).map((item) =>
         withTrackedSources(
-          { ...item, kind: item.kind || 'competitor', tracked: true },
+          { ...item, kind: item.kind || 'competitor', tracked: item.suggested === true },
           dimensions.length ? dimensions : ['pricing']
         )
       );
-      setProducts((current) => [...current.filter((item) => item.kind === 'own'), ...competitors]);
+      setProducts((current) => {
+        const own = current.filter((item) => item.kind === 'own');
+        // A watchlist holds one own product, so keep the one already chosen.
+        return [...own, ...competitors.filter((item) => own.length === 0 || item.kind !== 'own')];
+      });
       setWarnings(recommendation.warnings || []);
       setDiscovered(true);
-      setName((current) => current || `${competitors[0]?.name || 'Competitive'} watch`);
       setGoal((current) => current || recommendation.suggested_goal || prompt);
     } catch (err) {
       setError(err.message);
@@ -167,6 +171,12 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
       const dimension = dimensions[0] || 'pricing';
       const requested = new Set(pickedDomains);
       const sourcesByDomain = await discoverSources([...requested], dimension);
+      const missing = pickedProducts
+        .filter((item) => item.official_website && !sourcesByDomain[item.official_website.trim()]?.length)
+        .map((item) => item.name.trim());
+      setSourceNotice(missing.length
+        ? `No ${dimensionLabel(dimension)} pages were found for ${missing.join(', ')}. Paste the URLs below if you know them.`
+        : '');
       setProducts((current) =>
         current.map((item) => {
           const found = item.official_website && requested.has(item.official_website)
@@ -226,6 +236,11 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
 
   function goNext() {
     if (!canAdvance || step >= STEPS.length) return;
+    if (step === STEPS.length - 1 && !name.trim()) {
+      // Suggest from the products the user reviewed, never from a raw search-result title.
+      const anchor = pickedProducts.find((item) => item.kind === 'own') || pickedProducts[0];
+      if (anchor) setName(`${anchor.name.trim()} watch`);
+    }
     setStep((current) => current + 1);
   }
 
@@ -280,11 +295,11 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
         <ol className="wizard-next-steps">
           <li>
             <span className="wizard-next-steps__index">1</span>
-            <span><strong>Approve the revision</strong><small>Confirm the sources and scope you just reviewed.</small></span>
+            <span><strong>Check the sources</strong><small>Open the watchlist and correct anything that looks wrong.</small></span>
           </li>
           <li>
             <span className="wizard-next-steps__index">2</span>
-            <span><strong>Run now</strong><small>Capture a first baseline for every tracked source.</small></span>
+            <span><strong>Approve &amp; run</strong><small>Confirm the scope and capture a first baseline for every tracked source.</small></span>
           </li>
           <li>
             <span className="wizard-next-steps__index">3</span>
@@ -431,7 +446,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             {(discovered || warnings.length > 0) && (
               <Alert className="wizard-unverified">
                 <AlertDescription>
-                  Unverified draft — review every entry before creating. {warnings.join(' ')}
+                  Unverified draft — tick what you want to track. Only products you named are ticked for you. {warnings.join(' ')}
                 </AlertDescription>
               </Alert>
             )}
@@ -551,6 +566,7 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
                 Searches only the picked competitor domains for the selected dimension ({dimensions[0] || 'pricing'}).
               </p>
             </div>
+            {sourceNotice && <p className="wizard-field__hint" role="status">{sourceNotice}</p>}
 
             {pickedProducts.length === 0 ? (
               <div className="wizard-empty empty-state-fade">
@@ -795,11 +811,13 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
             <span />
           )}
           {step < STEPS.length ? (
-            <Button type="button" onClick={goNext} disabled={!canAdvance}>
+            // Distinct keys keep these as separate DOM nodes; reusing one would turn the clicked
+            // Next into type="submit" before the browser runs its default action.
+            <Button key="next" type="button" onClick={goNext} disabled={!canAdvance}>
               Next<ArrowRight data-icon="inline-end" />
             </Button>
           ) : (
-            <Button type="submit" disabled={!canCreate || saving}>
+            <Button key="create" type="submit" disabled={!canCreate || saving}>
               {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
               {saving ? 'Creating…' : 'Create watchlist'}
             </Button>

@@ -50,6 +50,10 @@ function json(method, body) {
 
 const enc = encodeURIComponent;
 
+export async function getModelHealth() {
+  return ciRequest('/health/model');
+}
+
 export async function listWatchlists(limit = 50, offset = 0) {
   return ciRequest(`/watchlists?limit=${limit}&offset=${offset}`);
 }

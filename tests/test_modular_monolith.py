@@ -732,7 +732,41 @@ class TestWorkflowBoundaries(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(completed.status, "failed")
         self.assertEqual(completed.error_code, "task_execution_failed")
+        self.assertIn("One or more workflow tasks failed.", completed.error_message)
         self.assertEqual(repository.events[document.run_id][-1].type, "run_failed")
+
+    async def test_failed_run_message_explains_a_known_model_failure(self) -> None:
+        class ModelDownPort(FailedExecutionPort):
+            async def execute_run(self, run_id, initial_state):
+                async for chunk in super().execute_run(run_id, initial_state):
+                    for output in chunk.values():
+                        output["metadata"] = {"last_error": {
+                            "error_id": "ref-1", "code": "model_out_of_memory", "category": "dependency",
+                            "retryable": True, "message": "The machine is out of memory.",
+                        }}
+                    yield chunk
+
+        repository = FakeRunRepository()
+        service = RunService(
+            run_repository=repository,
+            workflow_repository=None,
+            execution_port=ModelDownPort(),
+            event_publisher=InMemoryRunEventPublisher(),
+        )
+        document = RunDocument(
+            run_id="model-down-run",
+            flow_id="workflow-1",
+            status="queued",
+            mode="executing",
+            plan=[make_task(1)],
+        )
+        await repository.save(document)
+
+        completed = await service.execute_queued_run(document.run_id)
+
+        self.assertEqual(completed.status, "failed")
+        self.assertEqual(completed.error_code, "model_out_of_memory")
+        self.assertEqual(completed.error_message, "The machine is out of memory. Reference: ref-1.")
 
     async def test_partial_source_task_can_finish_run_and_is_reported(self) -> None:
         repository = FakeRunRepository()

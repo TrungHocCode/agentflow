@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from app.core.config import settings
 from app.execution.model_router import model_name_for
+from app.execution.llm import classify_model_failure
 from app.execution.state import State, Task, SupervisorOutput, WorkerOutput
 from app.execution.tools.contracts import parse_tool_result
 from app.execution.context_budget import ContextBudgetExceeded, guard_context, project_tool_result
@@ -157,7 +158,7 @@ class SupervisorAgent(BaseAgent):
         if plan and any(kw in last_user_msg for kw in approval_keywords):
             return {
                 "mode": "executing",
-                "messages": [AIMessage(content="Đã nhận xác nhận từ bạn! Hệ thống đang chuyển sang chế độ thực thi các task...")],
+                "messages": [AIMessage(content="Approval received. Starting execution.")],
                 "logs": ["[SupervisorAgent] User approved plan. Switching mode to 'executing'."]
             }
 
@@ -768,11 +769,16 @@ class WorkerAgent(BaseAgent):
         except Exception as e:
             status = "failed"
             context_error = isinstance(e, ContextBudgetExceeded) or "exceed_context_size_error" in str(e)
+            # worker_error_id is set only when the model call itself failed, so a database
+            # outage elsewhere in this block is not reported as a model problem.
+            model_failure = classify_model_failure(e) if worker_error_id and not context_error else None
             error_code = (e.code if isinstance(e, (RunBudgetExceeded, RunNoLongerActive)) else
-                          "context_budget_exceeded" if context_error else "worker_execution_failed")
+                          "context_budget_exceeded" if context_error else
+                          model_failure.code if model_failure else "worker_execution_failed")
             error_msg = (
                 "Research input exceeded the model context budget. No oversized request was retried."
-                if context_error else f"Worker execution failed ({type(e).__name__})."
+                if context_error else model_failure.message if model_failure
+                else f"Worker execution failed ({type(e).__name__})."
             )
             error_id = worker_error_id or str(uuid.uuid4())
             logs.append(f"[{self.name}] Execution failed ({type(e).__name__}).")
@@ -790,8 +796,9 @@ class WorkerAgent(BaseAgent):
                 "last_error": {
                     "error_id": error_id,
                     "code": error_code,
-                    "category": "execution",
+                    "category": "dependency" if model_failure else "execution",
                     "retryable": not context_error and not isinstance(e, (RunBudgetExceeded, RunNoLongerActive)),
+                    "message": model_failure.message if model_failure else None,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                 },
             }

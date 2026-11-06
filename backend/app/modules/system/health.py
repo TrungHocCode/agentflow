@@ -1,10 +1,25 @@
 """Application service for operational health reporting."""
 
-from typing import Any, Dict, Protocol
+from typing import Any, Dict, Literal, Protocol
+
+from pydantic import BaseModel
+
+
+class ModelHealth(BaseModel):
+    """Whether the worker model can be expected to serve a run."""
+
+    status: Literal["ok", "unavailable"]
+    code: str | None = None
+    message: str | None = None
 
 
 class HealthProbe(Protocol):
     async def check(self) -> Dict[str, Any]:
+        ...
+
+
+class ModelHealthProbe(Protocol):
+    async def check(self) -> ModelHealth:
         ...
 
 

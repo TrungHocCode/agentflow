@@ -11,7 +11,8 @@ const COMPETITORS = {
       official_website: 'https://todoist.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'web_search'
+      provenance: 'web_search',
+      suggested: true
     },
     {
       name: 'ClickUp',
@@ -20,7 +21,8 @@ const COMPETITORS = {
       official_website: 'https://clickup.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'model_knowledge'
+      provenance: 'model_knowledge',
+      suggested: true
     }
   ],
   suggested_goal: '',
@@ -82,9 +84,29 @@ describe('setup wizard story', () => {
     fireEvent.click(nextButton());
 
     expect(screen.getByTestId('wizard-step-4')).toHaveAttribute('data-state', 'active');
-    expect(screen.getByRole('button', { name: /create watchlist/i })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Watchlist name'), { target: { value: 'Rival watch' } });
+    expect(screen.getByLabelText('Watchlist name')).toHaveValue('Rival watch');
     expect(screen.getByRole('button', { name: /create watchlist/i })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Watchlist name'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: /create watchlist/i })).toBeDisabled();
+  });
+
+  it('never reuses the Next button node for the submit button', () => {
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /add competitor/i }));
+    fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Rival' } });
+    fireEvent.click(nextButton());
+
+    // A real click commits React's update before the browser runs the button's default
+    // action. If this node became type="submit" during that gap, the form would submit and
+    // skip Review, so Next and Create must be distinct DOM nodes.
+    const next = nextButton();
+    fireEvent.click(next);
+
+    expect(screen.getByTestId('wizard-step-4')).toHaveAttribute('data-state', 'active');
+    expect(screen.getByRole('button', { name: /create watchlist/i })).not.toBe(next);
+    expect(next).not.toBeInTheDocument();
   });
 
   it('lets the user tick competitors and only discovers their sources', async () => {
@@ -104,6 +126,65 @@ describe('setup wizard story', () => {
 
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.queryByDisplayValue('https://clickup.com/pricing')).not.toBeInTheDocument();
+  });
+
+  it('suggests the name from reviewed products rather than search titles', async () => {
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByDisplayValue('Todoist')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByDisplayValue('Todoist'), { target: { value: 'Todoist Renamed' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(nextButton());
+
+    expect(screen.getByLabelText('Watchlist name')).toHaveValue('Todoist Renamed watch');
+  });
+
+  it('keeps one own product when discovery also finds one', async () => {
+    const discovered = { ...COMPETITORS.products[0], name: 'TaskFlow', kind: 'own', official_website: 'https://taskflow.example/' };
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...COMPETITORS, products: [discovered, COMPETITORS.products[1]] })));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByLabelText('Track TaskFlow')).toBeChecked());
+
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find competitors/i })).toBeEnabled());
+
+    const roles = screen.getAllByLabelText('Product role').map((select) => select.value);
+    expect(roles.filter((role) => role === 'own')).toHaveLength(1);
+  });
+
+  it('only pre-ticks products the user named', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      ...COMPETITORS,
+      products: [COMPETITORS.products[0], { ...COMPETITORS.products[1], suggested: false }]
+    })));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+
+    await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeChecked());
+    expect(screen.getByLabelText('Track ClickUp')).not.toBeChecked();
+  });
+
+  it('says which picked products had no source pages', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
+      ? { 'https://todoist.com/': SOURCES['https://todoist.com/'], 'https://clickup.com/': [] }
+      : COMPETITORS)));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByDisplayValue('Todoist')).toBeInTheDocument());
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
+
+    expect(await screen.findByText(/no pricing pages were found for clickup/i)).toBeInTheDocument();
   });
 
   it('creates the watchlist with the existing payload shape', async () => {

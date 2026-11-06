@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, Clock3, Download, FileText, Timer, XCircle } from 'lucide-react';
+import ErrorNotice from './ErrorNotice';
 import StructuredText from './StructuredText';
 import TaskStatusBadge from './TaskStatusBadge';
 import { Badge } from './ui/badge';
@@ -97,17 +98,21 @@ export default function ExecutionTracker({
           </CardDescription>
         </Card>
       ) : (
+        <div className="flex flex-col gap-4">
+        {currentRun.error_message && <ErrorNotice title="This run did not finish" message={currentRun.error_message} />}
         <div className="execution-tracker-grid run-view-grid">
           <Card className="surface-card run-card">
             <CardHeader>
               <CardTitle>Steps</CardTitle>
               <CardDescription>
-                {plan?.length ? `${finishedCount} / ${plan.length} steps finished` : 'No step information yet.'}
+                {plan?.length ? `${finishedCount} / ${plan.length} steps finished` : 'No steps recorded.'}
               </CardDescription>
             </CardHeader>
             <CardContent className="run-task-list">
               {(!plan || plan.length === 0) ? (
-                <p className="run-empty-hint">Steps will appear when the backend sends the run plan.</p>
+                <p className="run-empty-hint">
+                  {canCancel ? 'Steps will appear when the backend sends the run plan.' : 'This run recorded no steps.'}
+                </p>
               ) : plan.map((task, index) => (
                 <article key={task?.id || index} className="run-task-card">
                   <span className={`execution-task-number${task?.status === 'running' ? ' execution-task-number--running' : ''}`}>
@@ -129,7 +134,7 @@ export default function ExecutionTracker({
                 <CardTitle>Results by step</CardTitle>
                 <CardDescription>Outputs saved from each agent.</CardDescription>
               </div>
-              {currentRun.run_id && (
+              {currentRun.run_id && results?.length > 0 && (
                 <Button type="button" variant="outline" size="sm" onClick={onOpenResults}>
                   <Download data-icon="inline-start" />Open report
                 </Button>
@@ -157,6 +162,7 @@ export default function ExecutionTracker({
               ))}
             </CardContent>
           </Card>
+        </div>
         </div>
       )}
     </section>

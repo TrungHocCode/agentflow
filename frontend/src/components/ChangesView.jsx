@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { listChanges, listWatchlists } from '../services/ciApi';
+import { listBriefs, listChanges, listWatchlistRuns, listWatchlists } from '../services/ciApi';
+import { changeStateFor, worstChangeState } from '../lib/changeState';
 import ChangeDetail from './ChangeDetail';
 import EmptyState from './EmptyState';
 import ErrorNotice from './ErrorNotice';
@@ -9,6 +10,7 @@ import { OutcomeBadge } from './OutcomeBadge';
 // App-level change feed across every watchlist the user owns.
 export default function ChangesView() {
   const [items, setItems] = useState([]);
+  const [emptyState, setEmptyState] = useState({ state: 'unavailable' });
   const [selectedChangeId, setSelectedChangeId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -20,7 +22,7 @@ export default function ChangesView() {
       setLoading(true);
       setError('');
       try {
-        const watchlists = (await listWatchlists()).items || [];
+        const watchlists = ((await listWatchlists()).items || []).filter((item) => item.status !== 'archived');
         const pages = await Promise.all(watchlists.map(async (watchlist) => {
           const page = await listChanges(watchlist.id);
           return (page.items || []).map((change) => ({ ...change, watchlistName: watchlist.name }));
@@ -28,7 +30,16 @@ export default function ChangesView() {
         const merged = pages
           .flat()
           .sort((left, right) => String(right.detected_at || '').localeCompare(String(left.detected_at || '')));
-        if (!cancelled) setItems(merged);
+        // Only an empty feed needs explaining, so skip these requests when there are changes.
+        const states = merged.length > 0 ? [] : await Promise.all(watchlists.map(async (watchlist) => {
+          const [runs, briefs] = await Promise.all([listWatchlistRuns(watchlist.id), listBriefs(watchlist.id)]);
+          const entry = changeStateFor(runs.items || [], briefs.items || []);
+          return entry.detail ? { ...entry, detail: `${watchlist.name}: ${entry.detail}` } : entry;
+        }));
+        if (!cancelled) {
+          setItems(merged);
+          setEmptyState(worstChangeState(states));
+        }
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -55,7 +66,7 @@ export default function ChangesView() {
     return <div className="page-frame"><ChangeDetail changeId={selectedChangeId} onBack={() => setSelectedChangeId(null)} /></div>;
   }
   if (items.length === 0) {
-    return <div className="page-frame"><EmptyState state="no_change" /></div>;
+    return <div className="page-frame"><EmptyState state={emptyState.state} detail={emptyState.detail} /></div>;
   }
 
   return (

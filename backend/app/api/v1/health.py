@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.api.dependencies import get_health_service
-from app.modules.system.health import HealthService
+from app.api.dependencies import get_health_service, get_model_health_probe
+from app.modules.system.health import HealthService, ModelHealth, ModelHealthProbe
 
 router = APIRouter()
 
@@ -19,6 +19,13 @@ async def liveness_check():
     """Process-level liveness probe; it intentionally does not check dependencies."""
 
     return {"status": "ok"}
+
+
+@router.get("/health/model", response_model=ModelHealth)
+async def model_check(probe: ModelHealthProbe = Depends(get_model_health_probe)) -> ModelHealth:
+    """Report model availability separately: losing it must not fail API readiness."""
+
+    return await probe.check()
 
 
 @router.get("/health/ready")

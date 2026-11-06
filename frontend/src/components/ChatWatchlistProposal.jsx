@@ -33,6 +33,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [discoveringSources, setDiscoveringSources] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [createdId, setCreatedId] = useState(null);
@@ -44,7 +45,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   }
 
   function isPicked(productIndex) {
-    if (!(productIndex in picks)) return true;
+    if (!(productIndex in picks)) return recommendation?.products?.[productIndex]?.suggested === true;
     return picks[productIndex];
   }
 
@@ -85,6 +86,9 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     try {
       const dimension = recommendation.suggested_dimensions?.[0] || 'pricing';
       const sourcesByDomain = await discoverSources(domains, dimension);
+      setSourceNotice(domains.some((domain) => !sourcesByDomain[domain]?.length)
+        ? 'No source pages were found for some products. Open the watchlist afterwards to add their URLs.'
+        : '');
       setRecommendation((current) => ({
         ...current,
         products: (current.products || []).map((item, index) => {
@@ -195,6 +199,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
           <Alert className="wizard-unverified">
             <AlertDescription>Unverified draft — review every entry before creating.</AlertDescription>
           </Alert>
+          {sourceNotice && <p className="wizard-field__hint">{sourceNotice}</p>}
           {(recommendation.warnings || []).length > 0 && (
             <p className="wizard-field__hint">{recommendation.warnings.join(' ')}</p>
           )}

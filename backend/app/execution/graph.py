@@ -13,6 +13,7 @@ from app.execution.context import ExecutionContext
 from app.execution.research_evidence import EvidenceStore
 from app.execution.ports import AssistantTokenCallback
 from app.execution.state import State, Task
+from app.execution.llm import classify_model_failure
 from app.execution.model_router import InferencePurpose, model_name_for
 from app.execution.nodes.dispatcher import TaskDispatcher
 from app.execution.agents.base import SupervisorAgent, WorkerAgent
@@ -99,7 +100,7 @@ async def supervisor_node(
         return {
             "mode": "conversation",
             "plan": {"__replace__": True, "tasks": []},
-            "messages": ["Không thể lập kế hoạch vì dịch vụ LLM chưa được bật."],
+            "messages": ["Planning is unavailable because the LLM service is not enabled."],
             "logs": ["[SupervisorNode Error] LLM planning is required in normal operation."],
             "metadata": {
                 **metadata,
@@ -147,6 +148,7 @@ async def supervisor_node(
                 "planning_error_code",
                 "planning_error_category",
                 "llm_error",
+                "planning_user_message",
             ):
                 clean_metadata.pop(stale_key, None)
             updates["metadata"] = clean_metadata
@@ -164,11 +166,13 @@ async def supervisor_node(
                     "purpose": purpose,
                 },
             )
+            model_failure = classify_model_failure(exc)
             failure_update = {
                 "mode": "conversation",
                 "plan": {"__replace__": True, "tasks": []},
                 "messages": [
-                    "Tôi chưa thể tạo phản hồi hợp lệ. Vui lòng thử lại hoặc làm rõ yêu cầu."
+                    model_failure.message if model_failure
+                    else "I could not produce a valid response. Please try again or clarify your request."
                 ],
                 "logs": [
                     f"[SupervisorNode Error] Structured planning failed ({type(exc).__name__})."
@@ -177,9 +181,10 @@ async def supervisor_node(
                     **metadata,
                     "planning_failed": True,
                     "planning_error_id": error_id,
-                    "planning_error_code": "supervisor_planning_failed",
-                    "planning_error_category": "model",
+                    "planning_error_code": model_failure.code if model_failure else "supervisor_planning_failed",
+                    "planning_error_category": "dependency" if model_failure else "model",
                     "planning_error_message": "Supervisor could not create a valid response.",
+                    "planning_user_message": model_failure.message if model_failure else None,
                 },
             }
             llm_call_metrics = getattr(exc, "llm_call_metrics", None)

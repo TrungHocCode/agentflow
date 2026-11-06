@@ -6,6 +6,7 @@ from app.execution.adapters import LangGraphExecutionAdapter
 from app.execution.agents.resolver import AgentResolver
 from app.execution.ports import ExecutionPort
 from app.infrastructure.health_probe import DatabaseHealthProbe
+from app.infrastructure.model_probe import OllamaModelProbe
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
 from app.infrastructure.postgres.catalog_repository import PostgresCatalogRepository
 from app.infrastructure.postgres.conversation_repository import (
@@ -35,7 +36,7 @@ from app.modules.conversations.service import ConversationService
 from app.modules.runs.events import RunEventPublisher
 from app.modules.runs.queue import RunCommandQueue
 from app.modules.runs.service import RunService
-from app.modules.system.health import HealthService
+from app.modules.system.health import HealthService, ModelHealthProbe
 from app.modules.workflows.service import WorkflowService
 from app.modules.identity.service import IdentityService
 from app.modules.results.service import ResearchResultService
@@ -72,6 +73,12 @@ def build_health_service() -> HealthService:
     """Compose the operational health service."""
 
     return HealthService(probe=DatabaseHealthProbe())
+
+
+def build_model_health_probe() -> ModelHealthProbe:
+    """Compose the local model availability probe."""
+
+    return OllamaModelProbe()
 
 
 def build_run_queue() -> RunCommandQueue:

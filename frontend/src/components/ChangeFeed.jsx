@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { listChanges } from '../services/ciApi';
+import { listBriefs, listChanges, listWatchlistRuns } from '../services/ciApi';
+import { changeStateFor } from '../lib/changeState';
 import EmptyState from './EmptyState';
 import ErrorNotice from './ErrorNotice';
 import ListSkeleton from './ListSkeleton';
@@ -7,6 +8,7 @@ import { OutcomeBadge } from './OutcomeBadge';
 
 export default function ChangeFeed({ watchlistId, onSelect }) {
   const [items, setItems] = useState([]);
+  const [emptyState, setEmptyState] = useState({ state: 'unavailable' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -18,7 +20,15 @@ export default function ChangeFeed({ watchlistId, onSelect }) {
       setError('');
       try {
         const page = await listChanges(watchlistId);
-        if (!cancelled) setItems(page.items || []);
+        const changes = page.items || [];
+        // Only an empty feed needs explaining, so skip these requests when there are changes.
+        const [runs, briefs] = changes.length > 0
+          ? [null, null]
+          : await Promise.all([listWatchlistRuns(watchlistId), listBriefs(watchlistId)]);
+        if (!cancelled) {
+          setItems(changes);
+          if (runs) setEmptyState(changeStateFor(runs.items || [], briefs.items || []));
+        }
       } catch (err) {
         if (!cancelled) setError(err.message);
       } finally {
@@ -41,7 +51,7 @@ export default function ChangeFeed({ watchlistId, onSelect }) {
       />
     );
   }
-  if (items.length === 0) return <EmptyState state="no_change" />;
+  if (items.length === 0) return <EmptyState state={emptyState.state} detail={emptyState.detail} />;
 
   return (
     <ul className="ci-list">

@@ -9,6 +9,7 @@ from app.infrastructure.container import (
     build_catalog_service,
     build_conversation_service,
     build_health_service,
+    build_model_health_probe,
     build_auth_service,
     build_run_service,
     build_workflow_service,
@@ -24,7 +25,7 @@ from app.infrastructure.container import (
 from app.modules.catalog.service import CatalogService
 from app.modules.conversations.service import ConversationService
 from app.modules.runs.service import RunService
-from app.modules.system.health import HealthService
+from app.modules.system.health import HealthService, ModelHealthProbe
 from app.modules.workflows.service import WorkflowService
 from app.shared.ids import DEFAULT_USER_ID
 from app.modules.identity.service import IdentityService
@@ -87,6 +88,12 @@ async def get_current_user_id(
         return user.id
     except AuthenticationError as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token.") from exc
+
+
+def get_model_health_probe() -> ModelHealthProbe:
+    """Build the local model availability probe."""
+
+    return build_model_health_probe()
 
 
 def get_health_service() -> HealthService:

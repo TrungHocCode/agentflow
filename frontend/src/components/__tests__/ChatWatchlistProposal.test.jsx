@@ -11,7 +11,8 @@ const COMPETITORS = {
       official_website: 'https://todoist.com/',
       sources: [],
       rationale: 'Found via web search.',
-      provenance: 'web_search'
+      provenance: 'web_search',
+      suggested: true
     }
   ],
   suggested_goal: 'Track Todoist pricing',
@@ -56,5 +57,21 @@ describe('ChatWatchlistProposal', () => {
     expect(onCreated).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /view in intelligence/i }));
     expect(onCreated).toHaveBeenCalledWith('w1');
+  });
+
+  it('leaves unnamed candidates unpicked and says when no sources were found', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
+      ? { 'https://todoist.com/': [] }
+      : { ...COMPETITORS, products: [
+        { ...COMPETITORS.products[0], name: 'Named', official_website: 'https://todoist.com/' },
+        { ...COMPETITORS.products[0], name: 'Unnamed', official_website: 'https://blog.example/', suggested: false }
+      ] })));
+    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+
+    await waitFor(() => expect(screen.getByLabelText('Track Named')).toBeChecked());
+    expect(screen.getByLabelText('Track Unnamed')).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
+    expect(await screen.findByText(/no source pages were found/i)).toBeInTheDocument();
   });
 });
