@@ -162,6 +162,29 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         await ScoutDiscovery(tool).stage_a(NOTE_PROMPT)
         self.assertEqual(tool.calls[0][0], ["Notion pricing page", "Obsidian pricing page"])
 
+    async def test_sentence_words_do_not_use_up_named_lookups(self) -> None:
+        tool = StubBatchTool(NOTE_RESULTS)
+        await ScoutDiscovery(tool).stage_a("Please watch Notion, Asana, Trello and Jira.")
+        self.assertEqual(tool.calls[0][0], ["Notion official website", "Asana official website",
+                                            "Trello official website", "Jira official website"])
+
+    async def test_names_beyond_the_lookup_limit_are_reported(self) -> None:
+        scout = ScoutDiscovery(StubBatchTool(NOTE_RESULTS))
+        await scout.stage_a("Compare Alpha, Bravo, Charlie, Delta, Echo and Foxtrot.")
+        self.assertEqual(len(scout.search_tool_caller.calls[0][0]), 5)
+        self.assertTrue(any("Foxtrot" in warning for warning in scout.warnings))
+
+    async def test_dotted_product_names_match_their_domain(self) -> None:
+        results = [{"url": "https://monday.com/pricing", "title": "Best work platform compared", "snippet": "Plans"},
+                   {"url": "https://cal.com/pricing", "title": "Cal.com pricing", "snippet": "Plans"}]
+        products = await ScoutDiscovery(StubBatchTool(results)).stage_a("I build Cal.com. Track Monday.com pricing.")
+        by_site = {product.official_website: product for product in products}
+
+        self.assertEqual(by_site["https://monday.com/"].name, "Monday.com")
+        self.assertTrue(by_site["https://monday.com/"].suggested)
+        self.assertEqual(by_site["https://monday.com/"].kind, "competitor")
+        self.assertEqual(by_site["https://cal.com/"].kind, "own")
+
     async def test_unnamed_candidates_are_not_suggested(self) -> None:
         results = [{"url": "https://rival.example/", "title": "Rival - Team tasks", "snippet": "Tasks"}]
         products = await ScoutDiscovery(StubBatchTool(results)).stage_a(PROMPT)

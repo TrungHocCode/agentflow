@@ -769,7 +769,9 @@ class WorkerAgent(BaseAgent):
         except Exception as e:
             status = "failed"
             context_error = isinstance(e, ContextBudgetExceeded) or "exceed_context_size_error" in str(e)
-            model_failure = None if context_error else classify_model_failure(e)
+            # worker_error_id is set only when the model call itself failed, so a database
+            # outage elsewhere in this block is not reported as a model problem.
+            model_failure = classify_model_failure(e) if worker_error_id and not context_error else None
             error_code = (e.code if isinstance(e, (RunBudgetExceeded, RunNoLongerActive)) else
                           "context_budget_exceeded" if context_error else
                           model_failure.code if model_failure else "worker_execution_failed")

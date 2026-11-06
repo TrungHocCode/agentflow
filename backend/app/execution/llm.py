@@ -7,6 +7,7 @@ from langchain_core.language_models import BaseChatModel
 
 from app.core.config import settings
 from app.execution.model_router import InferencePurpose, model_name_for
+from app.shared.errors import ApplicationError
 
 
 @dataclass(frozen=True)
@@ -34,7 +35,8 @@ MODEL_UNAVAILABLE = ModelFailure(
     "model_unavailable",
     "The local model could not answer. Check Ollama and run again.",
 )
-_OUT_OF_MEMORY_MARKERS = ("out of memory", "out-of-memory", "failed to allocate", "unable to allocate")
+_OUT_OF_MEMORY_MARKERS = ("out of memory", "out-of-memory", "failed to allocate", "unable to allocate",
+                          "requires more system memory", "requires more memory")
 
 
 def classify_model_failure(exc: BaseException) -> ModelFailure | None:
@@ -44,16 +46,22 @@ def classify_model_failure(exc: BaseException) -> ModelFailure | None:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        # Application errors wrap other dependencies, such as the database.
+        if isinstance(current, ApplicationError):
+            return None
         text = str(current).lower()
         # Matched by name so this module keeps its lazy dependency on the Ollama client.
-        if type(current).__name__ == "ResponseError":
+        if type(current).__name__ == "ResponseError" and type(current).__module__.startswith("ollama"):
             if any(marker in text for marker in _OUT_OF_MEMORY_MARKERS):
                 return MODEL_OUT_OF_MEMORY
             if getattr(current, "status_code", None) == 404 or "not found" in text:
                 return MODEL_NOT_FOUND
             return MODEL_UNAVAILABLE
-        if isinstance(current, (ConnectionError, httpx.TransportError)):
+        if isinstance(current, (ConnectionError, httpx.ConnectError, httpx.ConnectTimeout)):
             return MODEL_UNREACHABLE
+        # The server was reached but did not answer, so "start it" would be the wrong advice.
+        if isinstance(current, httpx.TransportError):
+            return MODEL_UNAVAILABLE
         current = current.__cause__ or current.__context__
     return None
 

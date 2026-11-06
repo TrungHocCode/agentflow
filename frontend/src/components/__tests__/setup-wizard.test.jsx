@@ -142,6 +142,22 @@ describe('setup wizard story', () => {
     expect(screen.getByLabelText('Watchlist name')).toHaveValue('Todoist Renamed watch');
   });
 
+  it('keeps one own product when discovery also finds one', async () => {
+    const discovered = { ...COMPETITORS.products[0], name: 'TaskFlow', kind: 'own', official_website: 'https://taskflow.example/' };
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...COMPETITORS, products: [discovered, COMPETITORS.products[1]] })));
+    render(<WatchlistSetup onCreated={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByLabelText(/describe your product/i), { target: { value: 'I make TaskFlow' } });
+    fireEvent.click(nextButton());
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByLabelText('Track TaskFlow')).toBeChecked());
+
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /find competitors/i })).toBeEnabled());
+
+    const roles = screen.getAllByLabelText('Product role').map((select) => select.value);
+    expect(roles.filter((role) => role === 'own')).toHaveLength(1);
+  });
+
   it('only pre-ticks products the user named', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({
       ...COMPETITORS,

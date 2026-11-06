@@ -145,7 +145,11 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
           dimensions.length ? dimensions : ['pricing']
         )
       );
-      setProducts((current) => [...current.filter((item) => item.kind === 'own'), ...competitors]);
+      setProducts((current) => {
+        const own = current.filter((item) => item.kind === 'own');
+        // A watchlist holds one own product, so keep the one already chosen.
+        return [...own, ...competitors.filter((item) => own.length === 0 || item.kind !== 'own')];
+      });
       setWarnings(recommendation.warnings || []);
       setDiscovered(true);
       setGoal((current) => current || recommendation.suggested_goal || prompt);

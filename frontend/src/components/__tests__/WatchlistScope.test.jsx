@@ -10,7 +10,7 @@ const WATCHLIST = {
     id: 'r1',
     config: {
       goal: 'Track pricing',
-      dimensions: ['pricing'],
+      dimensions: ['pricing', 'release_notes'],
       workflow_version_id: 'v1',
       products: [
         {
@@ -80,6 +80,27 @@ describe('WatchlistScope', () => {
     fireEvent.change(screen.getByLabelText('Product name'), { target: { value: 'Notion' } });
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => expect(patchBody().config.products[0].sources).toHaveLength(2));
+  });
+
+  it('offers only source kinds within the watchlist dimensions', () => {
+    const features = {
+      ...WATCHLIST,
+      current_revision: {
+        ...WATCHLIST.current_revision,
+        config: {
+          ...WATCHLIST.current_revision.config,
+          dimensions: ['features'],
+          products: [{ id: 'p1', name: 'Notion', kind: 'competitor', sources: [] }]
+        }
+      }
+    };
+    render(<WatchlistScope watchlist={features} onSaved={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.click(screen.getByRole('button', { name: /add source/i }));
+
+    const select = screen.getByLabelText('Source kind');
+    expect(select).toHaveValue('features');
+    expect([...select.options].map((option) => option.value)).toEqual(['features']);
   });
 
   it('keeps the draft open and shows why when saving fails', async () => {

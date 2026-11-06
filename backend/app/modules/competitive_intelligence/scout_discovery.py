@@ -23,7 +23,7 @@ from app.shared.collection_scope import normalized_url, same_site
 from app.shared.errors import DependencyUnavailableError
 
 MAX_BATCH_QUERIES = 5
-MAX_NAMED_QUERIES = 3
+MAX_NAMED_QUERIES = 5
 MAX_RESULTS_PER_QUERY = 5
 MAX_PRODUCTS = 10
 MAX_SOURCES_PER_DOMAIN = 5
@@ -42,9 +42,10 @@ _DIMENSION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "release_notes": ("release notes", "releases", "changelog", "what's new"),
 }
 _GENERIC_CAPITALIZED = {
-    "A", "An", "Build", "Compare", "Competitor", "Competitors", "Find", "Focus", "I",
-    "Make", "Monitor", "My", "Our", "Plan", "Pricing", "Product", "Products", "The",
-    "Track", "Tracking", "Use", "We",
+    "A", "An", "And", "Build", "Check", "Compare", "Competitor", "Competitors", "Find", "Focus", "Follow",
+    "Help", "Hi", "Hello", "How", "I", "Keep", "Make", "Monitor", "My", "Need", "Our", "Plan", "Please",
+    "Pricing", "Product", "Products", "Show", "Tell", "The", "They", "Track", "Tracking", "Use", "Want",
+    "Watch", "We", "What", "Who", "Why",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
@@ -54,7 +55,7 @@ _STOPWORDS = {
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9&.+_-]*")
 _OWN_PRODUCT = re.compile(
     r"\b(?i:i|we)(?i:'m|'re| am| are)?\s+(?i:make|making|build|building|built|run|running|sell|selling|own|develop|"
-    r"developing|created?)\s+([A-Z][A-Za-z0-9&+_-]*)")
+    r"developing|created?)\s+([A-Z][A-Za-z0-9&.+_-]*)")
 # Editorial pages rank highly for competitor searches but are not products to track.
 _ARTICLE_TITLE = re.compile(
     r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked)\b", re.IGNORECASE)
@@ -139,7 +140,7 @@ def _product_terms(prompt: str) -> list[str]:
             continue
         seen.add(key)
         terms.append(token)
-    return terms[:4]
+    return terms
 
 
 def _fallback_keywords(prompt: str) -> list[str]:
@@ -152,7 +153,7 @@ def _fallback_keywords(prompt: str) -> list[str]:
 
 def _own_product(prompt: str) -> str | None:
     match = _OWN_PRODUCT.search(prompt)
-    return match.group(1) if match else None
+    return match.group(1).rstrip("&.+_-") if match else None
 
 
 def _compact(value: str) -> str:
@@ -162,8 +163,9 @@ def _compact(value: str) -> str:
 def _named_term(domain: str, terms: list[str]) -> str | None:
     """Return the prompt's product name when a result's domain is that product's own."""
 
-    label = _compact(domain.split(".")[0])
-    return next((term for term in terms if _compact(term) == label), None)
+    # Compare the whole domain too, so a name like "Monday.com" matches monday.com.
+    names = {_compact(domain.split(".")[0]), _compact(domain)}
+    return next((term for term in terms if _compact(term) in names), None)
 
 
 def _ranking_terms(prompt: str, product_terms: list[str]) -> set[str]:
@@ -253,6 +255,9 @@ class ScoutDiscovery:
             # mostly returns comparison articles about them.
             suffix = DIMENSION_QUERY_TERMS[dimensions[0]] if dimensions else "official website"
             queries = [f"{term} {suffix}" for term in named[:MAX_NAMED_QUERIES]]
+            if len(named) > MAX_NAMED_QUERIES:
+                self._warn(f"Searched the first {MAX_NAMED_QUERIES} named products; add the rest manually: "
+                           f"{', '.join(named[MAX_NAMED_QUERIES:])}.")
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:

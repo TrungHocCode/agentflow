@@ -14,17 +14,44 @@ from app.execution.llm import (
 )
 from app.execution.state import Task
 from app.infrastructure.model_probe import OllamaModelProbe
+from app.shared.errors import PersistenceError
 
 
 class ResponseError(Exception):
-    """Stands in for ollama.ResponseError, which is matched by name."""
+    """Stands in for ollama.ResponseError, which is matched by name and module."""
 
     def __init__(self, error: str, status_code: int = 500) -> None:
         super().__init__(error)
         self.status_code = status_code
 
 
+ResponseError.__module__ = "ollama._types"
+
+
 class TestClassifyModelFailure(unittest.TestCase):
+    def test_ollama_pre_load_memory_error(self) -> None:
+        error = ResponseError("model requires more system memory (8.3 GiB) than is available (6.9 GiB)")
+        self.assertIs(classify_model_failure(error), MODEL_OUT_OF_MEMORY)
+
+    def test_read_timeout_does_not_tell_the_user_to_start_ollama(self) -> None:
+        self.assertIs(classify_model_failure(httpx.ReadTimeout("slow")), MODEL_UNAVAILABLE)
+        self.assertIs(classify_model_failure(httpx.ConnectTimeout("no route")), MODEL_UNREACHABLE)
+
+    def test_other_dependencies_are_not_blamed_on_the_model(self) -> None:
+        class RedisResponseError(Exception):
+            pass
+
+        RedisResponseError.__name__ = "ResponseError"
+        RedisResponseError.__module__ = "redis.exceptions"
+        self.assertIsNone(classify_model_failure(RedisResponseError("wrong type")))
+        try:
+            try:
+                raise ConnectionRefusedError("postgres is down")
+            except ConnectionRefusedError as inner:
+                raise PersistenceError("Could not load the run.") from inner
+        except PersistenceError as outer:
+            self.assertIsNone(classify_model_failure(outer))
+
     def test_out_of_memory_on_gpu_and_cpu(self) -> None:
         for text in ("llama-server reported out-of-memory during startup: cudaMalloc failed: out of memory",
                      "failed to allocate CPU_REPACK buffer of size 1765048320",
@@ -76,6 +103,23 @@ class TestWorkerReportsModelFailure(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(last_error["message"], MODEL_OUT_OF_MEMORY.message)
         self.assertTrue(last_error["retryable"])
         self.assertEqual(last_error["category"], "dependency")
+
+
+class TestWorkerDoesNotBlameTheModelForOtherOutages(unittest.IsolatedAsyncioTestCase):
+    async def test_database_outage_before_the_model_call(self) -> None:
+        llm = MagicMock(spec=BaseChatModel)
+        llm.ainvoke = AsyncMock()
+        store = MagicMock()
+        store.check_active = AsyncMock(side_effect=ConnectionRefusedError("postgres is down"))
+        agent = WorkerAgent(name="worker", system_prompt="Do the task.", llm=llm)
+        agent.evidence_store = store
+        task = Task(id=1, node="worker", status="running", description="Collect")
+
+        output = await agent.execute({"current_task": task, "messages": [], "metadata": {"run_id": "r1"}})
+
+        llm.ainvoke.assert_not_awaited()
+        self.assertEqual(output["metadata"]["last_error"]["code"], "worker_execution_failed")
+        self.assertNotIn("Ollama", output["plan"][0].error)
 
 
 class TestOllamaModelProbe(unittest.IsolatedAsyncioTestCase):

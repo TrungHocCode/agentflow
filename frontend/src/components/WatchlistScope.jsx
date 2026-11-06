@@ -7,8 +7,6 @@ import { Input } from './ui/input';
 import { Spinner } from './ui/spinner';
 import ErrorNotice from './ErrorNotice';
 
-const KINDS = ['pricing', 'features', 'integrations', 'release_notes'];
-
 function kindLabel(value) {
   return String(value || '').replaceAll('_', ' ');
 }
@@ -42,6 +40,8 @@ function toPayloadProducts(draftProducts, originalProducts) {
 export default function WatchlistScope({ watchlist, onSaved }) {
   const revision = watchlist.current_revision;
   const products = revision?.config?.products || [];
+  // The backend accepts only source kinds within the watchlist's dimensions.
+  const kinds = revision?.config?.dimensions || [];
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -200,7 +200,7 @@ export default function WatchlistScope({ watchlist, onSaved }) {
                   onChange={(event) => updateSource(index, sub, { kind: event.target.value })}
                   aria-label="Source kind"
                 >
-                  {KINDS.map((kind) => <option key={kind} value={kind}>{kindLabel(kind)}</option>)}
+                  {kinds.map((kind) => <option key={kind} value={kind}>{kindLabel(kind)}</option>)}
                 </select>
                 <Button
                   type="button"
@@ -221,7 +221,7 @@ export default function WatchlistScope({ watchlist, onSaved }) {
                 variant="ghost"
                 size="sm"
                 onClick={() => updateProduct(index, {
-                  sources: [...(product.sources || []), { url: '', kind: 'pricing', enabled: true }]
+                  sources: [...(product.sources || []), { url: '', kind: kinds[0], enabled: true }]
                 })}
               >
                 <Plus data-icon="inline-start" />Add source
