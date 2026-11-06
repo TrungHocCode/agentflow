@@ -130,6 +130,30 @@ class TestCIConfiguration(IsolatedAsyncioTestCase):
         with self.assertRaises(ValidationError):
             await self.service.prepare(self.watchlist, str(revision.id), "version")
 
+    async def test_sources_may_live_anywhere_on_the_official_site(self) -> None:
+        revision = self.watchlist.current_revision
+        competitor = revision.config.products[1]
+        cases = [("https://rival.invalid/", "https://www.rival.invalid/pricing"),
+                 ("https://www.rival.invalid/", "https://rival.invalid/pricing"),
+                 ("https://rival.invalid/", "https://docs.rival.invalid/changelog"),
+                 ("https://www.rival.invalid/", "https://docs.rival.invalid/changelog")]
+        for website, url in cases:
+            with self.subTest(website=website, url=url):
+                competitor.official_website, competitor.sources[0].url = website, url
+                await self.service.prepare(self.watchlist, str(revision.id), "version")
+
+    async def test_lookalike_hosts_are_not_the_official_site(self) -> None:
+        revision = self.watchlist.current_revision
+        competitor = revision.config.products[1]
+        competitor.official_website = "https://rival.invalid/"
+        for url in ("https://rival.invalid.attacker.invalid/pricing", "https://notrival.invalid/pricing"):
+            with self.subTest(url=url):
+                competitor.sources[0].url = url
+                with self.assertRaises(ValidationError) as caught:
+                    await self.service.prepare(self.watchlist, str(revision.id), "version")
+                self.assertIn(url, caught.exception.message)
+                self.assertIn(competitor.name, caught.exception.message)
+
     async def test_resolved_catalog_ids_use_frozen_role_and_tool_names(self) -> None:
         document = self.runs.create_workflow_run.return_value
         document.plan[0].agent_id = "agent-uuid"

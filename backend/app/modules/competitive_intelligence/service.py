@@ -18,6 +18,7 @@ from app.modules.conversations.ports import ConversationRepository
 from app.modules.runs.models import RunDocument, RunResponse
 from app.modules.runs.service import RunService
 from app.modules.system.ports import RateLimiter
+from app.shared.collection_scope import same_site
 from app.shared.errors import ConflictError, ResourceNotFoundError, ValidationError
 
 SAFE_ROLES = {"source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst",
@@ -146,6 +147,15 @@ class IntelligenceService:
         return proposal
 
     @staticmethod
+    def _on_official_site(source_url: str, official_website: str | None) -> bool:
+        """Treat www and subdomains as one site, as collection and redirect policy already do."""
+        if not official_website:
+            return False
+        source_host = urlsplit(source_url).hostname or ""
+        official_host = (urlsplit(official_website).hostname or "").removeprefix("www.")
+        return bool(source_host and official_host) and same_site(source_host, official_host)
+
+    @staticmethod
     def ready(watchlist: Watchlist, revision_id: str, version_id: str) -> None:
         revision = watchlist.current_revision
         if watchlist.status != "active" or str(revision.id) != revision_id:
@@ -162,9 +172,10 @@ class IntelligenceService:
             raise ValidationError("At least one approved public source is required.")
         for product in config.products:
             for source in product.sources:
-                if source.enabled and (not product.official_website or
-                        urlsplit(source.url).hostname != urlsplit(product.official_website).hostname):
-                    raise ValidationError("Enabled sources must match the product's declared official website host.")
+                if source.enabled and not IntelligenceService._on_official_site(source.url, product.official_website):
+                    raise ValidationError(
+                        f"Source {source.url} is not on the official website of {product.name}. "
+                        "Correct the source or the product website.")
 
     @staticmethod
     def validate_execution(document: RunDocument, watchlist: Watchlist) -> None:

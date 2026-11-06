@@ -284,11 +284,11 @@ export default function WatchlistSetup({ onCreated, onCancel }) {
         <ol className="wizard-next-steps">
           <li>
             <span className="wizard-next-steps__index">1</span>
-            <span><strong>Approve the revision</strong><small>Confirm the sources and scope you just reviewed.</small></span>
+            <span><strong>Check the sources</strong><small>Open the watchlist and correct anything that looks wrong.</small></span>
           </li>
           <li>
             <span className="wizard-next-steps__index">2</span>
-            <span><strong>Run now</strong><small>Capture a first baseline for every tracked source.</small></span>
+            <span><strong>Approve &amp; run</strong><small>Confirm the scope and capture a first baseline for every tracked source.</small></span>
           </li>
           <li>
             <span className="wizard-next-steps__index">3</span>

@@ -3,6 +3,7 @@ import { ArrowLeft, Play } from 'lucide-react';
 import { cancelRun, subscribeRunSSEStream } from '../services/api';
 import {
   approveRevision,
+  archiveWatchlist,
   buildBrief,
   createCollectionWorkflow,
   getWatchlist,
@@ -15,6 +16,7 @@ import {
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Spinner } from './ui/spinner';
+import { ConfirmDialog } from './ui/confirm-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import BriefView from './BriefView';
 import ChangeDetail from './ChangeDetail';
@@ -25,6 +27,7 @@ import LoadingState from './LoadingState';
 import { ApprovalBadge, OutcomeBadge, QualityBadge, StatusBadge } from './OutcomeBadge';
 import ScheduleSection from './ScheduleSection';
 import TimelineAndAsk from './TimelineAndAsk';
+import WatchlistScope from './WatchlistScope';
 import { dateLabel, revisionLabel, runLabel } from '../lib/labels';
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'running', 'pending']);
@@ -41,6 +44,7 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
   const [error, setError] = useState('');
   const [action, setAction] = useState('');
   const [notice, setNotice] = useState('');
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -151,6 +155,25 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
     }
   }
 
+  async function handleArchive() {
+    setArchiveOpen(false);
+    setAction('archive');
+    setError('');
+    try {
+      await archiveWatchlist(watchlistId);
+      onBack();
+    } catch (err) {
+      setError(err.message);
+      setAction('');
+    }
+  }
+
+  function handleScopeSaved(updated) {
+    setWatchlist(updated);
+    setNotice('Saved as a new revision. It is approved when you next run it.');
+    setRefreshKey((key) => key + 1);
+  }
+
   async function handleCancelRun(runId) {
     setAction(`cancel-${runId}`);
     setError('');
@@ -251,18 +274,26 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
             </div>
           </Card>
 
+          <WatchlistScope watchlist={watchlist} onSaved={handleScopeSaved} />
+
           <Card className="ci-section p-4">
             <div className="ci-section-head">
               <div>
                 <p className="ci-section-title">Run the current revision</p>
-                <p className="ci-section-caption">Runs the current tracked sources and prepares a brief.</p>
+                <p className="ci-section-caption">
+                  {approved
+                    ? 'Runs the current tracked sources and prepares a brief.'
+                    : 'Running approves the products and sources listed above, then captures them and prepares a brief.'}
+                </p>
               </div>
               <div className="ci-heading-actions">
                 <Button type="button" onClick={handleRunNow} disabled={action === 'run' || Boolean(activeRun)}>
                   {action === 'run'
                     ? <Spinner data-icon="inline-start" aria-hidden="true" />
                     : <Play data-icon="inline-start" />}
-                  {action === 'run' ? 'Starting…' : activeRun ? 'Run in progress…' : 'Run now'}
+                  {action === 'run'
+                    ? 'Starting…'
+                    : activeRun ? 'Run in progress…' : approved ? 'Run now' : 'Approve & run'}
                 </Button>
                 {activeRun && (
                   <Button
@@ -449,8 +480,37 @@ export default function WatchlistDetail({ watchlistId, onBack }) {
             <p className="ci-section-title">Timeline and history Q&amp;A</p>
             <TimelineAndAsk watchlistId={watchlistId} />
           </Card>
+
+          <Card className="ci-section p-4">
+            <div className="ci-section-head">
+              <div>
+                <p className="ci-section-title">Archive this watchlist</p>
+                <p className="ci-section-caption">
+                  Stops future runs and hides it from your lists. Its history is kept.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setArchiveOpen(true)}
+                disabled={action === 'archive' || Boolean(activeRun)}
+              >
+                {action === 'archive' && <Spinner data-icon="inline-start" aria-hidden="true" />}
+                Archive
+              </Button>
+            </div>
+          </Card>
         </TabsContent>
       </Tabs>
+      <ConfirmDialog
+        open={archiveOpen}
+        title="Archive this watchlist?"
+        description={`"${watchlist.name}" stops running and leaves your lists. Its history is kept, but it cannot be restored from here.`}
+        confirmLabel="Archive"
+        tone="destructive"
+        onConfirm={handleArchive}
+        onCancel={() => setArchiveOpen(false)}
+      />
     </div>
   );
 }
