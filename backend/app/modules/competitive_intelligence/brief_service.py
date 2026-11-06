@@ -7,6 +7,7 @@ fully verified — findings carry quotation-level labels only.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 import json
 from datetime import datetime
 from pathlib import Path
@@ -44,9 +45,14 @@ class BriefService:
         """Name sources from the configuration frozen for this run."""
         scope = (run.input_data or {}).get("competitive_intelligence")
         config = scope.get("config") if isinstance(scope, dict) else None
-        return {str(source["id"]): f"{product.get('name')} ({str(source.get('kind')).replace('_', ' ')})"[:300]
-                for product in (config or {}).get("products") or []
-                for source in product.get("sources") or [] if source.get("id")}
+        entries = [(str(source["id"]), f"{product.get('name')} ({str(source.get('kind')).replace('_', ' ')})",
+                    str(source.get("url") or ""))
+                   for product in (config or {}).get("products") or []
+                   for source in product.get("sources") or [] if source.get("id")]
+        counts = Counter(label for _, label, _ in entries)
+        # Two pages of one kind share a label, so their URL tells them apart.
+        return {identity: (f"{label} {url}" if counts[label] > 1 else label)[:300]
+                for identity, label, url in entries}
 
     @staticmethod
     def _analyst_findings(run) -> list[BriefFinding]:
@@ -124,8 +130,8 @@ class BriefService:
             if (task.config or {}).get("investigation_round_id")
             and task.status in ("failed", "interrupted", "skipped"))
         limitations = limitations[:16]
-        changed_sources = sorted({labels.get(str(c.source_id), str(c.source_id))
-                                  for c in comparisons if c.outcome == "changed"})
+        changed_sources = sorted(labels.get(identity, identity)
+                                 for identity in {str(c.source_id) for c in comparisons if c.outcome == "changed"})
         summary = (f"Run compared {len(comparisons)} source(s): "
                    f"{len(changed_sources)} changed, {observed_count} finding(s). "
                    f"Changed sources: {', '.join(changed_sources) or 'none'}.")[:8000]

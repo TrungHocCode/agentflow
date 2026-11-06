@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app.core.config import settings
 from app.execution.adapters import LangGraphExecutionAdapter
+from app.execution.run_budget import RunBudgetExceeded, RunNoLongerActive
 from app.execution.state import Task
 from app.modules.runs.models import RunDocument
 from app.modules.runs.service import MAX_EXECUTION_PASSES, RunService
@@ -123,6 +124,48 @@ class TestRoundFailuresDoNotDiscardARun(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_collection_step_still_fails_the_run(self) -> None:
         finished = await self.run([self.finished(1, "failed", False, "Could not collect.")])
         self.assertEqual(finished.status, "failed")
+
+
+class TestStreamFailureDuringFollowups(unittest.IsolatedAsyncioTestCase):
+    class Port:
+        def __init__(self, error: Exception) -> None:
+            self.error, self.passes = error, 0
+
+        def execute_run(self, run_id: str, state: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+            self.passes += 1
+            return self._first(state) if self.passes == 1 else self._later()
+
+        async def _first(self, state: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+            done = state["plan"][0].model_copy(update={"status": "done"})
+            yield {"worker_node": {"plan": [done], "current_task": done, "result_storage": [
+                {"task_id": done.id, "status": "done", "result": "ok"}]}}
+
+        async def _later(self) -> AsyncGenerator[Dict[str, Any], None]:
+            raise self.error
+            yield {}
+
+    async def run_with(self, error: Exception) -> RunDocument:
+        async def on_task_completed(run, task, status):
+            if task.id != 1:
+                return []
+            return [Task(id=2, node="evidence_verifier", status="pending", description="Verify",
+                         config={"investigation_round_id": "r1"})]
+
+        service, repository = run_service(self.Port(error), SimpleNamespace(on_task_completed=on_task_completed))
+        document = await queued_run(repository, [step(1, "Collect")])
+        return await service.execute_queued_run(document.run_id)
+
+    async def test_running_out_of_time_keeps_the_finished_collection(self) -> None:
+        finished = await self.run_with(RunBudgetExceeded("Run wall-clock budget exhausted."))
+
+        self.assertEqual(finished.status, "completed")
+        self.assertEqual([(task.id, task.status) for task in finished.plan], [(1, "done"), (2, "interrupted")])
+        self.assertEqual(finished.metadata["partial_task_ids"], [2])
+
+    async def test_cancellation_is_not_swallowed(self) -> None:
+        finished = await self.run_with(RunNoLongerActive("Cancelled."))
+        self.assertEqual(finished.status, "failed")
+        self.assertEqual(finished.error_code, "run_cancelled")
 
 
 class RecordingPort:

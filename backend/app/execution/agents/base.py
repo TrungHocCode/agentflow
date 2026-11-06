@@ -35,6 +35,7 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
 logger = logging.getLogger(__name__)
 
 
+_TOOL_OUTPUT_TAG = re.compile(r"<\s*/?\s*tool_output[^>]*>", re.IGNORECASE)
 ROUND_EVIDENCE_MAX_CHARS = 1800
 ROUND_COMPARISON_MAX_CHARS = 1500
 # Private product context stays away from roles that collect from the web.
@@ -79,6 +80,38 @@ def _run_input_context(state: State) -> str:
     return "\n".join(lines)
 
 
+def fence_untrusted(text: str) -> str:
+    """Wrap external text as tool output, removing any tag that could close the fence early."""
+    return f"<tool_output>\n{_TOOL_OUTPUT_TAG.sub('[removed tag]', text)}\n</tool_output>"
+
+
+def _bounded_excerpts(excerpts: list[str]) -> str:
+    """Share the evidence budget between excerpts and say so when anything was cut."""
+    share = ROUND_EVIDENCE_MAX_CHARS // len(excerpts)
+    shown = "\n---\n".join(excerpt[:share] for excerpt in excerpts)
+    if any(len(excerpt) > share for excerpt in excerpts):
+        shown += "\n---\n[Excerpts shortened to fit; do not assume this is all of the evidence.]"
+    return shown
+
+
+def _comparison_context(config: Dict[str, Any]) -> str:
+    """Render criteria first and whole; drop product detail rather than cut JSON mid-value."""
+    criteria = [{"field": item.get("field"), "objective": item.get("objective")}
+                for item in config.get("comparison_criteria") or []]
+    own = [product for product in config.get("products") or [] if product.get("kind") == "own"]
+    detailed = [{"name": product.get("name"), "description": product.get("description"),
+                 "target_segments": (product.get("profile") or {}).get("target_segments"),
+                 "facts": (product.get("profile") or {}).get("facts")} for product in own]
+    brief = [{"name": product.get("name"), "target_segments": (product.get("profile") or {}).get("target_segments")}
+             for product in own]
+    for products in (detailed, brief, [{"name": product.get("name")} for product in own]):
+        rendered = json.dumps({"comparison_criteria": criteria, "own_products": products}, ensure_ascii=False)
+        if len(rendered) <= ROUND_COMPARISON_MAX_CHARS:
+            return rendered
+    return json.dumps({"comparison_criteria": [item.get("field") for item in criteria],
+                       "own_products": [product.get("name") for product in own]}, ensure_ascii=False)
+
+
 def _round_context(state: State, task: Task) -> str:
     """Give an investigation round task the evidence and comparison context its scope refers to.
 
@@ -90,24 +123,11 @@ def _round_context(state: State, task: Task) -> str:
     sections: list[str] = []
     excerpts = [str(text) for text in (task.input_mapping or {}).get("evidence_excerpts") or [] if text]
     if excerpts:
-        evidence = "\n---\n".join(excerpts)[:ROUND_EVIDENCE_MAX_CHARS]
-        sections.append(f"Observed evidence for this task:\n<tool_output>\n{evidence}\n</tool_output>")
+        sections.append(f"Observed evidence for this task:\n{fence_untrusted(_bounded_excerpts(excerpts))}")
     input_data = (state.get("metadata") or {}).get("input_data") or {}
     config = (input_data.get("competitive_intelligence") or {}).get("config") or {}
-    if task.node not in ROUND_COMPARISON_ROLES:
-        config = {}
-    own_products = [
-        {"name": product.get("name"), "description": product.get("description"),
-         "target_segments": (product.get("profile") or {}).get("target_segments"),
-         "facts": (product.get("profile") or {}).get("facts")}
-        for product in config.get("products") or [] if product.get("kind") == "own"
-    ]
-    criteria = [{"field": item.get("field"), "objective": item.get("objective")}
-                for item in config.get("comparison_criteria") or []]
-    if own_products or criteria:
-        comparison = json.dumps({"own_products": own_products, "comparison_criteria": criteria},
-                                ensure_ascii=False)[:ROUND_COMPARISON_MAX_CHARS]
-        sections.append(f"Comparison context from the approved watchlist:\n{comparison}")
+    if task.node in ROUND_COMPARISON_ROLES and (config.get("products") or config.get("comparison_criteria")):
+        sections.append(f"Comparison context from the approved watchlist:\n{_comparison_context(config)}")
     return "\n".join(["", "--- Investigation Context ---", *sections, "-----------------------------", ""]) \
         if sections else ""
 
@@ -755,7 +775,7 @@ class WorkerAgent(BaseAgent):
                                 method=str(tool_args.get("method") or "GET"))
                         allowance = observation_allowance(messages, self.tools,
                                                           len(response.tool_calls) - call_index)
-                        wrapped_output = f"<tool_output>\n{project_tool_result(observation, allowance)}\n</tool_output>"
+                        wrapped_output = fence_untrusted(project_tool_result(observation, allowance))
 
                         messages.append(ToolMessage(
                             content=wrapped_output,

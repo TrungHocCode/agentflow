@@ -904,10 +904,21 @@ class RunService:
             """Run the graph again for tasks observers add, since it cannot see them mid-stream."""
             nonlocal followups_added
             stream_input: State = initial_state
-            for _ in range(MAX_EXECUTION_PASSES):
+            for execution_pass in range(MAX_EXECUTION_PASSES):
                 followups_added = False
-                async for chunk in bounded_stream(self.execution_port.execute_run(run_id, stream_input)):
-                    yield chunk
+                try:
+                    async for chunk in bounded_stream(self.execution_port.execute_run(run_id, stream_input)):
+                        yield chunk
+                except RunNoLongerActive:
+                    raise
+                except Exception as exc:
+                    if execution_pass == 0:
+                        raise
+                    # The collection already finished; losing follow-up work must not discard it.
+                    logger.error("Follow-up execution stopped early",
+                                 exc_info=(type(exc), exc, exc.__traceback__), extra={"run_id": run_id})
+                    self._interrupt_round_tasks(run_doc, type(exc).__name__)
+                    return
                 pending = [task for task in run_doc.plan if task.status == "pending"]
                 if not followups_added or not pending:
                     return
@@ -1471,6 +1482,14 @@ class RunService:
                 logger.error("Run failed observer failed",
                              exc_info=(type(exc), exc, exc.__traceback__),
                              extra={"run_id": run_doc.run_id})
+
+    @classmethod
+    def _interrupt_round_tasks(cls, run_doc: RunDocument, reason: str) -> None:
+        run_doc.plan = [
+            task.model_copy(update={"status": "interrupted", "error": f"Stopped early ({reason})."})
+            if cls._is_round_task(task) and task.status in ("pending", "running") else task
+            for task in run_doc.plan
+        ]
 
     @staticmethod
     def _is_round_task(task: Task) -> bool:
