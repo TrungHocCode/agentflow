@@ -157,6 +157,47 @@ class TestDetectCandidates(unittest.TestCase):
         self.assertLessEqual(len(candidate.after_excerpt), 800)
         self.assertIsNotNone(candidate.before_start)
 
+    @staticmethod
+    def _page(pro: str = "$10", business: str = "$20", tagline: str = "Plans for every team") -> str:
+        # Shaped like a crawled pricing page: no headings, one line per block, long before the price.
+        filler = "\n".join(f"Feature {index}: unlimited boards, guests and history" for index in range(80))
+        return normalize_captured(f"{tagline}\n{filler}\nPro\n{pro} per member / month\nGet started\n"
+                                  f"Business\n{business} per member / month\nGet started\n", "pricing")
+
+    def test_deep_price_edit_shows_the_changed_line_with_its_plan(self) -> None:
+        before, after = self._page(), self._page(pro="$12")
+        [candidate] = detect_candidates(before, after, uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        self.assertEqual(candidate.kind, "modified")
+        self.assertEqual(candidate.before_excerpt, "Pro\n$10 per member / month")
+        self.assertEqual(candidate.after_excerpt, "Pro\n$12 per member / month")
+        self.assertEqual(after[candidate.after_start:candidate.after_end], candidate.after_excerpt)
+        self.assertEqual(before[candidate.before_start:candidate.before_end], candidate.before_excerpt)
+
+    def test_different_deep_edits_have_different_identities(self) -> None:
+        base = self._page()
+        pro = detect_candidates(base, self._page(pro="$12"), uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        business = detect_candidates(base, self._page(business="$25"), uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        self.assertNotEqual(pro[0].diff_hash, business[0].diff_hash)
+        self.assertIn("$25", business[0].after_excerpt)
+
+    def test_price_edit_leads_the_excerpt_when_other_lines_also_changed(self) -> None:
+        before = self._page()
+        noisy = "\n".join(f"Feature {index}: unlimited boards, guests and full history" for index in range(80))
+        after = normalize_captured(f"Plans for growing teams\n{noisy}\nPro\n$12 per member / month\nGet started\n"
+                                   "Business\n$20 per member / month\nGet started\n", "pricing")
+        [candidate] = detect_candidates(before, after, uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        self.assertTrue(candidate.after_excerpt.startswith("Pro\n$12 per member / month"))
+        self.assertLessEqual(len(candidate.after_excerpt), 800)
+
+    def test_inserted_line_keeps_both_sides_readable(self) -> None:
+        before = normalize_captured("Pro\n$10 per month\nGet started", "pricing")
+        after = normalize_captured("Pro\n$10 per month\nNow includes AI credits\nGet started", "pricing")
+        [candidate] = detect_candidates(before, after, uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        self.assertEqual(candidate.before_excerpt, "$10 per month")
+        self.assertEqual(candidate.after_excerpt, "$10 per month\nNow includes AI credits")
+        top = detect_candidates(before, "New: AI credits\n" + before, uuid4(), uuid4(), uuid4(), uuid4(), NOW)
+        self.assertEqual((top[0].before_excerpt, top[0].after_excerpt), ("Pro", "New: AI credits\nPro"))
+
     def test_added_and_removed_sections(self) -> None:
         before = normalize_captured("# Pricing\n\n$10\n", "pricing")
         after = normalize_captured("# Pricing\n\n$10\n\n# Integrations\n\nSlack.\n", "pricing")

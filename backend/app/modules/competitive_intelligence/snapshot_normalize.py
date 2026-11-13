@@ -5,7 +5,9 @@ currency, units, regions, plan names and qualifiers are preserved byte-for-byte 
 qualified pricing edit can never be normalized away.
 """
 
+import difflib
 import hashlib
+import json
 import re
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -23,6 +25,9 @@ _HEADING = re.compile(r"(?m)^(#{1,6})\s+(.+?)\s*$")
 # (safe direction: delays a baseline, never invents a change). Refine in CI-P6.
 _CHALLENGE_PHRASES = ("sign in to", "log in to", "login to continue", "verify you are human", "captcha",
                       "access denied", "please verify")
+# A currency amount ("$10", "US $5", "€9,99", "17.50 USD"); used only to order excerpts.
+_PRICE = re.compile(r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b")
+HUNK_SEPARATOR = "\n…\n"
 
 
 class Section(BaseModel):
@@ -139,6 +144,76 @@ def _excerpt(text: str) -> str:
     return text[:MAX_EXCERPT_CHARS]
 
 
+class _Hunk(BaseModel):
+    """One run of changed lines plus a context line; offsets are relative to the section text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    before: list[str]
+    after: list[str]
+    changed: tuple[list[str], list[str]]
+    before_span: tuple[int, int] | None
+    after_span: tuple[int, int] | None
+    has_price: bool
+
+
+def _line_starts(lines: list[str]) -> list[int]:
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line) + 1
+    return starts
+
+
+def _span(lines: list[str], starts: list[int], first: int, last: int) -> tuple[int, int] | None:
+    return (starts[first], starts[last - 1] + len(lines[last - 1])) if last > first else None
+
+
+def _changed_hunks(before_text: str, after_text: str) -> list[_Hunk]:
+    """Line-level hunks with one context line, so a deep edit is shown instead of the section start."""
+    old, new = before_text.split("\n"), after_text.split("\n")
+    old_starts, new_starts = _line_starts(old), _line_starts(new)
+    hunks: list[_Hunk] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        # The line above a change usually names what changed (a plan, a feature group).
+        lead = 1 if i1 > 0 and j1 > 0 else 0
+        # An insertion or deletion at the very top has an empty side; the next line fills it.
+        trail = 1 if not lead and (i1 == i2 or j1 == j2) and i2 < len(old) and j2 < len(new) else 0
+        b1, b2, a1, a2 = i1 - lead, i2 + trail, j1 - lead, j2 + trail
+        changed = (old[i1:i2], new[j1:j2])
+        hunks.append(_Hunk(before=old[b1:b2], after=new[a1:a2], changed=changed,
+                           before_span=_span(old, old_starts, b1, b2), after_span=_span(new, new_starts, a1, a2),
+                           has_price=any(_PRICE.search(line) for side in changed for line in side)))
+    return hunks
+
+
+def _join_excerpt(parts: list[list[str]]) -> str:
+    text = HUNK_SEPARATOR.join("\n".join(lines) for lines in parts if lines)
+    return text if len(text) <= MAX_EXCERPT_CHARS else text[:MAX_EXCERPT_CHARS - 1] + "…"
+
+
+def _focused_change(before: Section, after: Section) -> tuple[str, str, tuple[int, int], tuple[int, int], str]:
+    """Excerpts built from the changed lines; price edits lead so truncation never hides them."""
+    hunks = _changed_hunks(before.text, after.text)
+    ordered = sorted(hunks, key=lambda hunk: not hunk.has_price)
+    before_excerpt = _join_excerpt([hunk.before for hunk in ordered])
+    after_excerpt = _join_excerpt([hunk.after for hunk in ordered])
+    # Every changed line counts toward identity, not only what fits in the excerpt.
+    fingerprint = hash_text(json.dumps([[hunk.changed[0], hunk.changed[1]] for hunk in hunks], ensure_ascii=False))
+    before_spans = [hunk.before_span for hunk in hunks if hunk.before_span]
+    after_spans = [hunk.after_span for hunk in hunks if hunk.after_span]
+    before_range = ((before.start + before_spans[0][0], before.start + before_spans[-1][1]) if before_spans
+                    else (before.start, before.end))
+    after_range = ((after.start + after_spans[0][0], after.start + after_spans[-1][1]) if after_spans
+                   else (after.start, after.end))
+    if not before_excerpt or not after_excerpt:
+        # Only possible when one side is a single changed line with nothing around it.
+        before_excerpt, after_excerpt = before_excerpt or _excerpt(before.text), after_excerpt or _excerpt(after.text)
+    return before_excerpt, after_excerpt, before_range, after_range, fingerprint
+
+
 def _same_section_multiset(before_text: str, after_text: str) -> bool:
     """Position-independent section identity: reordered documents are not changes."""
     old = sorted((section.key or "", hash_text(section.text)) for section in split_sections(before_text))
@@ -167,14 +242,15 @@ def detect_candidates(before_text: str, after_text: str, run_id: UUID, source_id
         pairs = min(len(olds), len(news))
         for index in range(pairs):
             if olds[index].text != news[index].text:
-                before_excerpt, after_excerpt = _excerpt(olds[index].text), _excerpt(news[index].text)
-                fingerprint = hash_text(f"modified|{key}|{before_excerpt}|{after_excerpt}")
+                before_excerpt, after_excerpt, before_range, after_range, change_hash = _focused_change(
+                    olds[index], news[index])
+                fingerprint = hash_text(f"modified|{key}|{change_hash}")
                 if fingerprint not in seen:
                     seen.add(fingerprint)
                     candidates.append(ChangeCandidate(id=uuid4(), run_id=run_id, source_id=source_id,
                         before_snapshot_id=before_id, after_snapshot_id=after_id, kind="modified", section=key,
-                        before_start=olds[index].start, before_end=olds[index].end,
-                        after_start=news[index].start, after_end=news[index].end,
+                        before_start=before_range[0], before_end=before_range[1],
+                        after_start=after_range[0], after_end=after_range[1],
                         before_excerpt=before_excerpt, after_excerpt=after_excerpt,
                         diff_algorithm_version=DIFF_ALGORITHM_VERSION, diff_hash=fingerprint,
                         detected_at=detected_at))
