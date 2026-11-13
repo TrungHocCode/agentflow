@@ -14,7 +14,8 @@ from pydantic import Field, model_validator
 from app.modules.competitive_intelligence.models import Contract
 
 NORMALIZATION_VERSION = "ci-normalize-v1"
-EXTRACTOR_VERSION = "ci-extract-v1"
+# v2: the crawler keeps one line per block element instead of one line per page.
+EXTRACTOR_VERSION = "ci-extract-v2"
 DIFF_ALGORITHM_VERSION = "ci-section-diff-v1"
 CAPTURE_POLICY = "public_get_only"
 MIN_ELIGIBLE_CHARS = 200
