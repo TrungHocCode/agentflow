@@ -53,8 +53,16 @@ VOID_TAGS = {
     "track",
     "wbr",
 }
+HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre", "blockquote",
                    "td", "th", "dt", "dd", "caption"}
+# Elements that start a new visual line. The full-text fallback breaks lines on these so a
+# pricing card's plan name, price and billing period stay on separate lines instead of
+# collapsing the whole page into one string that no later step can split.
+LINE_BREAK_TAGS = TEXT_BLOCK_TAGS | {
+    "address", "article", "br", "details", "dialog", "div", "dl", "fieldset", "figcaption", "figure",
+    "hr", "legend", "main", "ol", "section", "summary", "table", "tbody", "tfoot", "thead", "tr", "ul",
+}
 BOILERPLATE_MARKERS = re.compile(
     r"(?:^|[-_\s])(?:breadcrumb|cookie|consent|advert|ads|social|share|related|comments?|sidebar|"
     r"pagination|subscribe|popup|modal|promo|menu)(?:$|[-_\s])",
@@ -134,6 +142,9 @@ class HTMLContentExtractor(HTMLParser):
         self.blocks: list[dict[str, Any]] = []
         self.semantic_blocks: list[dict[str, Any]] = []
         self.fallback_text: list[str] = []
+        self.fallback_lines: list[tuple[int | None, str]] = []
+        self._line_parts: list[str] = []
+        self._line_heading: int | None = None
         self.links: list[dict[str, str]] = []
         self.canonical_url: str | None = None
         self._skip_depth = 0
@@ -163,6 +174,11 @@ class HTMLContentExtractor(HTMLParser):
         if self._is_boilerplate(tag, attrs_map):
             self._skip_depth = 0 if tag in VOID_TAGS else 1
             return
+
+        if tag in LINE_BREAK_TAGS:
+            self._break_line()
+            if tag in HEADING_TAGS:
+                self._line_heading = int(tag[1])
 
         is_semantic = tag in {"main", "article"} or attrs_map.get("role", "").lower() == "main"
         if is_semantic:
@@ -196,6 +212,9 @@ class HTMLContentExtractor(HTMLParser):
         if self._skip_depth:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
+
+        if tag in LINE_BREAK_TAGS:
+            self._break_line()
 
         if tag == "title":
             self._in_title = False
@@ -234,10 +253,29 @@ class HTMLContentExtractor(HTMLParser):
             self.title_parts.append(data)
         else:
             self.fallback_text.append(data)
+            self._line_parts.append(data)
         if self._current_block_tag:
             self._current_text.append(data)
         if self._current_link is not None:
             self._current_link_text.append(data)
+
+    def close(self) -> None:
+        super().close()
+        self._break_line()
+
+    def _break_line(self) -> None:
+        text = self._normalize_text(" ".join(self._line_parts))
+        if text:
+            self.fallback_lines.append((self._line_heading, text))
+        self._line_parts = []
+        self._line_heading = None
+
+    def fallback_body(self) -> str:
+        """Visible text with one line per block element."""
+        return "\n".join(text for _, text in self.fallback_lines)
+
+    def fallback_markdown(self) -> str:
+        return "\n\n".join(f"{'#' * level} {text}" if level else text for level, text in self.fallback_lines)
 
     @staticmethod
     def _is_boilerplate(tag: str, attrs: dict[str, str]) -> bool:
@@ -462,6 +500,7 @@ def _crawl_listing_articles(
 def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
     parser = HTMLContentExtractor()
     parser.feed(html)
+    parser.close()
 
     title = " ".join(parser.title_parts).strip() or parser.meta.get("og:title", "").strip()
     semantic_text_length = sum(len(block["text"]) for block in parser.semantic_blocks)
@@ -485,12 +524,12 @@ def _extract_page(url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
         for block in deduplicated_blocks[:50]
     )
     body = "\n\n".join(paragraphs)
-    fallback_body = HTMLContentExtractor._normalize_text(" ".join(parser.fallback_text))
+    fallback_body = parser.fallback_body()
     # Block-level extraction can miss content rendered in generic containers (e.g. pricing
     # cards inside <div>/<span>); use the full visible text when it is substantially richer.
     if len(fallback_body) >= MIN_ARTICLE_TEXT_LENGTH and len(fallback_body) > len(body) * 1.3:
         body = fallback_body
-        markdown = fallback_body
+        markdown = parser.fallback_markdown()
         paragraphs = [fallback_body]
     embedded_text = HTMLContentExtractor._normalize_text(" ".join(parser.embedded_data))
     if embedded_text:
