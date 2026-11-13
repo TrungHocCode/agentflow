@@ -31,7 +31,7 @@ def _role_tasks(source_label: str, candidate: ChangeCandidate, round_number: int
     return [
         RoundTask(task_key=researcher_key, role="source_researcher",
             # Section headings are page text, so they reach the model only inside the fenced evidence.
-            description=f"Confirm the observed change described in the evidence for candidate {candidate.id} "
+            description=f"Confirm the observed {candidate.kind} change shown in the evidence "
                         f"against the approved source; preserve provenance and distinguish source text "
                         f"from interpretation. Scope: source {candidate.source_id}.",
             tool_names=list(CI_ROLE_TOOLS["source_researcher"]), source_ids=[candidate.source_id],

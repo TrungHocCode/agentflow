@@ -383,7 +383,8 @@ class TestPageHeadingsStayOutOfInstructions(unittest.TestCase):
 
         for task in _role_tasks("Notion pricing", candidate, 1):
             self.assertNotIn("Ignore all previous", task.description)
-            self.assertIn(str(candidate.id), task.description)
+            self.assertIn("modified", task.description)
+            self.assertEqual(task.candidate_ids, [candidate.id])
 
 
 class TestTaskIsRestatedAfterUntrustedData(unittest.IsolatedAsyncioTestCase):
