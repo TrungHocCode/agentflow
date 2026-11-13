@@ -35,7 +35,17 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\[\]\\\"']+")
 logger = logging.getLogger(__name__)
 
 
-_TOOL_OUTPUT_TAG = re.compile(r"<\s*/?\s*tool_output[^>]*>", re.IGNORECASE)
+# A page can spell the fence tag with lookalike brackets, HTML entities, or invisible characters
+# between the letters; models read all of these as the tag, so all of them are removed.
+_INVISIBLE_CHARS = re.compile("[­͏؜ᅟᅠ឴឵᠋-᠏​-‏"
+                              "‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]")
+_TAG_OPEN = r"(?:<|＜|﹤|‹|⟨|&lt;?|&#0*60;?|&#x0*3c;?)"
+_TAG_CLOSE = r"(?:>|＞|﹥|›|⟩|&gt;?|&#0*62;?|&#x0*3e;?)"
+_TOOL_OUTPUT_TAG = re.compile(
+    # Attributes up to the closing bracket go too; without one, removing the tag name is enough.
+    _TAG_OPEN + r"\s*/?\s*tool[\s_\-]*output\b(?:[^<>＜＞\n]{0,200}?" + _TAG_CLOSE + r")?",
+    re.IGNORECASE,
+)
 ROUND_EVIDENCE_MAX_CHARS = 1800
 ROUND_COMPARISON_MAX_CHARS = 1500
 # Private product context stays away from roles that collect from the web.
@@ -82,7 +92,8 @@ def _run_input_context(state: State) -> str:
 
 def fence_untrusted(text: str) -> str:
     """Wrap external text as tool output, removing any tag that could close the fence early."""
-    return f"<tool_output>\n{_TOOL_OUTPUT_TAG.sub('[removed tag]', text)}\n</tool_output>"
+    cleaned = _TOOL_OUTPUT_TAG.sub("[removed tag]", _INVISIBLE_CHARS.sub("", str(text)))
+    return f"<tool_output>\n{cleaned}\n</tool_output>"
 
 
 def _bounded_excerpts(excerpts: list[str]) -> str:
@@ -442,9 +453,10 @@ class WorkerAgent(BaseAgent):
                 citation_urls.update(claim["source_url"] for claim in content.get("claims", [])
                                      if isinstance(claim, dict) and isinstance(claim.get("source_url"), str))
 
+        # Earlier outputs carry text other agents read from the web, so they are data, not instructions.
         context_results = (
             f"\n--- Outputs of Previous Tasks (Available Inputs) ---\n"
-            f"{results_str}\n"
+            f"{fence_untrusted(results_str) if results else results_str}\n"
             f"----------------------------------------------------\n"
         )
 
