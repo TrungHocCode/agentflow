@@ -121,6 +121,13 @@ def compare_snapshots(current: SourceSnapshot, current_text: str, baseline: Sour
         return RunSourceComparison(run_id=run_id, source_id=current.source_id,
             baseline_snapshot_id=baseline.id, current_snapshot_id=current.id, outcome="rebaseline_required",
             quality="insufficient", reason_codes=["normalization_changed"], decided_at=decided_at)
+    if baseline.extractor_version != current.extractor_version:
+        # Our own text layout changed, not the source: comparing would report every page as
+        # modified. Start a fresh baseline (promotable, unlike rebaseline_required, which waits
+        # for a user decision about the source itself).
+        return RunSourceComparison(run_id=run_id, source_id=current.source_id,
+            baseline_snapshot_id=baseline.id, current_snapshot_id=current.id, outcome="baseline_created",
+            quality="complete", reason_codes=["extractor_changed"], decided_at=decided_at)
     if baseline.normalized_hash == current.normalized_hash:
         return RunSourceComparison(run_id=run_id, source_id=current.source_id,
             baseline_snapshot_id=baseline.id, current_snapshot_id=current.id, outcome="no_change",

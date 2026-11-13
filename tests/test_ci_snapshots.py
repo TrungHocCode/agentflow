@@ -134,6 +134,17 @@ class TestCompareSnapshots(unittest.TestCase):
         comparison = compare_snapshots(current, current_text, other_norm, baseline_text, uuid4(), NOW)
         self.assertEqual((comparison.outcome, comparison.quality), ("rebaseline_required", "insufficient"))
 
+    def test_older_extractor_baseline_starts_fresh_instead_of_reporting_a_change(self) -> None:
+        # The crawler's text layout changed (one line per page -> one line per block). The page
+        # text differs only because of our extractor, so it must not be read as a product change,
+        # and the new capture must be promotable so the next run compares like with like.
+        baseline, baseline_text = snapshot_fixture("Pricing Pro plan costs $10 per month, billed annually.")
+        current, current_text = snapshot_fixture("Pricing\nPro plan\ncosts $10 per month, billed annually.")
+        current = current.model_copy(update={"extractor_version": "ci-extract-v2"})
+        comparison = compare_snapshots(current, current_text, baseline, baseline_text, uuid4(), NOW)
+        self.assertEqual((comparison.outcome, comparison.reason_codes), ("baseline_created", ["extractor_changed"]))
+        self.assertEqual(promotion_plan([comparison], "completed", NOW)[0].promotion, "promoted")
+
     def test_changed_outcome_when_hashes_differ(self) -> None:
         current, current_text = snapshot_fixture(PRICING_V2)
         baseline, baseline_text = snapshot_fixture(PRICING_V1)

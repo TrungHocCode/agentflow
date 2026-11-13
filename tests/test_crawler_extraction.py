@@ -66,5 +66,39 @@ class TestCrawlerExtraction(unittest.TestCase):
         self.assertIn("$20", data["text"])
 
 
+    def test_pricing_cards_keep_one_line_per_block(self) -> None:
+        # Real pricing pages put plan, price and period in nested <div>/<span> cards. The full-text
+        # fallback used to join the whole page into one line, so nothing downstream could tell
+        # which price belongs to which plan or show what changed.
+        html = (
+            "<html><head><title>Pricing</title></head><body><main>"
+            "<div class='hero'><span>Simple pricing for every team size</span></div>"
+            "<div class='card'><h3>Pro</h3><div><span>US $5</span><span> per month</span></div>"
+            "<div>$60 billed yearly</div><button>Start trial</button></div>"
+            "<div class='card'><h3>Business</h3><div><span>US $8</span><span> per user/month</span></div>"
+            "<div>$96 billed yearly<br>Cancel any time</div></div>"
+            "</main></body></html>"
+        )
+        status, data, _ = _extract_page("https://example.com/pricing", html)
+        self.assertEqual(status, "success")
+        self.assertEqual(data["text"].split("\n"), [
+            "Simple pricing for every team size",
+            "Pro", "US $5 per month", "$60 billed yearly", "Start trial",
+            "Business", "US $8 per user/month", "$96 billed yearly", "Cancel any time",
+        ])
+        self.assertIn("### Pro", data["markdown"].split("\n\n"))
+        self.assertIn("### Business", data["markdown"].split("\n\n"))
+        self.assertNotIn("#", data["text"])
+
+    def test_text_starting_with_hash_is_not_treated_as_a_heading(self) -> None:
+        html = (
+            "<html><body><main><div>#1 rated planner for small teams</div>"
+            "<div><span>Team</span> <span>$12 per seat each month, billed annually with priority support</span></div>"
+            "</main></body></html>"
+        )
+        _, data, _ = _extract_page("https://example.com/pricing", html)
+        self.assertEqual(data["text"].split("\n")[0], "#1 rated planner for small teams")
+
+
 if __name__ == "__main__":
     unittest.main()
