@@ -16,7 +16,8 @@ from app.modules.competitive_intelligence.models import Contract
 NORMALIZATION_VERSION = "ci-normalize-v1"
 # v2: the crawler keeps one line per block element instead of one line per page.
 EXTRACTOR_VERSION = "ci-extract-v2"
-DIFF_ALGORITHM_VERSION = "ci-section-diff-v1"
+# v2: modified excerpts and identity come from the changed lines, not the section start.
+DIFF_ALGORITHM_VERSION = "ci-section-diff-v2"
 CAPTURE_POLICY = "public_get_only"
 MIN_ELIGIBLE_CHARS = 200
 MAX_EXCERPT_CHARS = 800
