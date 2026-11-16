@@ -30,7 +30,8 @@ def _role_tasks(source_label: str, candidate: ChangeCandidate, round_number: int
     verifier_key = f"r{round_number}-verify-{candidate.id.hex[:8]}"
     return [
         RoundTask(task_key=researcher_key, role="source_researcher",
-            description=f"Confirm the observed change in section '{candidate.section or 'preamble'}' "
+            # Section headings are page text, so they reach the model only inside the fenced evidence.
+            description=f"Confirm the observed {candidate.kind} change shown in the evidence "
                         f"against the approved source; preserve provenance and distinguish source text "
                         f"from interpretation. Scope: source {candidate.source_id}.",
             tool_names=list(CI_ROLE_TOOLS["source_researcher"]), source_ids=[candidate.source_id],
@@ -38,7 +39,7 @@ def _role_tasks(source_label: str, candidate: ChangeCandidate, round_number: int
             candidate_ids=[candidate.id], estimated_calls=6),
         RoundTask(task_key=verifier_key, role="evidence_verifier",
             description=f"Examine supporting and contradictory evidence for candidate {candidate.id} "
-                        f"({candidate.kind} in '{candidate.section or 'preamble'}'); label each claim "
+                        f"({candidate.kind}); label each claim "
                         f"observed or unresolved with exact snapshot offsets. Scope: source {candidate.source_id}.",
             tool_names=list(CI_ROLE_TOOLS["evidence_verifier"]), source_ids=[candidate.source_id],
             snapshot_ids=[candidate.before_snapshot_id, candidate.after_snapshot_id],
