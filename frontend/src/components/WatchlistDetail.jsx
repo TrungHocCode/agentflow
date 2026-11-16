@@ -2,17 +2,14 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Play } from 'lucide-react';
 import { cancelRun, subscribeRunSSEStream } from '../services/api';
 import {
+  approveAndRun,
   approveRevision,
   archiveWatchlist,
   buildBrief,
-  createCollectionWorkflow,
-  getModelHealth,
   getWatchlist,
   listBriefs,
   listRevisions,
-  listWatchlistRuns,
-  startWatchlistRun,
-  updateWatchlist
+  listWatchlistRuns
 } from '../services/ciApi';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
@@ -112,35 +109,7 @@ export default function WatchlistDetail({ watchlistId, onBack, onOpenRun }) {
     setAction('run');
     setError('');
     try {
-      // Stop before approving when the model is known to be down; if the check itself
-      // cannot answer, proceed and let the run report what happened.
-      const model = await getModelHealth().catch(() => null);
-      if (model && model.status !== 'ok') {
-        setError(model.message || 'The local model is unavailable.');
-        return;
-      }
-      // Editing the watchlist to attach a workflow version creates a new revision,
-      // so always re-read the current revision before approving or starting.
-      let current = await getWatchlist(watchlistId);
-      let revision = current.current_revision;
-      let workflowVersionId = revision?.config?.workflow_version_id;
-      if (!workflowVersionId) {
-        const version = await createCollectionWorkflow(current.name);
-        workflowVersionId = version.id;
-        await updateWatchlist(watchlistId, {
-          name: current.name,
-          description: current.description || '',
-          expected_revision_id: revision.id,
-          config: { ...revision.config, workflow_version_id: workflowVersionId }
-        });
-        current = await getWatchlist(watchlistId);
-        revision = current.current_revision;
-        workflowVersionId = revision?.config?.workflow_version_id || workflowVersionId;
-      }
-      if (revision.approval_status !== 'approved') {
-        await approveRevision(watchlistId, revision.id, workflowVersionId);
-      }
-      await startWatchlistRun(watchlistId, revision.id, workflowVersionId);
+      await approveAndRun(watchlistId);
       setRefreshKey((key) => key + 1);
     } catch (err) {
       setError(err.message);

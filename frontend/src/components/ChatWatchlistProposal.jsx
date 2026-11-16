@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Search, Sparkles } from 'lucide-react';
-import { createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
+import { Play, Plus, Search, Sparkles } from 'lucide-react';
+import { approveAndRun, createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -37,6 +37,9 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [createdId, setCreatedId] = useState(null);
+  const [ownName, setOwnName] = useState('');
+  const [running, setRunning] = useState(false);
+  const [started, setStarted] = useState(false);
 
   if (!prompt) return null;
 
@@ -58,6 +61,60 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     return (recommendation?.products || [])
       .filter((item, index) => isPicked(index) && item.official_website)
       .map((item) => item.official_website);
+  }
+
+  function dimension() {
+    return recommendation?.suggested_dimensions?.[0] || 'pricing';
+  }
+
+  function updateProducts(change) {
+    setRecommendation((current) => ({ ...current, products: change(current.products || []) }));
+  }
+
+  function addSource(productIndex) {
+    updateProducts((products) => products.map((item, index) => index === productIndex
+      ? { ...item, sources: [...(item.sources || []), { url: '', kind: dimension(), provenance: 'manual' }] }
+      : item));
+  }
+
+  function addOwnProduct() {
+    if (!ownName.trim()) return;
+    updateProducts((products) => [...products, {
+      name: ownName.trim(), kind: 'own', company: '', official_website: null, sources: [], suggested: true
+    }]);
+    setOwnName('');
+  }
+
+  function pickedSourceCount(productIndex) {
+    return (recommendation.products[productIndex].sources || [])
+      .filter((source, sub) => (urls[sourceKey(productIndex, sub)] ?? source.url).trim()
+        && isUrlPicked(sourceKey(productIndex, sub))).length;
+  }
+
+  // Mirrors the server's approval rules so the user fixes gaps here, not after creating.
+  function missingItems() {
+    const picked = (recommendation?.products || []).map((item, index) => ({ item, index }))
+      .filter(({ index }) => isPicked(index));
+    const competitors = picked.filter(({ item }) => item.kind === 'competitor');
+    return [
+      !picked.some(({ item }) => item.kind === 'own') && 'your own product',
+      competitors.length === 0 && 'at least one competitor',
+      competitors.length > 0 && !competitors.some(({ index }) => pickedSourceCount(index) > 0)
+        && 'a source URL for a competitor'
+    ].filter(Boolean);
+  }
+
+  async function handleApproveAndRun() {
+    setRunning(true);
+    setError('');
+    try {
+      await approveAndRun(createdId);
+      setStarted(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRunning(false);
+    }
   }
 
   async function handleDiscoverCompetitors() {
@@ -84,8 +141,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     setDiscoveringSources(true);
     setError('');
     try {
-      const dimension = recommendation.suggested_dimensions?.[0] || 'pricing';
-      const sourcesByDomain = await discoverSources(domains, dimension);
+      const sourcesByDomain = await discoverSources(domains, dimension());
       setSourceNotice(domains.some((domain) => !sourcesByDomain[domain]?.length)
         ? 'No source pages were found for some products. Open the watchlist afterwards to add their URLs.'
         : '');
@@ -117,7 +173,12 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
           goal: recommendation.suggested_goal || prompt,
           dimensions: recommendation.suggested_dimensions?.length ? recommendation.suggested_dimensions : ['pricing'],
           workflow_version_id: null,
-          comparison_criteria: (recommendation.suggested_criteria || []).map((item) => ({
+          // Approval requires criteria; fall back to one per tracked dimension.
+          comparison_criteria: (recommendation.suggested_criteria?.length
+            ? recommendation.suggested_criteria
+            : (recommendation.suggested_dimensions?.length ? recommendation.suggested_dimensions : ['pricing'])
+              .map((field) => ({ field, objective: `Track ${field} changes` }))
+          ).map((item) => ({
             field: item.field,
             objective: item.objective,
             importance: item.importance || 'medium'
@@ -150,15 +211,26 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   if (createdId) {
     return (
       <Card className="wizard-shell wizard-complete" data-testid="chat-proposal-done">
-        <ConfirmationBanner message="Watchlist created from this chat." />
-        <div>
+        <ConfirmationBanner message={started
+          ? 'First run started. It captures a baseline; changes appear from the next run.'
+          : 'Watchlist created. Approve it to capture the first baseline.'} />
+        {error && <ErrorNotice message={error} onDismiss={() => setError('')} />}
+        <div className="wizard-actions">
+          {!started && (
+            <Button type="button" onClick={handleApproveAndRun} disabled={running}>
+              {running ? <Spinner data-icon="inline-start" aria-hidden="true" /> : <Play data-icon="inline-start" />}
+              {running ? 'Starting…' : 'Approve & run'}
+            </Button>
+          )}
           <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)}>
-            View in Intelligence
+            Open watchlist
           </Button>
         </div>
       </Card>
     );
   }
+
+  const missing = recommendation ? missingItems() : [];
 
   return (
     <Card className="wizard-shell" data-testid="chat-proposal">
@@ -247,6 +319,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
                             value={urls[key] ?? source.url}
                             onChange={(event) => setUrls((current) => ({ ...current, [key]: event.target.value }))}
                             aria-label={`Source URL for ${item.name}`}
+                            placeholder={`https://…/${dimension()}`}
                           />
                           <Badge
                             variant="outline"
@@ -259,15 +332,41 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
                     })}
                   </div>
                 )}
+                {isPicked(index) && item.kind === 'competitor' && (
+                  <div>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => addSource(index)}>
+                      <Plus data-icon="inline-start" />Add source URL
+                    </Button>
+                  </div>
+                )}
               </Card>
             ))}
           </div>
+          {!recommendation.products.some((item, index) => item.kind === 'own' && isPicked(index)) && (
+            <div className="wizard-field">
+              <Label htmlFor="chat-proposal-own">Your product</Label>
+              <div className="wizard-source-row">
+                <Input
+                  id="chat-proposal-own"
+                  value={ownName}
+                  onChange={(event) => setOwnName(event.target.value)}
+                  placeholder="TaskFlow"
+                />
+                <Button type="button" variant="outline" onClick={addOwnProduct} disabled={!ownName.trim()}>
+                  Add
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="wizard-field">
             <Label htmlFor="chat-proposal-name">Watchlist name</Label>
             <Input id="chat-proposal-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="TaskFlow pricing watch" />
           </div>
+          {missing.length > 0 && (
+            <p className="wizard-field__hint" role="status">Still needed: {missing.join(', ')}.</p>
+          )}
           <div>
-            <Button type="button" onClick={handleCreate} disabled={saving}>
+            <Button type="button" onClick={handleCreate} disabled={saving || missing.length > 0}>
               {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
               {saving ? 'Creating…' : 'Create watchlist from picks'}
             </Button>

@@ -33,10 +33,16 @@ function response(payload) {
 
 describe('ChatWatchlistProposal', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn(async (url) => {
+    vi.stubGlobal('fetch', vi.fn(async (url, options = {}) => {
       const target = String(url);
       if (target.includes('/discover-competitors')) return response(COMPETITORS);
       if (target.includes('/discover-sources')) return response(SOURCES);
+      if (target.includes('/health/model')) return response({ status: 'ok' });
+      if (target.endsWith('/watchlists/w1') && !options.method) {
+        return response({ id: 'w1', name: 'w', current_revision: {
+          id: 'r1', approval_status: 'approved', config: { workflow_version_id: 'v1' }
+        } });
+      }
       return response({ id: 'w1' });
     }));
   });
@@ -52,11 +58,44 @@ describe('ChatWatchlistProposal', () => {
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.getByLabelText('Track source https://todoist.com/pricing')).toBeInTheDocument();
 
+    // Approval needs the user's own product, so creating waits until it is named.
+    expect(screen.getByRole('status')).toHaveTextContent(/your own product/i);
+    expect(screen.getByRole('button', { name: /create watchlist from picks/i })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Your product'), { target: { value: 'TaskFlow' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+
     fireEvent.click(screen.getByRole('button', { name: /create watchlist from picks/i }));
     await waitFor(() => expect(screen.getByTestId('chat-proposal-done')).toBeInTheDocument());
+    const created = JSON.parse(fetch.mock.calls.find(([url, options]) => String(url).endsWith('/watchlists')
+      && options?.method === 'POST')[1].body);
+    expect(created.config.products.map((item) => [item.name, item.kind])).toEqual(
+      [['Todoist', 'competitor'], ['TaskFlow', 'own']]
+    );
+    expect(created.config.comparison_criteria).toEqual(
+      [{ field: 'pricing', objective: 'Track pricing changes', importance: 'medium' }]
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /approve & run/i }));
+    expect(await screen.findByText(/first run started/i)).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([url, options]) => String(url).endsWith('/watchlists/w1/runs')
+      && options?.method === 'POST')).toBe(true);
     expect(onCreated).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /view in intelligence/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open watchlist/i }));
     expect(onCreated).toHaveBeenCalledWith('w1');
+  });
+
+  it('lets the user type a source URL when search finds none', async () => {
+    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('Your product'), { target: { value: 'TaskFlow' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
+    expect(screen.getByRole('status')).toHaveTextContent(/a source url for a competitor/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /add source url/i }));
+    fireEvent.change(screen.getByLabelText('Source URL for Todoist'), { target: { value: 'https://todoist.com/pricing' } });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /create watchlist from picks/i })).toBeEnabled();
   });
 
   it('leaves unnamed candidates unpicked and says when no sources were found', async () => {
