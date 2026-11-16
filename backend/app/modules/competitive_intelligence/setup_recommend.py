@@ -11,7 +11,7 @@ from pydantic import Field
 
 from app.modules.competitive_intelligence.models import Contract, SourceKind
 
-RecommendationProvenance = Literal["model_knowledge", "user_supplied", "web_search"]
+RecommendationProvenance = Literal["model_knowledge", "user_supplied", "web_search", "site_crawl"]
 MAX_RECOMMENDED_PRODUCTS = 10
 MAX_RECOMMENDED_SOURCES = 40
 MAX_DISCOVERY_DOMAINS = 10
