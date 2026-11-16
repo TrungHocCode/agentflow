@@ -15,6 +15,21 @@ const PROVENANCE_HINTS = {
   model_knowledge: 'may be stale — verify'
 };
 
+function siteHost(url) {
+  try {
+    return new window.URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+// Loose mirror of the server's same-site rule; the server still decides at approval.
+function onSite(url, website) {
+  const host = siteHost(url);
+  const site = siteHost(website || '');
+  return Boolean(host && site) && (host === site || host.endsWith(`.${site}`) || site.endsWith(`.${host}`));
+}
+
 function lastUserText(messages) {
   const mine = (messages || []).filter((message) => message.sender === 'user');
   const last = mine.at(-1);
@@ -85,10 +100,11 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     setOwnName('');
   }
 
-  function pickedSourceCount(productIndex) {
+  function pickedSourceUrls(productIndex) {
     return (recommendation.products[productIndex].sources || [])
-      .filter((source, sub) => (urls[sourceKey(productIndex, sub)] ?? source.url).trim()
-        && isUrlPicked(sourceKey(productIndex, sub))).length;
+      .map((source, sub) => ({ url: (urls[sourceKey(productIndex, sub)] ?? source.url).trim(), sub }))
+      .filter(({ url, sub }) => url && isUrlPicked(sourceKey(productIndex, sub)))
+      .map(({ url }) => url);
   }
 
   // Mirrors the server's approval rules so the user fixes gaps here, not after creating.
@@ -96,11 +112,15 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     const picked = (recommendation?.products || []).map((item, index) => ({ item, index }))
       .filter(({ index }) => isPicked(index));
     const competitors = picked.filter(({ item }) => item.kind === 'competitor');
+    const offSite = picked.flatMap(({ item, index }) => pickedSourceUrls(index)
+      .filter((url) => !onSite(url, item.official_website))
+      .map((url) => `${url} to be on ${item.name}'s site (${siteHost(item.official_website || '') || 'no website'})`));
     return [
       !picked.some(({ item }) => item.kind === 'own') && 'your own product',
       competitors.length === 0 && 'at least one competitor',
-      competitors.length > 0 && !competitors.some(({ index }) => pickedSourceCount(index) > 0)
-        && 'a source URL for a competitor'
+      competitors.length > 0 && !competitors.some(({ index }) => pickedSourceUrls(index).length > 0)
+        && 'a source URL for a competitor',
+      ...offSite
     ].filter(Boolean);
   }
 
@@ -289,6 +309,9 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
                     <span className="wizard-competitor-card__title">
                       {item.name}
                       <span className="ci-chip ci-chip--quiet ml-2">{item.kind}</span>
+                      {item.official_website && (
+                        <span className="ci-chip ci-chip--quiet ml-2">{siteHost(item.official_website)}</span>
+                      )}
                     </span>
                   </label>
                   {item.provenance && (

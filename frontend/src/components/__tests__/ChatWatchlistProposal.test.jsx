@@ -84,6 +84,24 @@ describe('ChatWatchlistProposal', () => {
     expect(onCreated).toHaveBeenCalledWith('w1');
   });
 
+  it('shows each website and flags a URL typed under the wrong same-named product', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...COMPETITORS, products: [
+      { ...COMPETITORS.products[0], name: 'Craft', official_website: 'https://craft.io/', suggested: true },
+      { ...COMPETITORS.products[0], name: 'InkPad', kind: 'own', official_website: null, suggested: true }
+    ] })));
+    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make InkPad' }]} onCreated={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    expect(await screen.findByText('craft.io')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /add source url/i }));
+    fireEvent.change(screen.getByLabelText('Source URL for Craft'), { target: { value: 'https://www.craft.do/pricing' } });
+    expect(screen.getByRole('status')).toHaveTextContent("https://www.craft.do/pricing to be on Craft's site (craft.io)");
+    expect(screen.getByRole('button', { name: /create watchlist from picks/i })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Source URL for Craft'), { target: { value: 'https://www.craft.io/pricing' } });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('lets the user type a source URL when search finds none', async () => {
     render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
