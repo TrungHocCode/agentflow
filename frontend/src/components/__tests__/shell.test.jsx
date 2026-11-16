@@ -44,8 +44,9 @@ describe('application shell', () => {
 
     const primaryNav = screen.getByTestId('sidebar-primary-nav');
     const items = within(primaryNav).getAllByRole('button');
-    expect(items.length).toBeGreaterThanOrEqual(3);
-    expect(items.length).toBeLessThanOrEqual(4);
+    expect(items.map((item) => item.textContent)).toEqual(
+      ['Assistant', 'Changes', 'Watchlists', 'Briefs & History', 'Settings']
+    );
 
     const active = within(primaryNav).getByRole('button', { name: /watchlists/i });
     expect(active).toHaveAttribute('aria-current', 'page');
