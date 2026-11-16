@@ -27,6 +27,10 @@ def setUpModule() -> None:
     asyncio.run(seed_defaults())
 
 
+async def no_page(_url):
+    return None
+
+
 class StubSearchTool:
     """Stable search fixture; stage B answers with the requested site only."""
 
@@ -60,7 +64,8 @@ class TestCIScoutRoundTrip(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.cleanup)
         self.service = IntelligenceService(
             PostgresIntelligenceRepository(), MagicMock(),
-            scout=ScoutDiscovery(StubSearchTool()),
+            # No page fetcher: this round trip covers the search path, without live network.
+            scout=ScoutDiscovery(StubSearchTool(), page_fetcher=no_page),
             rate_limiter=NoopRateLimiter(),
         )
 
