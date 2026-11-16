@@ -315,10 +315,15 @@ class ScoutDiscovery:
 
         products: list[RecommendedProduct] = []
         seen_domains: set[str] = set()
+        # Different companies share names (craft.do vs craft.io); pre-pick only the top-ranked site.
+        picked_names: set[str] = set()
+        shared_names: set[str] = set()
         for _, _, _, domain, record, matched, named in ranked:
             if domain in seen_domains:
                 continue
             seen_domains.add(domain)
+            if named is not None and named in picked_names:
+                shared_names.add(named)
             rationale = "Found via web search"
             if matched:
                 rationale += f" (keywords: {', '.join(sorted(matched)[:5])})"
@@ -329,7 +334,7 @@ class ScoutDiscovery:
                 RecommendedProduct(
                     name=named or _product_name(str(record.get("title") or ""), domain),
                     kind="own" if named and named == own else "competitor",
-                    suggested=named is not None,
+                    suggested=named is not None and named not in shared_names,
                     company="",
                     official_website=f"https://{domain}/",
                     sources=[],
@@ -337,8 +342,13 @@ class ScoutDiscovery:
                     provenance="web_search",
                 )
             )
+            if named is not None:
+                picked_names.add(named)
             if len(products) >= MAX_PRODUCTS:
                 break
+        if shared_names:
+            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
+                       "ticked. Check each website before tracking.")
         if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
             self._warn("Truncated competitor candidates to one per domain.")
         if not products:

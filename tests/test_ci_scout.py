@@ -185,6 +185,20 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_site["https://monday.com/"].kind, "competitor")
         self.assertEqual(by_site["https://cal.com/"].kind, "own")
 
+    async def test_only_the_top_site_is_ticked_when_companies_share_a_name(self) -> None:
+        # Recorded from a trial: two unrelated companies are both called Craft (and Obsidian).
+        results = [{"url": "https://craft.do/pricing", "title": "Craft pricing", "snippet": "Craft is free to start."},
+                   {"url": "https://craft.io/pricing", "title": "Craft pricing", "snippet": "For product managers."},
+                   {"url": "https://obsidian.md/pricing", "title": "Obsidian", "snippet": "Free and private."},
+                   {"url": "https://obsidian.rip/pricing", "title": "Obsidian", "snippet": "Not self-serve."}]
+        scout = ScoutDiscovery(StubBatchTool(results))
+        products = await scout.stage_a("I make InkPad, a note-taking app. Track pricing of Obsidian and Craft.")
+        ticked = {product.official_website: product.suggested for product in products}
+
+        self.assertEqual(ticked, {"https://craft.do/": True, "https://craft.io/": False,
+                                  "https://obsidian.md/": True, "https://obsidian.rip/": False})
+        self.assertTrue(any("Craft, Obsidian" in warning for warning in scout.warnings))
+
     async def test_unnamed_candidates_are_not_suggested(self) -> None:
         results = [{"url": "https://rival.example/", "title": "Rival - Team tasks", "snippet": "Tasks"}]
         products = await ScoutDiscovery(StubBatchTool(results)).stage_a(PROMPT)
