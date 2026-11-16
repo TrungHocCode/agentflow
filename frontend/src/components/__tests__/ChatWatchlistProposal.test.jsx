@@ -54,9 +54,10 @@ describe('ChatWatchlistProposal', () => {
     await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument());
     expect(screen.getAllByText('web_search').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
+    // Source pages for the pre-ticked products load without a second click.
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.getByLabelText('Track source https://todoist.com/pricing')).toBeInTheDocument();
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes('/discover-sources'))).toHaveLength(1);
 
     // Approval needs the user's own product, so creating waits until it is named.
     expect(screen.getByRole('status')).toHaveTextContent(/your own product/i);
@@ -103,6 +104,9 @@ describe('ChatWatchlistProposal', () => {
   });
 
   it('lets the user type a source URL when search finds none', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
+      ? { 'https://todoist.com/': [] }
+      : COMPETITORS)));
     render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
     await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument());
@@ -128,7 +132,8 @@ describe('ChatWatchlistProposal', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Track Named')).toBeChecked());
     expect(screen.getByLabelText('Track Unnamed')).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
-    expect(await screen.findByText(/no source pages were found/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no source page was found/i)).toBeInTheDocument();
+    const asked = JSON.parse(fetch.mock.calls.find(([url]) => String(url).includes('/discover-sources'))[1].body);
+    expect(asked.domains).toEqual(['https://todoist.com/']);
   });
 });

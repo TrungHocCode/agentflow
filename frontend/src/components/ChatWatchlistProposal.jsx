@@ -12,7 +12,8 @@ import ConfirmationBanner from './ConfirmationBanner';
 import ErrorNotice from './ErrorNotice';
 
 const PROVENANCE_HINTS = {
-  model_knowledge: 'may be stale — verify'
+  model_knowledge: 'may be stale — verify',
+  site_crawl: "found on the product's own site"
 };
 
 function siteHost(url) {
@@ -140,15 +141,47 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   async function handleDiscoverCompetitors() {
     setLoading(true);
     setError('');
+    let found;
     try {
-      setRecommendation(await discoverCompetitors(prompt));
+      found = await discoverCompetitors(prompt);
+      setRecommendation(found);
       setPicks({});
       setUrls({});
       setUrlPicks({});
+      setSourceNotice('');
+    } catch (err) {
+      setError(err.message);
+      return;
+    } finally {
+      setLoading(false);
+    }
+    // Go straight on to the source pages of the pre-ticked products, so the user only reviews.
+    const domains = (found.products || [])
+      .filter((item) => item.suggested && item.official_website)
+      .map((item) => item.official_website);
+    if (domains.length) await findSources(domains, found.suggested_dimensions?.[0] || 'pricing');
+  }
+
+  async function findSources(domains, kind) {
+    setDiscoveringSources(true);
+    setError('');
+    try {
+      const sourcesByDomain = await discoverSources(domains, kind);
+      setSourceNotice(domains.some((domain) => !sourcesByDomain[domain]?.length)
+        ? 'No source page was found for some products. Use Add source URL for them.'
+        : '');
+      setRecommendation((current) => ({
+        ...current,
+        products: (current.products || []).map((item) => {
+          const pages = domains.includes(item.official_website) ? sourcesByDomain[item.official_website] : null;
+          // Keep anything the user typed when nothing new was found.
+          return pages?.length ? { ...item, sources: pages.map((source) => ({ ...source, tracked: true })) } : item;
+        })
+      }));
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      setDiscoveringSources(false);
     }
   }
 
@@ -158,25 +191,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       setError('Pick at least one competitor with an official website first.');
       return;
     }
-    setDiscoveringSources(true);
-    setError('');
-    try {
-      const sourcesByDomain = await discoverSources(domains, dimension());
-      setSourceNotice(domains.some((domain) => !sourcesByDomain[domain]?.length)
-        ? 'No source pages were found for some products. Open the watchlist afterwards to add their URLs.'
-        : '');
-      setRecommendation((current) => ({
-        ...current,
-        products: (current.products || []).map((item, index) => {
-          const found = isPicked(index) && item.official_website ? sourcesByDomain[item.official_website] : null;
-          return found ? { ...item, sources: found.map((source) => ({ ...source, tracked: true })) } : item;
-        })
-      }));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setDiscoveringSources(false);
-    }
+    await findSources(domains, dimension());
   }
 
   async function handleCreate() {
