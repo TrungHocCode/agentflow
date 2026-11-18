@@ -63,9 +63,6 @@ class ProductBrief(Contract):
         "which product is theirs."))
     named_competitors: list[str] = Field(max_length=10, description=(
         "Other products the user names in the request, exactly as written; empty if none are named."))
-    product_description: str | None = Field(max_length=300, description=(
-        "The words of the request that say what the user's product does or is, copied exactly; null if the "
-        "request does not describe the product."))
     # Measured on qwen3:8b: "a short noun phrase a buyer would search" turned "markdown note-taking app for Mac"
     # into "productivity software", and the search then found Slack and Miro.
     category: str | None = Field(max_length=120, description=(

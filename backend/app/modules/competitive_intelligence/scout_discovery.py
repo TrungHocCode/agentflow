@@ -78,6 +78,9 @@ _WORD = re.compile(r"[^\W\d_][\w&.+-]*")  # Any script, so "Tôi" stays one word
 _OWN_PRODUCT = re.compile(
     r"\b(?i:i|we)(?i:'m|'re| am| are)?\s+(?i:make|making|build|building|built|run|running|sell|selling|own|develop|"
     r"developing|created?)\s+([A-Z][A-Za-z0-9&.+_-]*)")
+_OWN_PRODUCT_VI = re.compile(
+    r"(?i:tôi|mình|chúng tôi|bọn mình|em)\s+(?i:đang\s+)?(?i:làm|bán|phát triển|xây dựng|kinh doanh)\s+"
+    r"([A-Z][A-Za-z0-9&.+_-]*)")
 # Editorial pages rank highly for competitor searches but are not products to track.
 _ARTICLE_TITLE = re.compile(
     r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked)\b", re.IGNORECASE)
@@ -94,9 +97,25 @@ _OWNERSHIP = re.compile(
     r"software|service)\b|\b(?:called|named)\b|(?:tôi|mình|chúng tôi|bọn mình|em)\s+(?:đang\s+)?(?:làm|bán|"
     r"phát triển|xây dựng|có|kinh doanh)\b|của\s+(?:tôi|mình|chúng tôi)\b|\btên là\b", re.IGNORECASE)
 MAX_OWN_PRODUCT_WORDS = 4
-# A "description" that only restates the request ("theo dõi đối thủ") does not say what the product is.
-_REQUEST_WORDS = re.compile(r"\b(?:track\w*|monitor\w*|watch\w*|competitors?|rivals?)\b|theo dõi|đối thủ",
-                            re.IGNORECASE)
+# Words that frame a request rather than describe a product (English words, Vietnamese syllables).
+# Code, not the model, decides whether the request describes the product: measured, qwen3 guessed a
+# category from a bare name ("NoteNest" -> note-taking) and 4B would not copy the description verbatim.
+_REQUEST_FRAME_WORDS = {
+    "a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "with", "is", "it", "its", "it's", "this", "that",
+    "their", "them", "they", "i", "i'm", "we", "we're", "me", "my", "our", "us", "you", "your", "am", "are", "be",
+    "do", "does", "make", "making", "build", "building", "built", "run", "running", "sell", "selling", "own",
+    "develop", "developing", "create", "created", "launched", "called", "named", "find", "track", "tracking",
+    "monitor", "monitoring", "watch", "watching", "follow", "compare", "help", "please", "want", "need", "show",
+    "tell", "check", "keep", "list", "who", "what", "which", "how", "competes", "compete", "competitor",
+    "competitors", "rival", "rivals", "rivals'", "competition", "pricing", "price", "prices", "plan", "plans",
+    "feature", "features", "changelog", "releases", "integrations", "page", "pages", "website", "product",
+    "products",
+    "tôi", "mình", "chúng", "bọn", "em", "anh", "chị", "bạn", "đang", "làm", "bán", "có", "là", "tên", "muốn",
+    "cần", "giúp", "nhé", "ạ", "với", "và", "của", "các", "những", "cho", "theo", "dõi", "đối", "thủ", "giá",
+    "bảng", "so", "sánh", "tìm", "xem", "gói", "tính", "năng", "cập", "nhật", "phát", "triển", "xây", "dựng",
+    "kinh", "doanh", "một", "này", "đó", "sản", "phẩm",
+}
+MIN_DESCRIPTION_WORDS = 2
 _HEADING = re.compile(r"^#{1,4}\s+(.+)$")
 _LIST_NUMBER = re.compile(r"^(?:#?\d{1,2}[.):]?|No\.\s*\d{1,2})\s+")
 # Headings in "best X" articles that are sections, not products. Unverified names are dropped later anyway.
@@ -268,8 +287,16 @@ def _fallback_keywords(prompt: str) -> list[str]:
 
 
 def _own_product(prompt: str) -> str | None:
-    match = _OWN_PRODUCT.search(prompt)
+    match = _OWN_PRODUCT.search(prompt) or _OWN_PRODUCT_VI.search(prompt)
     return match.group(1).rstrip("&.+_-") if match else None
+
+
+def _describes_product(prompt: str, names: list[str]) -> bool:
+    """Whether the request says what the product is: some words left after names and request framing."""
+    name_words = {word.casefold().rstrip("&.+-") for name in names for word in _WORD.findall(name)}
+    content = [word for word in (token.casefold().rstrip("&.+-") for token in _WORD.findall(prompt))
+               if len(word) >= 2 and word not in _REQUEST_FRAME_WORDS and word not in name_words]
+    return len(content) >= MIN_DESCRIPTION_WORDS
 
 
 def _category(prompt: str, own: str | None) -> str | None:
@@ -373,13 +400,11 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
             model_named = list(named)  # a small model sometimes drops names it was given
         named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
         model_category = " ".join(str(brief.category or "").split())[:80]
-        # Trust the model's category only when it also copied, verbatim, the words that describe the product.
-        # Measured: with no description in the request, qwen3 guessed "Productivity Tools" (8B) or
-        # "note-taking applications" (4B, from the name NoteNest alone), and the search then found Slack.
-        description = written(brief.product_description)
-        if description and _REQUEST_WORDS.search(description):
-            description = None
-        if model_category and "://" not in model_category and description:
+        # Trust the model's category only when the request itself describes the product. Measured: from a
+        # bare name, qwen3 guessed "Productivity Tools" (8B) or "note-taking applications" (4B), and the
+        # search then found Slack and Miro.
+        described = _describes_product(prompt, [*([own] if own else []), *named])
+        if model_category and "://" not in model_category and described:
             category = model_category
         elif own is None:
             category = None  # without the user's product, "the ..." is rarely its description
