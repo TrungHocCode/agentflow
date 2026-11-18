@@ -86,6 +86,17 @@ _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integr
 _TOKEN = re.compile(r"[a-z0-9]+")
 # The category in "I make NoteNest, a markdown note-taking app for Mac." -> "markdown note-taking app for Mac".
 _CATEGORY = re.compile(r"\b(?:an?|the)\s+([^.;!?]{3,80}?)\s*(?:[.;!?]|$)", re.IGNORECASE)
+# A product is the user's own only when the request says so ("I make", "our app", "tôi bán", "của mình").
+# Measured: from "Track pricing of Notion and Obsidian." qwen3:8b made Notion the user's product.
+_OWNERSHIP = re.compile(
+    r"\b(?:i|we)(?:'m|'re| am| are)?\s+(?:make|making|build|building|built|run|running|sell|selling|own|"
+    r"develop|developing|created?|launched)\b|\b(?:our|my)\s+(?:product|app|tool|startup|company|saas|platform|"
+    r"software|service)\b|\b(?:called|named)\b|(?:tôi|mình|chúng tôi|bọn mình|em)\s+(?:đang\s+)?(?:làm|bán|"
+    r"phát triển|xây dựng|có|kinh doanh)\b|của\s+(?:tôi|mình|chúng tôi)\b|\btên là\b", re.IGNORECASE)
+MAX_OWN_PRODUCT_WORDS = 4
+# A "description" that only restates the request ("theo dõi đối thủ") does not say what the product is.
+_REQUEST_WORDS = re.compile(r"\b(?:track\w*|monitor\w*|watch\w*|competitors?|rivals?)\b|theo dõi|đối thủ",
+                            re.IGNORECASE)
 _HEADING = re.compile(r"^#{1,4}\s+(.+)$")
 _LIST_NUMBER = re.compile(r"^(?:#?\d{1,2}[.):]?|No\.\s*\d{1,2})\s+")
 # Headings in "best X" articles that are sections, not products. Unverified names are dropped later anyway.
@@ -322,6 +333,17 @@ def _ranking_terms(request: _Request) -> set[str]:
     return terms
 
 
+def _follow_up_question(request: _Request) -> str:
+    """Ask for what Scout needs: a description of the user's product, or rivals they already know."""
+    if _VIETNAMESE.search(request.prompt):
+        subject = request.own or "Sản phẩm của bạn"
+        return (f"{subject} là sản phẩm gì? Mô tả ngắn nó làm gì và cho ai, hoặc kể tên vài đối thủ "
+                "bạn đã biết; mình sẽ tìm đối thủ dựa trên đó.")
+    subject = request.own or "your product"
+    return (f"What does {subject} do, and for whom? Describe it in a sentence, or name a few competitors "
+            "you already know, and I will search from there.")
+
+
 def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
     """Combine keyword rules with a model's reading of the request; only names written in it survive."""
     own = _own_product(prompt)
@@ -335,17 +357,31 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
             cleaned = " ".join(str(name or "").split())
             return cleaned if len(cleaned) >= 2 and cleaned.casefold() in lowered else None
 
-        own = written(brief.own_product) or own
+        model_own = written(brief.own_product)
+        rejected_own = None
+        if model_own and (len(model_own.split()) > MAX_OWN_PRODUCT_WORDS or not _OWNERSHIP.search(prompt)):
+            model_own, rejected_own = None, model_own
+        own = model_own or own
         # The model reads any language and skips words like "Mac", but it also invents rivals: keep written ones.
         model_named = [name for name in map(written, brief.named_competitors) if name]
+        if rejected_own and len(rejected_own.split()) <= MAX_OWN_PRODUCT_WORDS:
+            model_named.insert(0, rejected_own)  # a product the request names but does not claim is a rival
         if not model_named:
             # A small model sometimes drops names it was given; keep capitalized words written mid-sentence,
             # not sentence openers such as "Tôi" or "It".
             model_named = [term for term in named if not re.search(rf"(?:^|[.!?]\s+){re.escape(term)}\b", prompt)]
         named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
         model_category = " ".join(str(brief.category or "").split())[:80]
-        if model_category and "://" not in model_category:
+        # Trust the model's category only when it also copied, verbatim, the words that describe the product.
+        # Measured: with no description in the request, qwen3 guessed "Productivity Tools" (8B) or
+        # "note-taking applications" (4B, from the name NoteNest alone), and the search then found Slack.
+        description = written(brief.product_description)
+        if description and _REQUEST_WORDS.search(description):
+            description = None
+        if model_category and "://" not in model_category and description:
             category = model_category
+        elif own is None:
+            category = None  # without the user's product, "the ..." is rarely its description
     return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions)
 
 
@@ -396,10 +432,12 @@ class ScoutDiscovery:
         self.brief_reader = brief_reader
         self.warnings: list[str] = []
         self.dimensions: list[str] = []
+        self.follow_up_question: str | None = None
         self._stage_calls = 0
 
     def _reset_stage(self) -> None:
         self.warnings = []
+        self.follow_up_question = None
         self._stage_calls = 0
 
     def _warn(self, message: str) -> None:
@@ -489,6 +527,11 @@ class ScoutDiscovery:
 
         self._reset_stage()
         request = await self._understand(prompt)
+        if not request.named and not request.category:
+            # Nothing to search for yet: ask instead of searching on guesses (measured: "Theo dõi đối thủ
+            # giúp mình" searched "best Marketing" and returned Barbie and Diablo IV).
+            self.follow_up_question = _follow_up_question(request)
+            return []
         queries = self._competitor_queries(request)
         if not queries:
             self._warn("Could not derive competitor search terms from the prompt.")
