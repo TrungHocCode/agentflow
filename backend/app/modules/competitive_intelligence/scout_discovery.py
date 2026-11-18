@@ -13,12 +13,17 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from app.execution.tools.base import ToolRegistry
 from app.modules.competitive_intelligence.models import public_url
-from app.modules.competitive_intelligence.setup_recommend import RecommendedProduct, RecommendedSource
+from app.modules.competitive_intelligence.setup_recommend import (
+    ProductBrief,
+    RecommendedProduct,
+    RecommendedSource,
+)
 from app.shared.collection_scope import normalized_url, same_site
 from app.shared.errors import DependencyUnavailableError
 
@@ -36,11 +41,24 @@ DIMENSION_QUERY_TERMS: dict[str, str] = {
     "integrations": "integrations",
     "release_notes": "release notes",
 }
+# Local products rank for searches in the request's language ("iPOS bảng giá" finds ipos.vn, "iPOS pricing page"
+# does not), while global ones rank for English; Scout searches English first and Vietnamese for the misses.
+_VIETNAMESE = re.compile(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", re.IGNORECASE)
+VIETNAMESE_QUERY_TERMS: dict[str, str] = {
+    "pricing": "bảng giá",
+    "features": "tính năng",
+    "integrations": "tích hợp",
+    "release_notes": "cập nhật mới",
+}
+# These sites host hundreds of products; "Apple Notes" on apple.com is not a site Scout can track.
+_PLATFORM_DOMAINS = {"amazon.com", "apple.com", "facebook.com", "google.com", "meta.com", "microsoft.com"}
 _DIMENSION_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "pricing": ("pricing", "price", "plans", "cost"),
-    "features": ("features", "feature", "capabilities", "functionality"),
-    "integrations": ("integrations", "integration", "connectors"),
-    "release_notes": ("release notes", "releases", "changelog", "what's new"),
+    # Vietnamese phrases avoid a bare "giá", which also appears in "đánh giá" (to review).
+    "pricing": ("pricing", "price", "plans", "cost", "bảng giá", "giá của", "giá cả", "mức giá", "giá bán",
+                "theo dõi giá", "so sánh giá", "gói cước"),
+    "features": ("features", "feature", "capabilities", "functionality", "tính năng"),
+    "integrations": ("integrations", "integration", "connectors", "tích hợp"),
+    "release_notes": ("release notes", "releases", "changelog", "what's new", "cập nhật mới", "phiên bản mới"),
 }
 _GENERIC_CAPITALIZED = {
     "A", "An", "And", "Build", "Check", "Compare", "Competitor", "Competitors", "Find", "Focus", "Follow",
@@ -49,14 +67,14 @@ _GENERIC_CAPITALIZED = {
     "Watch", "We", "What", "Who", "Why",
     # Platforms and categories, not products.
     "AI", "Android", "App", "Chrome", "Linux", "Mac", "SaaS", "Web", "Windows",
-    "API", "ATS", "B2B", "B2C", "CMS", "CRM", "ERP", "HR", "LMS", "POS", "SEO", "SMB",
+    "API", "ATS", "B2B", "B2C", "CMS", "CRM", "ERP", "HR", "LMS", "POS", "SEO", "SMB", "URL", "URLs",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
     "make", "my", "of", "our", "please", "products", "that", "the", "their", "track",
     "want", "with",
 }
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9&.+_-]*")
+_WORD = re.compile(r"[^\W\d_][\w&.+-]*")  # Any script, so "Tôi" stays one word instead of "T" + "i".
 _OWN_PRODUCT = re.compile(
     r"\b(?i:i|we)(?i:'m|'re| am| are)?\s+(?i:make|making|build|building|built|run|running|sell|selling|own|develop|"
     r"developing|created?)\s+([A-Z][A-Za-z0-9&.+_-]*)")
@@ -95,6 +113,22 @@ _PRICING_TEXT = re.compile(
     r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
 
 PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
+BriefReader = Callable[[str], Awaitable[ProductBrief | None]]
+
+
+@dataclass(frozen=True)
+class _Request:
+    """What Scout searches for: the user's product, the rivals they named, the category and what to track."""
+
+    prompt: str
+    own: str | None
+    named: list[str]
+    category: str | None
+    dimensions: list[str]
+
+    @property
+    def terms(self) -> list[str]:
+        return [*self.named, *([self.own] if self.own else [])]
 
 
 async def _default_page_fetcher(url: str) -> dict[str, Any] | None:
@@ -206,7 +240,7 @@ def _product_terms(prompt: str) -> list[str]:
     for match in _WORD.finditer(prompt):
         token = match.group().rstrip("&.+_-")
         key = token.casefold()
-        if (not token[0].isupper() or token in _GENERIC_CAPITALIZED or key in seen
+        if (len(token) < 2 or not token[0].isupper() or token in _GENERIC_CAPITALIZED or key in seen
                 or token in dimension_words):
             continue
         seen.add(key)
@@ -262,7 +296,7 @@ def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
     for record in records:
         domain = _registrable_domain(str(record.get("url") or ""))
         label = _compact(domain.split(".")[0]) if domain else ""
-        if label and (label == wanted or (len(label) >= 4 and label in wanted)):
+        if label and (label == wanted or (len(label) >= 4 and label in wanted and domain not in _PLATFORM_DOMAINS)):
             return domain
     return None
 
@@ -279,13 +313,40 @@ def _named_term(domain: str, terms: list[str]) -> str | None:
     return next((term for term in terms if _compact(term) in names), None)
 
 
-def _ranking_terms(prompt: str, product_terms: list[str]) -> set[str]:
-    terms = {token.casefold() for token in product_terms}
-    for dimension in _dimensions(prompt):
+def _ranking_terms(request: _Request) -> set[str]:
+    terms = {token.casefold() for token in request.terms}
+    for dimension in request.dimensions:
         terms.update(_DIMENSION_KEYWORDS[dimension])
     if not terms:
-        terms.update(_fallback_keywords(prompt))
+        terms.update(_fallback_keywords(request.prompt))
     return terms
+
+
+def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
+    """Combine keyword rules with a model's reading of the request; only names written in it survive."""
+    own = _own_product(prompt)
+    named = [term for term in _product_terms(prompt) if term != own]
+    category = _category(prompt, own)
+    dimensions = _dimensions(prompt)
+    if brief is not None:
+        lowered = prompt.casefold()
+
+        def written(name: str | None) -> str | None:
+            cleaned = " ".join(str(name or "").split())
+            return cleaned if len(cleaned) >= 2 and cleaned.casefold() in lowered else None
+
+        own = written(brief.own_product) or own
+        # The model reads any language and skips words like "Mac", but it also invents rivals: keep written ones.
+        model_named = [name for name in map(written, brief.named_competitors) if name]
+        if not model_named:
+            # A small model sometimes drops names it was given; keep capitalized words written mid-sentence,
+            # not sentence openers such as "Tôi" or "It".
+            model_named = [term for term in named if not re.search(rf"(?:^|[.!?]\s+){re.escape(term)}\b", prompt)]
+        named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
+        model_category = " ".join(str(brief.category or "").split())[:80]
+        if model_category and "://" not in model_category:
+            category = model_category
+    return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions)
 
 
 def _registrable_domain(value: str) -> str:
@@ -328,10 +389,13 @@ class ScoutDiscovery:
     """Deterministic staged discovery over the registered batch search tool."""
 
     def __init__(self, search_tool_caller: SearchToolCaller | None = None,
-                 page_fetcher: PageFetcher | None = None) -> None:
+                 page_fetcher: PageFetcher | None = None, brief_reader: BriefReader | None = None) -> None:
         self.search_tool_caller = search_tool_caller or _default_search_tool_caller
         self.page_fetcher = page_fetcher or _default_page_fetcher
+        # Optional model that reads the request; without it, keyword rules alone pick the search terms.
+        self.brief_reader = brief_reader
         self.warnings: list[str] = []
+        self.dimensions: list[str] = []
         self._stage_calls = 0
 
     def _reset_stage(self) -> None:
@@ -373,11 +437,20 @@ class ScoutDiscovery:
                                          note=" ".join(page.get("title", "").split())[:500])
         return None
 
-    def _competitor_queries(self, prompt: str) -> list[str]:
-        terms = _product_terms(prompt)
-        dimensions = _dimensions(prompt)
-        own = _own_product(prompt)
-        named = [term for term in terms if term != own]
+    async def _understand(self, prompt: str) -> _Request:
+        brief = None
+        if self.brief_reader is not None:
+            try:
+                brief = await self.brief_reader(prompt)
+            except Exception:  # The reader is optional; keyword rules still work.
+                brief = None
+        request = _understand(prompt, brief)
+        self.dimensions = request.dimensions
+        return request
+
+    def _competitor_queries(self, request: _Request) -> list[str]:
+        prompt, own, named, dimensions = request.prompt, request.own, request.named, request.dimensions
+        terms = request.terms
         queries: list[str] = []
         if named:
             # Named competitors: look each one up, since a combined "alternatives" query
@@ -387,7 +460,7 @@ class ScoutDiscovery:
             if len(named) > MAX_NAMED_QUERIES:
                 self._warn(f"Searched the first {MAX_NAMED_QUERIES} named products; add the rest manually: "
                            f"{', '.join(named[MAX_NAMED_QUERIES:])}.")
-        elif category := _category(prompt, own):
+        elif category := request.category:
             # Nobody named: "best X" articles list the field; stage A reads their headings.
             queries = [f"best {category}", f"{category} alternatives"]
         elif terms:
@@ -415,7 +488,8 @@ class ScoutDiscovery:
         """Discover competitor candidates from up to two bounded search queries."""
 
         self._reset_stage()
-        queries = self._competitor_queries(prompt)
+        request = await self._understand(prompt)
+        queries = self._competitor_queries(request)
         if not queries:
             self._warn("Could not derive competitor search terms from the prompt.")
             return []
@@ -424,13 +498,19 @@ class ScoutDiscovery:
             self._warn("No web search results were returned for competitor discovery.")
             return []
 
-        terms = _product_terms(prompt)
-        own = _own_product(prompt)
-        if not [term for term in terms if term != own]:
+        terms, own = request.terms, request.own
+        if not request.named:
             listed = await self._listed_products(records, own)
             if listed:
                 return self._with_own(listed, own)
-        ranking_terms = _ranking_terms(prompt, terms)
+        elif _VIETNAMESE.search(prompt):
+            found = {_named_term(_registrable_domain(str(record.get("url") or "")), terms) for record in records}
+            missing = [term for term in request.named if term not in found][:MAX_NAMED_QUERIES]
+            if missing:
+                local = VIETNAMESE_QUERY_TERMS[request.dimensions[0]] if request.dimensions else "trang chủ"
+                records = [*records, *await self._search([f"{term} {local}" for term in missing],
+                                                          MAX_RESULTS_PER_QUERY)]
+        ranking_terms = _ranking_terms(request)
         ranked: list[tuple[bool, int, int, str, dict[str, Any], set[str], str | None]] = []
         skipped_articles = 0
         for index, record in enumerate(records):
