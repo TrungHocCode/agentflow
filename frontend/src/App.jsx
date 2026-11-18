@@ -125,7 +125,8 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('watchlists');
+  const [activeTab, setActiveTab] = useState('studio');
+  const [openWatchlistId, setOpenWatchlistId] = useState(null);
   const [authUser, setAuthUser] = useState(() => {
     if (!localStorage.getItem('agentflow_access_token')) return null;
     try { return JSON.parse(localStorage.getItem('agentflow_user') || 'null'); } catch { return null; }
@@ -1077,7 +1078,10 @@ export default function App() {
       {/* Deep ink navigation rail with the product mark and account footer */}
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          setOpenWatchlistId(null);
+          setActiveTab(tab);
+        }}
         user={authUser}
         onLogout={handleLogout}
       />
@@ -1114,7 +1118,10 @@ export default function App() {
                 setIsResultsOpen(true);
               }}
               onViewRunDetails={() => setActiveTab('runs')}
-              onWatchlistCreated={() => setActiveTab('watchlists')}
+              onWatchlistCreated={(watchlistId) => {
+                setOpenWatchlistId(watchlistId || null);
+                setActiveTab('watchlists');
+              }}
             />
           )}
 
@@ -1148,7 +1155,9 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'watchlists' && <Intelligence onOpenRun={openRun} />}
+          {activeTab === 'watchlists' && (
+            <Intelligence key={openWatchlistId || 'list'} initialWatchlistId={openWatchlistId} onOpenRun={openRun} />
+          )}
         </main>
       </div>
       <ConfirmDialog
