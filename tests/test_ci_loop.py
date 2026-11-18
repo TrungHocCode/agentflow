@@ -163,7 +163,7 @@ class TestTaskHook(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_uuid_task_resolves_role_and_captures(self) -> None:
         """A workflow-seeded task carries the catalog UUID, not the role name."""
         provider = AsyncMock()
-        provider.get_agent = AsyncMock(return_value=SimpleNamespace(name="source_researcher"))
+        provider.get_agent = AsyncMock(return_value=SimpleNamespace(name="source_researcher", mode="collect_evidence"))
         self.hooks.agent_profiles = provider
         snapshot = MagicMock()
         snapshot.id = uuid4()

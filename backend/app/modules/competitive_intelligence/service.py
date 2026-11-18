@@ -8,6 +8,7 @@ from typing import TypeVar
 from urllib.parse import urlsplit
 
 from app.core.config import settings
+from app.modules.competitive_intelligence.investigation_contracts import CI_ROLE_TOOLS, CI_TOOLS
 from app.modules.competitive_intelligence.models import (
     CreateWatchlist, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
     UpdateWatchlist, Watchlist, digest, public_url,
@@ -29,10 +30,8 @@ Found = TypeVar("Found", list[RecommendedProduct], dict[str, list[RecommendedSou
 
 SCOUT_SCOPE = "ci-scout"
 
-SAFE_ROLES = {"source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst",
-              "synthesis_agent", "report_agent"}
-SAFE_TOOLS = {"news_crawler", "news_crawler_batch", "http_request", "text_summarizer",
-              "markdown_report_generator", "chart_generator"}
+SAFE_ROLES = {*CI_ROLE_TOOLS, "synthesis_agent"}
+SAFE_TOOLS = CI_TOOLS
 
 
 class IntelligenceService:

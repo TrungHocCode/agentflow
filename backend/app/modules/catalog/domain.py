@@ -15,6 +15,8 @@ class AgentDefinition(BaseModel):
     description: Optional[str] = None
     system_prompt: str
     tool_names: List[str] = Field(default_factory=list)
+    mode: str = "tool_loop"
+    reads_product_context: bool = False
     available_tool_names: List[str] = Field(default_factory=list)
     blocked_tool_names: List[str] = Field(default_factory=list)
     is_active: bool = True

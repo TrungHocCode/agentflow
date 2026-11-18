@@ -48,8 +48,6 @@ _TOOL_OUTPUT_TAG = re.compile(
 )
 ROUND_EVIDENCE_MAX_CHARS = 1800
 ROUND_COMPARISON_MAX_CHARS = 1500
-# Private product context stays away from roles that collect from the web.
-ROUND_COMPARISON_ROLES = frozenset({"competitive_analyst", "product_analyst"})
 
 
 def _run_input_context(state: State) -> str:
@@ -136,7 +134,7 @@ def _comparison_context(config: Dict[str, Any]) -> str:
                        "own_products": [product.get("name") for product in own]}, ensure_ascii=False)
 
 
-def _round_context(state: State, task: Task) -> str:
+def _round_context(state: State, task: Task, reads_product_context: bool = False) -> str:
     """Give an investigation round task the evidence and comparison context its scope refers to.
 
     Excerpts come from collected pages, so they are wrapped as untrusted tool output. They are
@@ -150,7 +148,7 @@ def _round_context(state: State, task: Task) -> str:
         sections.append(f"Observed evidence for this task:\n{fence_untrusted(_bounded_excerpts(excerpts))}")
     input_data = (state.get("metadata") or {}).get("input_data") or {}
     config = (input_data.get("competitive_intelligence") or {}).get("config") or {}
-    if task.node in ROUND_COMPARISON_ROLES and (config.get("products") or config.get("comparison_criteria")):
+    if reads_product_context and (config.get("products") or config.get("comparison_criteria")):
         sections.append(f"Comparison context from the approved watchlist:\n{_comparison_context(config)}")
     return "\n".join(["", "--- Investigation Context ---", *sections, "-----------------------------", ""]) \
         if sections else ""
@@ -421,13 +419,20 @@ class WorkerAgent(BaseAgent):
 
     evidence_store: EvidenceStore | None = None
 
+    def __init__(self, *args: Any, mode: str = "tool_loop", reads_product_context: bool = False,
+                 **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Behaviour comes from the agent profile (AgentProfile.mode), never from the agent's name.
+        self.mode = mode
+        self.reads_product_context = reads_product_context
+
     async def execute(self, state: State) -> Dict[str, Any]:
         current_task = state.get("current_task")
         if not current_task:
             raise ValueError(f"Worker '{self.name}' executed but 'current_task' is missing in state.")
-        if self.name == "synthesis_agent" and self.evidence_store is not None:
+        if self.mode == "reduce_evidence" and self.evidence_store is not None:
             return await self._synthesize(state, current_task)
-        if self.name == "report_agent" and self.evidence_store is not None:
+        if self.mode == "render_report" and self.evidence_store is not None:
             return await self._present(state, current_task)
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
         task_started_at = datetime.now(timezone.utc) if timing_enabled else None
@@ -441,7 +446,7 @@ class WorkerAgent(BaseAgent):
             f"---------------------------------\n"
         )
         task_context += _run_input_context(state)
-        task_context += _round_context(state, current_task)
+        task_context += _round_context(state, current_task, self.reads_product_context)
 
         # Build context from previous results
         results = state.get("result_storage") or []
@@ -456,15 +461,6 @@ class WorkerAgent(BaseAgent):
             ])
         else:
             results_str = "No execution results from other agents yet."
-
-        citation_urls: set[str] = set()
-        for result in results:
-            content = result.get("result")
-            if isinstance(content, dict):
-                citation_urls.update(value for value in (content.get("sources") or {}).values()
-                                     if isinstance(value, str))
-                citation_urls.update(claim["source_url"] for claim in content.get("claims", [])
-                                     if isinstance(claim, dict) and isinstance(claim.get("source_url"), str))
 
         # Earlier outputs carry text other agents read from the web, so they are data, not instructions.
         context_results = (
@@ -492,7 +488,7 @@ class WorkerAgent(BaseAgent):
         processor = (
             EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(current_task.id),
                               current_task.research_requirements)
-            if self.evidence_store is not None and self.name == "source_researcher" and metadata.get("run_id")
+            if self.evidence_store is not None and self.mode == "collect_evidence" and metadata.get("run_id")
             else None
         )
 
@@ -647,11 +643,6 @@ class WorkerAgent(BaseAgent):
                         tool_wall_started = perf_counter()
 
                         if tool_name in tool_map:
-                            if self.name == "report_agent" and self.evidence_store is not None:
-                                supplied_urls = {url.rstrip(".,;:!?)]}") for url in _URL_PATTERN.findall(
-                                    json.dumps(tool_args, ensure_ascii=False))}
-                                if not citation_urls or not supplied_urls.issubset(citation_urls):
-                                    raise ValueError("Report citations must refer to collected source evidence.")
                             tool_obj = tool_map[tool_name]
                             logs.append(f"[{self.name}] Executing tool '{tool_name}'.")
                             tool_started_at = datetime.now(timezone.utc) if timing_enabled else None

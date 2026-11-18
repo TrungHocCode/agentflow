@@ -17,8 +17,11 @@ class PostgresAgentProfileProvider(AgentProfileProvider):
         return AgentProfile(
             name=definition.name,
             system_prompt=definition.system_prompt,
+            description=definition.description or "",
             tool_names=definition.tool_names,
             runtime_name="worker",
+            mode=definition.mode,
+            reads_product_context=definition.reads_product_context,
             catalog_tool_names=[
                 tool.name for tool in await self.repository.list_tools(active_only=True) if tool.is_available
             ],
