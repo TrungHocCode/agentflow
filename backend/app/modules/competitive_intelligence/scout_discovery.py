@@ -46,6 +46,8 @@ _GENERIC_CAPITALIZED = {
     "Help", "Hi", "Hello", "How", "I", "Keep", "Make", "Monitor", "My", "Need", "Our", "Plan", "Please",
     "Pricing", "Product", "Products", "Show", "Tell", "The", "They", "Track", "Tracking", "Use", "Want",
     "Watch", "We", "What", "Who", "Why",
+    # Platforms and categories, not products.
+    "AI", "Android", "App", "Chrome", "Linux", "Mac", "SaaS", "Web", "Windows",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
@@ -62,6 +64,8 @@ _ARTICLE_TITLE = re.compile(
 _NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
 _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
+# Templates and single forum threads mention a dimension without being the product's page for it.
+_NOT_A_SOURCE_PATH = re.compile(r"/(?:templates?|t)/", re.IGNORECASE)
 
 SearchToolCaller = Callable[[list[str], int], Any | Awaitable[Any]]
 
@@ -357,7 +361,10 @@ class ScoutDiscovery:
             if not domain:
                 continue
             named = _named_term(domain, terms)
-            if named is None and _ARTICLE_TITLE.search(str(record.get("title") or "")):
+            title = str(record.get("title") or "")
+            # Off-site pages that name a requested product are reviews or namesakes, not other competitors.
+            about_named = any(_compact(term) in _compact(title) for term in terms if term != own)
+            if named is None and (about_named or _ARTICLE_TITLE.search(title)):
                 skipped_articles += 1
                 continue
             matched = _tokens(
@@ -471,6 +478,8 @@ class ScoutDiscovery:
             if not matches:
                 continue
             key = matches[0]
+            if _NOT_A_SOURCE_PATH.search(urlsplit(raw_url).path):
+                continue
             try:
                 public_url(raw_url)
             except ValueError:

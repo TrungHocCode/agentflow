@@ -222,6 +222,23 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(products[0].name, "Rival")
         self.assertFalse(products[0].suggested)
 
+    async def test_off_site_pages_about_named_products_are_dropped(self) -> None:
+        # Recorded from a Tavily trial: reviews and a namesake company ranked beside the real sites.
+        results = [{"url": "https://www.notion.com/pricing", "title": "Notion pricing", "snippet": "Plans"},
+                   {"url": "https://www.usecarly.com/notion", "title": "Notion Pricing Tiers & Costs", "snippet": "x"},
+                   {"url": "https://www.globenewswire.com/news", "snippet": "x",
+                    "title": "Obsidian Energy Announces Offering and Pricing of $175 Million Notes"},
+                   {"url": "https://rival.example/", "title": "Rival - notes for teams", "snippet": "x"}]
+        products = await ScoutDiscovery(StubBatchTool(results)).stage_a(
+            "I make NoteNest. Track pricing of Notion and Obsidian.")
+        self.assertEqual([p.official_website for p in products if p.kind == "competitor"],
+                         ["https://notion.com/", "https://rival.example/"])
+
+    async def test_platform_words_are_not_product_names(self) -> None:
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool).stage_a("I build NoteNest, a markdown notes app for Mac and Windows.")
+        self.assertNotIn("Mac", " ".join(tool.calls[0][0]))
+
     def test_product_name_drops_page_words_and_taglines(self) -> None:
         self.assertEqual(_product_name("Acme Pricing Plans: Free and Pro", "acme.com"), "Acme")
         self.assertEqual(_product_name("Acme | Team chat", "acme.com"), "Acme")
@@ -315,6 +332,16 @@ class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(source.kind == "pricing" for source in found["todoist.com"]))
         self.assertTrue(all(source.provenance == "web_search" for source in found["todoist.com"]))
         self.assertTrue(any("Dropped syntactically invalid URL" in warning for warning in scout.warnings))
+
+
+    async def test_templates_and_forum_threads_are_not_sources(self) -> None:
+        tool = StubBatchTool([
+            {"url": "https://www.craft.do/templates/release-notes", "title": "Release notes template", "snippet": "x"},
+            {"url": "https://community.craft.do/t/release-notes-1-2/99", "title": "Release notes 1.2", "snippet": "x"},
+            {"url": "https://www.craft.do/whats-new", "title": "What's new", "snippet": "x"},
+        ])
+        found = await ScoutDiscovery(tool, page_fetcher=no_page).stage_b(["craft.do"], "release_notes")
+        self.assertEqual([s.url for s in found["craft.do"]], ["https://www.craft.do/whats-new"])
 
 
 class TestScoutRoundCharging(unittest.IsolatedAsyncioTestCase):
