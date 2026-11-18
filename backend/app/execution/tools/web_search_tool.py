@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from html import unescape
 from html.parser import HTMLParser
-from time import perf_counter
+from time import monotonic, perf_counter
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -24,6 +24,11 @@ BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 _MARKUP = re.compile(r"<[^>]+>")
 SEARCH_TIMEOUT = (5, 12)
 MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
+# DuckDuckGo keeps refusing an IP (HTTP 202/429) for minutes once it starts; asking again only
+# extends the refusal, so the provider is paused and searches fail fast until the pause ends.
+DDG_PAUSE_SECONDS = 300
+DDG_REFUSAL_STATUSES = {202, 429}
+_ddg_paused_until = 0.0
 
 
 class WebSearchInput(BaseModel):
@@ -157,6 +162,21 @@ def _brave_results(query: str, max_results: int) -> list[dict[str, str | int]]:
     return normalized[:max_results]
 
 
+def _ddg_refused(retry_after: int, started: float, status_code: int | None = None) -> str:
+    return failure_result(
+        "http_error",
+        code="search_rate_limited",
+        message=(
+            f"DuckDuckGo is refusing searches from this server; searching pauses for about {retry_after}s. "
+            "Set BRAVE_SEARCH_API_KEY for dependable search."
+        ),
+        retryable=True,
+        tool_name="web_search",
+        source=SourceMetadata(requested_url=SEARCH_URL, final_url=SEARCH_URL, status_code=status_code),
+        metadata={"duration_ms": round((perf_counter() - started) * 1000), "retry_after_seconds": retry_after},
+    ).to_json()
+
+
 @ToolRegistry.register_tool(name="web_search")
 @tool("web_search", args_schema=WebSearchInput)
 def web_search(query: str, max_results: int = 5) -> str:
@@ -194,6 +214,10 @@ def web_search(query: str, max_results: int = 5) -> str:
             set_cached(cache_key, result)
             return result
 
+    global _ddg_paused_until
+    if monotonic() < _ddg_paused_until:
+        return _ddg_refused(round(_ddg_paused_until - monotonic()), started)
+
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowWebSearch/2.0",
         "Accept": "text/html,application/xhtml+xml",
@@ -209,7 +233,7 @@ def web_search(query: str, max_results: int = 5) -> str:
                 )
                 status_code = getattr(response, "status_code", None)
                 transient_status = (
-                    status_code in {202, 408, 425, 429}
+                    status_code in {408, 425}
                     or (isinstance(status_code, int) and status_code >= 500)
                 )
                 if transient_status and attempt < MAX_TRANSIENT_ATTEMPTS - 1:
@@ -242,30 +266,21 @@ def web_search(query: str, max_results: int = 5) -> str:
         ).to_json()
 
     status_code = getattr(response, "status_code", None)
+    if status_code in DDG_REFUSAL_STATUSES:
+        _ddg_paused_until = monotonic() + DDG_PAUSE_SECONDS
+        return _ddg_refused(DDG_PAUSE_SECONDS, started, status_code)
     source = SourceMetadata(
         requested_url=SEARCH_URL,
         final_url=SEARCH_URL,
         status_code=status_code if isinstance(status_code, int) else None,
         content_type="text/html",
     )
-    if (
-        not isinstance(status_code, int)
-        or status_code < 200
-        or status_code >= 300
-        or status_code == 202
-    ):
-        retryable = status_code in {202, 408, 425, 429} or (
-            isinstance(status_code, int) and status_code >= 500
-        )
-        message = (
-            "Search provider returned HTTP 202 without a completed result page."
-            if status_code == 202
-            else f"Search provider returned HTTP status {status_code}."
-        )
+    if not isinstance(status_code, int) or status_code < 200 or status_code >= 300:
+        retryable = status_code in {408, 425} or (isinstance(status_code, int) and status_code >= 500)
         return failure_result(
             "http_error",
             code="unexpected_search_status",
-            message=message,
+            message=f"Search provider returned HTTP status {status_code}.",
             retryable=retryable,
             tool_name="web_search",
             source=source,
