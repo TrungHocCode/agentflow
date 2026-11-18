@@ -11,7 +11,7 @@ import requests
 from app.core.config import settings
 from app.execution.tools import web_search_tool
 from app.execution.tools.cache import clear_cache
-from app.execution.tools.web_search_tool import BRAVE_SEARCH_URL, web_search
+from app.execution.tools.web_search_tool import BRAVE_SEARCH_URL, TAVILY_SEARCH_URL, web_search
 
 DUCKDUCKGO_PAGE = (
     '<div class="result__body"><a class="result__a" href="https://fallback.example/">Fallback</a>'
@@ -30,9 +30,10 @@ class TestBraveProvider(unittest.TestCase):
     def setUp(self) -> None:
         clear_cache()
         self.addCleanup(clear_cache)
-        patcher = patch.object(settings, "BRAVE_SEARCH_API_KEY", "test-key")
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("BRAVE_SEARCH_API_KEY", "test-key"), ("TAVILY_API_KEY", "")):
+            patcher = patch.object(settings, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         post = patch.object(web_search_tool.requests, "post", return_value=MagicMock(
             status_code=200, text=DUCKDUCKGO_PAGE, content=DUCKDUCKGO_PAGE.encode()))
         self.ddg = post.start()
@@ -97,6 +98,43 @@ class TestBraveProvider(unittest.TestCase):
             self.search()
             self.search()
         get.assert_called_once()
+
+
+class TestTavilyProvider(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_cache()
+        self.addCleanup(clear_cache)
+        for name, value in (("BRAVE_SEARCH_API_KEY", ""), ("TAVILY_API_KEY", "tvly-test")):
+            patcher = patch.object(settings, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def search(self) -> dict:
+        return json.loads(web_search.invoke({"query": "craft pricing", "max_results": 2}))
+
+    def test_uses_tavily_with_a_bearer_key(self) -> None:
+        payload = {"results": [
+            {"title": "Craft Pricing", "url": "https://www.craft.do/pricing", "content": "Plus $5", "score": 0.9},
+            {"title": "Bad", "url": "javascript:alert(1)", "content": "x"},
+        ]}
+        with patch.object(web_search_tool.requests, "post", return_value=brave_response(payload)) as post:
+            result = self.search()
+        self.assertEqual(post.call_args.args[0], TAVILY_SEARCH_URL)
+        self.assertEqual(post.call_args.kwargs["headers"]["Authorization"], "Bearer tvly-test")
+        self.assertEqual(post.call_args.kwargs["json"],
+                         {"query": "craft pricing", "max_results": 2, "search_depth": "basic"})
+        self.assertEqual(result["data"]["results"], [
+            {"rank": 1, "title": "Craft Pricing", "url": "https://www.craft.do/pricing", "snippet": "Plus $5"},
+        ])
+        self.assertEqual(result["metadata"]["parser"], "agentflow_tavily_api_v1")
+        self.assertNotIn("tvly-test", json.dumps(result))
+
+    def test_falls_back_to_duckduckgo_when_tavily_fails(self) -> None:
+        ddg = MagicMock(status_code=200, text=DUCKDUCKGO_PAGE, content=DUCKDUCKGO_PAGE.encode())
+        with patch.object(web_search_tool.requests, "post", side_effect=[brave_response({}, 432), ddg]) as post:
+            result = self.search()
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(result["data"]["results"][0]["url"], "https://fallback.example/")
 
 
 if __name__ == "__main__":

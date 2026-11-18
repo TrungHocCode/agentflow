@@ -12,12 +12,14 @@ from app.shared.collection_scope import scoped_collection
 
 from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
+from app.execution.tools.crawler import politeness
 from app.execution.tools.crawler.browser_fetcher import BrowserFetchError, render_page
 from app.execution.tools.crawler.quality import (
     MIN_QUALITY_SCORE,
     calculate_quality_score,
     detect_access_challenge,
     looks_client_rendered,
+    pricing_page_without_prices,
 )
 from app.execution.tools.network_policy import (
     MAX_REDIRECTS,
@@ -361,6 +363,17 @@ def crawl_url(
     if isinstance(cached_result, str):
         return cached_result
 
+    if not politeness.admit(normalized_url):
+        return _failure_json(
+            status="blocked",
+            code="robots_disallowed",
+            message="The site's robots.txt does not allow crawling this page.",
+            requested_url=normalized_url,
+            final_url=normalized_url,
+            duration_ms=round((perf_counter() - started) * 1000),
+            attempts=[],
+        )
+
     attempts: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     static_error: StaticFetchError | StaticCandidateError | None = None
@@ -485,7 +498,10 @@ def crawl_url(
                             # incomplete static shell; render them unless quality is high.
                             or (
                                 looks_client_rendered(html)
-                                and candidate["quality_score"] < 0.4
+                                and (
+                                    candidate["quality_score"] < 0.4
+                                    or pricing_page_without_prices(final_url, candidate["data"].get("text"))
+                                )
                             )
                             or (
                                 candidate["quality_score"] < MIN_QUALITY_SCORE

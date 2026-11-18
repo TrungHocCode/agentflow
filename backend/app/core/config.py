@@ -81,6 +81,7 @@ class Settings(BaseSettings):
     # Optional keyed search; without it, search uses the unauthenticated DuckDuckGo HTML page,
     # which can refuse requests from an IP for long periods.
     BRAVE_SEARCH_API_KEY: str = ""
+    TAVILY_API_KEY: str = ""
     # One setup wizard pass spends two rounds; failed and empty searches are refunded.
     CI_SCOUT_ROUNDS_PER_DAY: int = Field(default=10, ge=1, le=1000)
 

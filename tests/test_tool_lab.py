@@ -451,27 +451,24 @@ class TestToolLab(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 2)
         mock_sleep.assert_called_once()
 
-    @patch("app.execution.tools.network_policy.time.sleep")
     @patch("app.execution.tools.web_search_tool.requests.post")
-    def test_search_retries_deferred_provider_response(self, mock_post, mock_sleep):
-        deferred = MagicMock()
-        deferred.status_code = 202
-        successful = MagicMock()
-        successful.status_code = 200
-        successful.text = (
-            '<div class="result"><a class="result__a" href="https://example.com/official">'
-            'Official source</a><a class="result__url" href="https://example.com/official">'
-            'example.com/official</a></div>'
-        )
-        mock_post.side_effect = [deferred, successful]
+    def test_search_pauses_after_provider_refusal(self, mock_post):
+        from app.execution.tools import web_search_tool
 
-        result = run_tool("web_search", {"query": "deferred provider retry"})
+        refused = MagicMock()
+        refused.status_code = 202
+        mock_post.return_value = refused
 
-        self.assertTrue(result.ok)
-        self.assertEqual(result.data["results"][0]["url"], "https://example.com/official")
-        self.assertEqual(mock_post.call_count, 2)
-        mock_sleep.assert_called_once()
+        with patch.object(web_search_tool, "_ddg_paused_until", 0.0):
+            first = run_tool("web_search", {"query": "refused provider"})
+            second = run_tool("web_search", {"query": "another query"})
 
+        self.assertFalse(first.ok)
+        self.assertEqual(first.error.code, "search_rate_limited")
+        self.assertIn("BRAVE_SEARCH_API_KEY", first.error.message)
+        self.assertEqual(second.error.code, "search_rate_limited")
+        # A refusal is not retried and pauses the provider instead of asking again.
+        mock_post.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

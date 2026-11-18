@@ -245,11 +245,12 @@ Static fetching can work without browser fallback. Browser rendering is bounded 
 | `AGENTFLOW_CRAWLER_BROWSER_TIMEOUT_MS` | `18000` | Maximum page-navigation time |
 | `AGENTFLOW_CRAWLER_BROWSER_SETTLE_MS` | `600` | Brief wait for client-rendered content |
 | `AGENTFLOW_CRAWLER_BROWSER_MAX_CONCURRENCY` | `1` | Maximum simultaneous browser pages per worker |
-| `AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS` | `2` | Maximum wait for an available browser slot |
+| `AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS` | `30` | Maximum wait for an available browser slot |
+| `AGENTFLOW_CRAWLER_POLITENESS_ENABLED` | `true` | Obey robots.txt (user agent `AgentFlowResearchCrawler`) and wait at least 1 s, or the site's `Crawl-delay` up to 10 s, between pages of one site |
 
 ### Web search
 
-Setup discovery and research use DuckDuckGo's unauthenticated HTML page by default. It can refuse requests from an IP for long periods; discovery then reports the failure, does not spend a round, and products and URLs can still be entered by hand. For dependable search, set `BRAVE_SEARCH_API_KEY` to a [Brave Search API](https://brave.com/search/api/) key on the API and worker. Brave is tried first and DuckDuckGo remains the fallback. Queries go to the configured provider, so check its current pricing and attribution terms.
+Setup discovery and research use DuckDuckGo's unauthenticated HTML page by default. It can refuse requests from an IP for long periods; search then pauses DuckDuckGo for five minutes, discovery reports the failure, does not spend a round, and products and URLs can still be entered by hand. For dependable search, set `BRAVE_SEARCH_API_KEY` (a [Brave Search API](https://brave.com/search/api/) key) and/or `TAVILY_API_KEY` (a [Tavily](https://tavily.com) key) on the API and worker. Brave is tried first, then Tavily, and DuckDuckGo remains the fallback. Queries go to the configured provider, so check its current pricing and attribution terms.
 
 ## Run with Docker Compose
 

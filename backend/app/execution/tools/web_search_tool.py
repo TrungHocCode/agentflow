@@ -1,11 +1,11 @@
-"""Structured web search: keyed Brave API when configured, DuckDuckGo HTML otherwise."""
+"""Structured web search: keyed Brave or Tavily APIs when configured, DuckDuckGo HTML otherwise."""
 
 from __future__ import annotations
 
 import re
 from html import unescape
 from html.parser import HTMLParser
-from time import perf_counter
+from time import monotonic, perf_counter
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -21,9 +21,15 @@ from app.execution.tools.network_policy import MAX_TRANSIENT_ATTEMPTS, transient
 
 SEARCH_URL = "https://html.duckduckgo.com/html/"
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 _MARKUP = re.compile(r"<[^>]+>")
 SEARCH_TIMEOUT = (5, 12)
 MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
+# DuckDuckGo keeps refusing an IP (HTTP 202/429) for minutes once it starts; asking again only
+# extends the refusal, so the provider is paused and searches fail fast until the pause ends.
+DDG_PAUSE_SECONDS = 300
+DDG_REFUSAL_STATUSES = {202, 429}
+_ddg_paused_until = 0.0
 
 
 class WebSearchInput(BaseModel):
@@ -143,6 +149,28 @@ def _brave_results(query: str, max_results: int) -> list[dict[str, str | int]]:
         records = response.json().get("web", {}).get("results", [])
     except (requests.RequestException, ValueError, AttributeError):
         return []
+    return _ranked(records, "description", max_results)
+
+
+def _tavily_results(query: str, max_results: int) -> list[dict[str, str | int]]:
+    """Return ranked Tavily results, or nothing so the caller can fall back to the next provider."""
+
+    try:
+        response = requests.post(
+            TAVILY_SEARCH_URL,
+            headers={"Authorization": f"Bearer {settings.TAVILY_API_KEY}"},
+            json={"query": query, "max_results": max_results, "search_depth": "basic"},
+            timeout=SEARCH_TIMEOUT,
+        )
+        if response.status_code != 200:
+            return []
+        records = response.json().get("results", [])
+    except (requests.RequestException, ValueError, AttributeError):
+        return []
+    return _ranked(records, "content", max_results)
+
+
+def _ranked(records: object, snippet_key: str, max_results: int) -> list[dict[str, str | int]]:
     normalized: list[dict[str, str | int]] = []
     for record in records if isinstance(records, list) else []:
         url = str(record.get("url") or "") if isinstance(record, dict) else ""
@@ -152,9 +180,24 @@ def _brave_results(query: str, max_results: int) -> list[dict[str, str | int]]:
             "rank": len(normalized) + 1,
             "title": unescape(_MARKUP.sub("", str(record.get("title") or ""))),
             "url": url,
-            "snippet": unescape(_MARKUP.sub("", str(record.get("description") or ""))),
+            "snippet": unescape(_MARKUP.sub("", str(record.get(snippet_key) or ""))),
         })
     return normalized[:max_results]
+
+
+def _ddg_refused(retry_after: int, started: float, status_code: int | None = None) -> str:
+    return failure_result(
+        "http_error",
+        code="search_rate_limited",
+        message=(
+            f"DuckDuckGo is refusing searches from this server; searching pauses for about {retry_after}s. "
+            "Set TAVILY_API_KEY or BRAVE_SEARCH_API_KEY for dependable search."
+        ),
+        retryable=True,
+        tool_name="web_search",
+        source=SourceMetadata(requested_url=SEARCH_URL, final_url=SEARCH_URL, status_code=status_code),
+        metadata={"duration_ms": round((perf_counter() - started) * 1000), "retry_after_seconds": retry_after},
+    ).to_json()
 
 
 @ToolRegistry.register_tool(name="web_search")
@@ -177,22 +220,30 @@ def web_search(query: str, max_results: int = 5) -> str:
     if isinstance(cached_result, str):
         return cached_result
 
-    if settings.BRAVE_SEARCH_API_KEY:
-        brave_results = _brave_results(normalized_query, max_results)
-        if brave_results:
+    # Keyed providers first, in order; DuckDuckGo stays the keyless fallback.
+    for key, fetch, endpoint, parser in (
+        (settings.BRAVE_SEARCH_API_KEY, _brave_results, BRAVE_SEARCH_URL, "agentflow_brave_api_v1"),
+        (settings.TAVILY_API_KEY, _tavily_results, TAVILY_SEARCH_URL, "agentflow_tavily_api_v1"),
+    ):
+        keyed_results = fetch(normalized_query, max_results) if key else []
+        if keyed_results:
             result = success_result(
-                {"query": normalized_query, "results": brave_results},
+                {"query": normalized_query, "results": keyed_results},
                 tool_name="web_search",
-                source=SourceMetadata(requested_url=BRAVE_SEARCH_URL, final_url=BRAVE_SEARCH_URL, status_code=200,
+                source=SourceMetadata(requested_url=endpoint, final_url=endpoint, status_code=200,
                                       content_type="application/json"),
                 metadata={
                     "duration_ms": round((perf_counter() - started) * 1000),
-                    "result_count": len(brave_results),
-                    "parser": "agentflow_brave_api_v1",
+                    "result_count": len(keyed_results),
+                    "parser": parser,
                 },
             ).to_json()
             set_cached(cache_key, result)
             return result
+
+    global _ddg_paused_until
+    if monotonic() < _ddg_paused_until:
+        return _ddg_refused(round(_ddg_paused_until - monotonic()), started)
 
     headers = {
         "User-Agent": "Mozilla/5.0 AgentFlowWebSearch/2.0",
@@ -209,7 +260,7 @@ def web_search(query: str, max_results: int = 5) -> str:
                 )
                 status_code = getattr(response, "status_code", None)
                 transient_status = (
-                    status_code in {202, 408, 425, 429}
+                    status_code in {408, 425}
                     or (isinstance(status_code, int) and status_code >= 500)
                 )
                 if transient_status and attempt < MAX_TRANSIENT_ATTEMPTS - 1:
@@ -242,30 +293,21 @@ def web_search(query: str, max_results: int = 5) -> str:
         ).to_json()
 
     status_code = getattr(response, "status_code", None)
+    if status_code in DDG_REFUSAL_STATUSES:
+        _ddg_paused_until = monotonic() + DDG_PAUSE_SECONDS
+        return _ddg_refused(DDG_PAUSE_SECONDS, started, status_code)
     source = SourceMetadata(
         requested_url=SEARCH_URL,
         final_url=SEARCH_URL,
         status_code=status_code if isinstance(status_code, int) else None,
         content_type="text/html",
     )
-    if (
-        not isinstance(status_code, int)
-        or status_code < 200
-        or status_code >= 300
-        or status_code == 202
-    ):
-        retryable = status_code in {202, 408, 425, 429} or (
-            isinstance(status_code, int) and status_code >= 500
-        )
-        message = (
-            "Search provider returned HTTP 202 without a completed result page."
-            if status_code == 202
-            else f"Search provider returned HTTP status {status_code}."
-        )
+    if not isinstance(status_code, int) or status_code < 200 or status_code >= 300:
+        retryable = status_code in {408, 425} or (isinstance(status_code, int) and status_code >= 500)
         return failure_result(
             "http_error",
             code="unexpected_search_status",
-            message=message,
+            message=f"Search provider returned HTTP status {status_code}.",
             retryable=retryable,
             tool_name="web_search",
             source=source,

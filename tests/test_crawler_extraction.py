@@ -1,11 +1,16 @@
 """Crawler extraction keeps pricing content held in generic containers."""
 
+import json
 import os
 import sys
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
+from app.execution.tools.crawler import orchestrator
+from app.execution.tools.crawler.browser_fetcher import RenderedPage
+from app.execution.tools.crawler.quality import pricing_page_without_prices
 from app.execution.tools.news_crawler_tool import _extract_page
 
 
@@ -98,6 +103,44 @@ class TestCrawlerExtraction(unittest.TestCase):
         )
         _, data, _ = _extract_page("https://example.com/pricing", html)
         self.assertEqual(data["text"].split("\n")[0], "#1 rated planner for small teams")
+
+    def test_layout_class_on_body_does_not_drop_the_page(self) -> None:
+        html = (
+            "<html><body class='archive no-sidebar modal-open'><main><h1>Changelog</h1>"
+            "<p>Copilot code review now runs on every pull request opened in a repository.</p>"
+            "</main></body></html>"
+        )
+        status, data, _ = _extract_page("https://example.com/changelog", html)
+        self.assertEqual(status, "success")
+        self.assertIn("Copilot code review", data["text"])
+
+
+class TestPricingRender(unittest.TestCase):
+    SHELL = (
+        "<html><head><title>Plans</title><meta name='description' content='Plans for every team'></head>"
+        "<body><div id='__next'><main><h1>Which plan is right for you?</h1>"
+        + "".join(f"<p>Plan detail {index}: capture ideas, sync across devices and share notebooks with "
+                  f"your team in one place.</p>" for index in range(8))
+        + "</main></div><script src='/app.js'></script></body></html>"
+    )
+
+    def test_detects_pricing_url_without_prices(self) -> None:
+        self.assertTrue(pricing_page_without_prices("https://example.com/compare-plans", "Starter plan"))
+        self.assertFalse(pricing_page_without_prices("https://example.com/compare-plans", "Starter ₫62,766 / month"))
+        self.assertFalse(pricing_page_without_prices("https://example.com/blog", "Starter plan"))
+
+    def test_client_rendered_pricing_page_without_prices_is_rendered(self) -> None:
+        static = MagicMock(status_code=200, headers={"content-type": "text/html; charset=utf-8"},
+                           content=self.SHELL.encode(), text=self.SHELL, url="https://example.com/compare-plans")
+        rendered_html = self.SHELL.replace("Plan detail 0", "Starter $14.99 per month. Plan detail 0")
+        rendered = RenderedPage(html=rendered_html, final_url="https://example.com/compare-plans",
+                                status_code=200, duration_ms=5)
+        with patch.object(orchestrator.requests, "get", return_value=static),                 patch.object(orchestrator, "render_page", return_value=rendered) as render:
+            result = json.loads(orchestrator.crawl_url("https://example.com/compare-plans", "auto",
+                                                       extract_page=_extract_page))
+        render.assert_called_once()
+        self.assertEqual(result["metadata"]["engine"], "browser")
+        self.assertIn("$14.99", result["data"]["text"])
 
 
 if __name__ == "__main__":
