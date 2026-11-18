@@ -257,7 +257,8 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
               {running ? 'Starting…' : 'Approve & run'}
             </Button>
           )}
-          <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)}>
+          {/* Leaving mid-start drops the approval, so wait for it to finish. */}
+          <Button type="button" variant="outline" onClick={() => onCreated && onCreated(createdId)} disabled={running}>
             Open watchlist
           </Button>
         </div>
