@@ -72,8 +72,10 @@ class EvidenceProcessor:
     """One processor per researcher task; budgets apply across its tool calls."""
 
     def __init__(self, llm: BaseChatModel, store: EvidenceStore, run_id: str, task_id: str,
-                 requirements: list[ResearchRequirement] | None = None) -> None:
+                 requirements: list[ResearchRequirement] | None = None, extract: bool = True) -> None:
         self.llm = llm
+        # False stores source pages only (CI collection: the snapshot diff, not claims, finds changes).
+        self.extract = extract
         self.store = store
         self.run_id = run_id
         self.task_id = task_id
@@ -119,7 +121,7 @@ class EvidenceProcessor:
                 if not url.startswith(("https://", "http://")):
                     continue
                 await self._extract(text, url, bool(entry.get("text_truncated")), question)
-        if len(self.bundle.claims) == before:
+        if self.extract and len(self.bundle.claims) == before:
             self.bundle.warnings.append("No new source-backed claims were extracted from this response.")
         self._status()
         await self.store.save_bundle(self.run_id, self.task_id, self.bundle)
@@ -139,6 +141,11 @@ class EvidenceProcessor:
         ))
 
     def _status(self) -> None:
+        if not self.extract:
+            stored = sum(outcome.status == "processed" for outcome in self.bundle.source_outcomes)
+            self.bundle.status = ("failed" if not stored else
+                                  "partial" if stored < len(self.bundle.source_outcomes) else "complete")
+            return
         self.bundle.requirement_coverage = reconcile_coverage(self.bundle.requirements, self.bundle.claims)
         self.bundle.status = (
             "failed" if not self.bundle.claims else "partial" if self.bundle.failed_chunks
@@ -165,6 +172,10 @@ class EvidenceProcessor:
         self.bundle.documents.append(identity)
         if truncated:
             self.bundle.warnings.append(f"Source {url} was truncated before extraction.")
+        if not self.extract:
+            self.bundle.source_outcomes.append(SourceOutcome(source_url=url, document_id=identity,
+                                                             status="processed"))
+            return
         pieces = chunks(text, settings.RESEARCH_CHUNK_CHARS)
         failures_before = self.bundle.failed_chunks
         rejections_before = sum(self.bundle.rejection_counts.values())

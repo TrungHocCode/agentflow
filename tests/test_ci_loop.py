@@ -211,16 +211,14 @@ class TestRoundsReachTheAnalyst(unittest.TestCase):
                                      questions, candidates, CILoopHooks._round_scope(scope),
                                      InvestigationBudget(), False, datetime.now(timezone.utc))
 
-    def test_changed_source_gets_an_analyst_after_its_researcher(self) -> None:
+    def test_changed_source_gets_one_single_turn_analyst(self) -> None:
         scope = frozen_fixture()
         source_id = UUID(next(iter(scope["baselines"])))
         _, planned = self.plan(scope, [self.candidate(source_id)])
 
-        roles = [task.role for task in planned.tasks]
-        self.assertEqual(roles, ["source_researcher", "evidence_verifier", "competitive_analyst"])
-        analyst = planned.tasks[-1]
-        self.assertEqual(analyst.depends_on_keys, [planned.tasks[0].task_key])
-        self.assertEqual(analyst.tool_names, ["text_summarizer"])
+        self.assertEqual([task.role for task in planned.tasks], ["competitive_analyst"])
+        analyst = planned.tasks[0]
+        self.assertEqual((analyst.depends_on_keys, analyst.max_iterations), ([], 1))
         self.assertTrue(analyst.question_ids)
         self.assertTrue(analyst.candidate_ids)
 

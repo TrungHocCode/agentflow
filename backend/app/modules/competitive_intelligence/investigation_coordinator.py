@@ -25,60 +25,31 @@ def scope_digest(scope: RoundScope) -> str:
                    "approved_urls": sorted(scope.approved_urls), "config_hash": scope.config_hash})
 
 
-def _role_tasks(source_label: str, candidate: ChangeCandidate, round_number: int) -> list[RoundTask]:
-    researcher_key = f"r{round_number}-research-{candidate.id.hex[:8]}"
-    verifier_key = f"r{round_number}-verify-{candidate.id.hex[:8]}"
-    return [
-        RoundTask(task_key=researcher_key, role="source_researcher",
-            # Section headings are page text, so they reach the model only inside the fenced evidence.
-            description=f"Confirm the observed {candidate.kind} change shown in the evidence "
-                        f"against the approved source; preserve provenance and distinguish source text "
-                        f"from interpretation. Scope: source {candidate.source_id}.",
-            tool_names=list(CI_ROLE_TOOLS["source_researcher"]), source_ids=[candidate.source_id],
-            snapshot_ids=[candidate.before_snapshot_id, candidate.after_snapshot_id],
-            candidate_ids=[candidate.id], estimated_calls=6),
-        RoundTask(task_key=verifier_key, role="evidence_verifier",
-            description=f"Examine supporting and contradictory evidence for candidate {candidate.id} "
-                        f"({candidate.kind}); label each claim "
-                        f"observed or unresolved with exact snapshot offsets. Scope: source {candidate.source_id}.",
-            tool_names=list(CI_ROLE_TOOLS["evidence_verifier"]), source_ids=[candidate.source_id],
-            snapshot_ids=[candidate.before_snapshot_id, candidate.after_snapshot_id],
-            candidate_ids=[candidate.id], depends_on_keys=[researcher_key], max_iterations=2,
-            estimated_calls=2),
-    ]
-
-
 def plan_round(run_id: UUID, watchlist_id: UUID, revision_id: UUID, round_number: int,
                parent_round_id: UUID | None, questions: list[InvestigationQuestion],
                candidates: list[ChangeCandidate], scope: RoundScope, budget: InvestigationBudget,
                final: bool, created_at: datetime) -> InvestigationRound:
-    """Build one bounded round from changed candidates; analysts join only where questions need them."""
+    """Build one bounded round: one analyst per changed source.
+
+    Code has already found and stored each change (snapshot diff), so a round asks a model only what
+    code cannot answer: what the change means for the own product.
+    """
     ordered = sorted(candidates, key=lambda candidate: (str(candidate.source_id), candidate.section or "",
                                                         candidate.detected_at.isoformat()))
-    tasks: list[RoundTask] = []
-    analyst_sources: dict[str, list[UUID]] = {}
-    analyst_candidates: dict[str, list[UUID]] = {}
+    candidates_by_source: dict[str, list[UUID]] = {}
     for candidate in ordered:
-        if len(tasks) + 2 > MAX_ROUND_TASKS:
-            break
-        tasks.extend(_role_tasks(str(candidate.source_id), candidate, round_number))
-        for question in questions:
-            if candidate.id in question.candidate_ids:
-                analyst_sources.setdefault(str(candidate.source_id), []).append(question.id)
-                analyst_candidates.setdefault(str(candidate.source_id), []).append(candidate.id)
-    for source_id, question_ids in sorted(analyst_sources.items()):
-        if len(tasks) + 1 > MAX_ROUND_TASKS:
-            break
-        analyst_key = f"r{round_number}-analyze-{source_id[:8]}"
-        researcher_keys = [task.task_key for task in tasks
-                           if task.role == "source_researcher" and str(task.source_ids[0]) == source_id]
-        tasks.append(RoundTask(task_key=analyst_key, role="competitive_analyst",
+        candidates_by_source.setdefault(str(candidate.source_id), []).append(candidate.id)
+    tasks: list[RoundTask] = []
+    for source_id, candidate_ids in sorted(candidates_by_source.items())[:MAX_ROUND_TASKS - int(final)]:
+        question_ids = {question.id for question in questions if set(question.candidate_ids) & set(candidate_ids)}
+        tasks.append(RoundTask(task_key=f"r{round_number}-analyze-{source_id[:8]}", role="competitive_analyst",
             description="Compare the observed change with the own-product profile, customer segments and "
-                        "comparison criteria provided, and say what it means for the own product.",
+                        "comparison criteria provided, and say what it means for the own product. If only "
+                        "counters, dates or ordering changed, say the change is not meaningful.",
             tool_names=list(CI_ROLE_TOOLS["competitive_analyst"]), source_ids=[UUID(source_id)],
-            question_ids=sorted(set(question_ids)), candidate_ids=sorted(set(analyst_candidates[source_id])),
-            depends_on_keys=researcher_keys, max_iterations=4,
-            estimated_calls=4))
+            question_ids=sorted(question_ids), candidate_ids=candidate_ids,
+            # One turn: the change is in the prompt, so the answer needs no tool.
+            max_iterations=1, estimated_calls=1))
     if final:
         report_key = f"r{round_number}-report"
         tasks.append(RoundTask(task_key=report_key, role="report_agent",

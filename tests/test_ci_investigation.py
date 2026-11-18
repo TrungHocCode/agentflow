@@ -23,9 +23,10 @@ from app.modules.competitive_intelligence.models import InvestigationBudget
 
 NOW = datetime(2026, 10, 8, tzinfo=timezone.utc)
 SOURCE_A = uuid4()
+SOURCE_B = uuid4()
 
 
-def scope_fixture(source_ids=(SOURCE_A,)) -> RoundScope:
+def scope_fixture(source_ids=(SOURCE_A, SOURCE_B)) -> RoundScope:
     return RoundScope(approved_source_ids=list(source_ids),
                       approved_urls=["https://rival.invalid/pricing"], config_hash="c" * 64)
 
@@ -53,43 +54,35 @@ def question_fixture(candidate_ids=()) -> InvestigationQuestion:
 
 
 class TestPlanRound(unittest.TestCase):
-    def test_researcher_and_verifier_per_candidate_with_real_refs(self) -> None:
-        candidate = candidate_fixture()
-        round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [candidate], scope_fixture(),
+    def test_one_single_turn_analyst_per_changed_source(self) -> None:
+        # Code already found the change; measured: researcher/verifier tasks only re-crawled or had nothing to label.
+        pricing, features = candidate_fixture(), candidate_fixture(section="Features")
+        other = candidate_fixture(source_id=SOURCE_B)
+        round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [pricing, features, other], scope_fixture(),
                            budget_fixture(), False, NOW)
-        self.assertEqual(len(round.tasks), 2)
-        researcher, verifier = round.tasks
-        self.assertEqual((researcher.role, verifier.role), ("source_researcher", "evidence_verifier"))
-        self.assertEqual(verifier.depends_on_keys, [researcher.task_key])
+        self.assertEqual([task.role for task in round.tasks], ["competitive_analyst"] * 2)
+        by_source = {task.source_ids[0]: task for task in round.tasks}
+        self.assertEqual(set(by_source[SOURCE_A].candidate_ids), {pricing.id, features.id})
+        self.assertEqual(by_source[SOURCE_B].candidate_ids, [other.id])
         for task in round.tasks:
-            self.assertIn(candidate.id, task.candidate_ids)
-            self.assertIn(candidate.source_id, task.source_ids)
-            self.assertNotIn("coordinator", task.role)
+            self.assertEqual((task.depends_on_keys, task.max_iterations, task.estimated_calls), ([], 1, 1))
 
-    def test_analyst_joins_only_where_questions_need_it(self) -> None:
+    def test_questions_attach_to_the_analyst_of_their_source(self) -> None:
         candidate = candidate_fixture()
         question = question_fixture([candidate.id])
         round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [question], [candidate], scope_fixture(),
                            budget_fixture(), False, NOW)
-        roles = [task.role for task in round.tasks]
-        self.assertIn("competitive_analyst", roles)
-        analyst = next(task for task in round.tasks if task.role == "competitive_analyst")
-        self.assertIn(question.id, analyst.question_ids)
+        self.assertEqual(round.tasks[0].question_ids, [question.id])
         lone = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [candidate], scope_fixture(),
                           budget_fixture(), False, NOW)
-        self.assertNotIn("competitive_analyst", [task.role for task in lone.tasks])
+        self.assertEqual(lone.tasks[0].question_ids, [])
 
-    def test_new_evidence_changes_the_accepted_path_and_rounds_stay_bounded(self) -> None:
-        first = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [candidate_fixture()], scope_fixture(),
-                           budget_fixture(), False, NOW)
-        second = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [],
-                            [candidate_fixture(), candidate_fixture(section="Features")], scope_fixture(),
-                            budget_fixture(), False, NOW)
-        self.assertGreater(len(second.tasks), len(first.tasks))
+    def test_rounds_stay_bounded(self) -> None:
+        sources = [uuid4() for _ in range(30)]
         many = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [],
-                          [candidate_fixture(section=f"S{i}") for i in range(30)], scope_fixture(),
-                          budget_fixture(), False, NOW)
-        self.assertLessEqual(len(many.tasks), 20)
+                          [candidate_fixture(source_id=source) for source in sources],
+                          scope_fixture(sources), budget_fixture(), False, NOW)
+        self.assertEqual(len(many.tasks), 20)
 
     def test_final_round_appends_report_depending_on_all(self) -> None:
         round = plan_round(uuid4(), uuid4(), uuid4(), 2, uuid4(), [], [candidate_fixture()], scope_fixture(),
@@ -102,7 +95,8 @@ class TestPlanRound(unittest.TestCase):
 class TestValidateRound(unittest.TestCase):
     def setUp(self) -> None:
         self.scope, self.budget = scope_fixture(), budget_fixture()
-        self.round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [candidate_fixture()], self.scope,
+        self.round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [],
+                                [candidate_fixture(), candidate_fixture(source_id=SOURCE_B)], self.scope,
                                 self.budget, False, NOW)
 
     def accept(self, round=None, **overrides):
@@ -152,7 +146,8 @@ class TestValidateRound(unittest.TestCase):
         round = self.round.model_copy(update={"tasks": [task, *self.round.tasks[1:]]})
         decision = self.accept(round)
         self.assertTrue(any(reason.startswith("tools_not_approved") for reason in decision.reasons))
-        bare = self.round.tasks[1].model_copy(update={"candidate_ids": [], "snapshot_ids": []})
+        bare = RoundTask(task_key="v", role="evidence_verifier", description="Verify.",
+                         tool_names=["text_summarizer"], source_ids=[SOURCE_A])
         round = self.round.model_copy(update={"tasks": [self.round.tasks[0], bare]})
         decision = self.accept(round)
         self.assertTrue(any(reason.startswith("verifier_without_evidence_refs") for reason in decision.reasons))
@@ -208,20 +203,30 @@ class TestCoverageAndTermination(unittest.TestCase):
                                             "max_tokens": 262144}, round))
 
 
+class TestChangeText(unittest.TestCase):
+    def test_only_differing_lines_are_shown_labelled_with_context(self) -> None:
+        # Measured: given two whole sections, the model called 124 -> 125 points a decrease.
+        from app.modules.competitive_intelligence.investigation_service import change_text
+        candidate = candidate_fixture().model_copy(update={
+            "before_excerpt": "Free\n$0\nPlus\n$10 per member / month\nBusiness\n$20",
+            "after_excerpt": "Free\n$0\nPlus\n$12 per member / month\nBusiness\n$20"})
+        self.assertEqual(change_text(candidate).splitlines(), [
+            "Change in section 'Pricing' (modified):", "Unchanged: Plus", "Before: $10 per member / month",
+            "After: $12 per member / month", "Unchanged: Business"])
+
+
 class TestRuntimeTasksAndRecovery(unittest.TestCase):
     def test_to_runtime_tasks_assigns_ids_lineage_and_excerpts(self) -> None:
         candidate = candidate_fixture()
         round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [question_fixture([candidate.id])],
                            [candidate], scope_fixture(), budget_fixture(), False, NOW)
-        tasks = to_runtime_tasks(round, 7, {str(candidate.after_snapshot_id): "excerpt"}, 300)
-        self.assertEqual([task.id for task in tasks], list(range(7, 7 + len(tasks))))
-        for task in tasks:
-            self.assertEqual(task.config["investigation_round_id"], str(round.id))
-            self.assertEqual(task.agent_id, task.node)
-        verifier = next(task for task in tasks if task.agent_id == "evidence_verifier")
-        researcher = next(task for task in tasks if task.agent_id == "source_researcher")
-        self.assertEqual(verifier.dependencies, [researcher.id])
-        self.assertIn("excerpt", verifier.input_mapping["evidence_excerpts"])
+        tasks = to_runtime_tasks(round, 7, {str(candidate.id): "excerpt"}, 300)
+        self.assertEqual([task.id for task in tasks], [7])
+        analyst = tasks[0]
+        self.assertEqual(analyst.config["investigation_round_id"], str(round.id))
+        self.assertEqual((analyst.agent_id, analyst.node), ("competitive_analyst", "competitive_analyst"))
+        self.assertEqual((analyst.dependencies, analyst.max_iterations), ([], 1))
+        self.assertIn("excerpt", analyst.input_mapping["evidence_excerpts"])
 
     def test_reconstruct_marks_running_interrupted_without_replay(self) -> None:
         candidate = candidate_fixture()
@@ -274,7 +279,8 @@ class TestInvestigationService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.decided_by, "coordinator_code")
         over = budget_fixture(max_tasks=1)
         stored, outcome = await self.service.propose_round(
-            uuid4(), uuid4(), uuid4(), "owner", [], [candidate, candidate_fixture()], self.scope, over,
+            uuid4(), uuid4(), uuid4(), "owner", [], [candidate, candidate_fixture(source_id=SOURCE_B)],
+            self.scope, over,
             0, 0, 0, False, NOW)
         self.assertEqual((stored.status, outcome), ("rejected", "rejected"))
         self.assertTrue(stored.rejection_reasons)
@@ -294,8 +300,8 @@ class TestInvestigationService(unittest.IsolatedAsyncioTestCase):
     async def test_taken_round_number_rejected_without_persisting_duplicate(self) -> None:
         candidate = candidate_fixture()
         first, _ = await self.service.propose_round(
-            uuid4(), uuid4(), uuid4(), "owner", [], [candidate], self.scope, budget_fixture(max_tasks=1),
-            0, 0, 0, False, NOW)
+            uuid4(), uuid4(), uuid4(), "owner", [], [candidate, candidate_fixture(source_id=SOURCE_B)],
+            self.scope, budget_fixture(max_tasks=1), 0, 0, 0, False, NOW)
         self.assertEqual(first.status, "rejected")
         self.rounds.list_rounds = AsyncMock(return_value=[first])
         calls_before = self.rounds.save_round.await_count

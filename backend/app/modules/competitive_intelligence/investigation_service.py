@@ -7,6 +7,7 @@ dispatcher executes them unchanged.
 
 from __future__ import annotations
 
+import difflib
 from datetime import datetime
 from uuid import UUID
 
@@ -22,6 +23,24 @@ from app.modules.competitive_intelligence.ports import InvestigationRepository, 
 from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate, MAX_SPAN_CHARS
 
 COORDINATOR_IDENTITY = "coordinator_code"
+CHANGE_LABELS = {"-": "Before: ", "+": "After: ", " ": "Unchanged: "}
+
+
+def change_text(candidate: ChangeCandidate, max_lines: int = 40) -> str:
+    """The lines that differ, labelled, with one unchanged line of context each.
+
+    Measured: given two whole sections, a local model lost which side was newer and called
+    124 -> 125 points a decrease. Labelled line pairs leave it nothing to compare.
+    """
+    before = [line.strip() for line in candidate.before_excerpt.splitlines() if line.strip()]
+    after = [line.strip() for line in candidate.after_excerpt.splitlines() if line.strip()]
+    lines = [CHANGE_LABELS[line[0]] + line[1:] for line in difflib.unified_diff(before, after, lineterm="", n=1)
+             if line[:1] in CHANGE_LABELS and not line.startswith(("---", "+++"))]
+    if not lines:  # only whitespace differs
+        lines = [f"Before: {candidate.before_excerpt}", f"After: {candidate.after_excerpt}"]
+    if len(lines) > max_lines:
+        lines = [*lines[:max_lines], f"[{len(lines) - max_lines} more lines not shown]"]
+    return "\n".join([f"Change in section '{candidate.section or 'preamble'}' ({candidate.kind}):", *lines])
 
 
 class InvestigationService:
@@ -65,8 +84,7 @@ class InvestigationService:
         excerpts: dict[str, str] = {}
         # A candidate's before/after text is the change itself, so it outranks whole snapshots.
         for candidate in await self.snapshots.list_candidates(str(round.run_id), owner_id):
-            excerpts[str(candidate.id)] = (f"Change in section '{candidate.section or 'preamble'}' ({candidate.kind}).\n"
-                                           f"Before: {candidate.before_excerpt}\nAfter: {candidate.after_excerpt}")
+            excerpts[str(candidate.id)] = change_text(candidate)
         for task in round.tasks:
             for identity in task.snapshot_ids:
                 key = str(identity)

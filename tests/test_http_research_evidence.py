@@ -138,5 +138,46 @@ class HttpResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any("<main>" in message or "legacy_message" in message for message in observations))
 
 
+class CICollectionTests(unittest.IsolatedAsyncioTestCase):
+    """Measured: a model-driven CI collection set mode="static" (no browser fallback) and wrote a
+    misleading summary; the URLs are fixed, so code fetches them and no model is called."""
+
+    async def collect(self, pages: dict[str, str | None]) -> tuple[dict, list[dict], MagicMock, MagicMock]:
+        calls: list[dict] = []
+
+        @tool("news_crawler")
+        def crawl(url: str, mode: str = "auto", max_articles: int = 3) -> str:
+            """Return a fixture page without network access."""
+            calls.append({"url": url, "mode": mode, "max_articles": max_articles})
+            if pages[url] is None:
+                return failure_result("failed", code="blocked", message="blocked", tool_name="news_crawler").to_json()
+            return success_result({"text": pages[url], "final_url": url}, tool_name="news_crawler").to_json()
+
+        llm, store = HttpResearchPipelineTests.fixtures(self)
+        worker = WorkerAgent("source_researcher", "Collect", llm, [crawl], mode="collect_evidence")
+        worker.evidence_store = store
+        task = Task(id=1, node="source_researcher", status="pending", description="Collect approved public sources",
+                    config={"ci_collection": True})
+        output = await worker.execute({"current_task": task, "messages": [], "metadata": {
+            "run_id": "fixture", "input_data": {"urls": list(pages)}}})
+        return output, calls, llm, store
+
+    async def test_every_approved_url_is_fetched_with_browser_fallback_and_no_model_call(self) -> None:
+        output, calls, llm, store = await self.collect({"https://a.invalid/pricing": "Pro $10",
+                                                        "https://b.invalid/pricing": "Team $20"})
+        self.assertEqual([call["url"] for call in calls], ["https://a.invalid/pricing", "https://b.invalid/pricing"])
+        self.assertTrue(all(call["mode"] == "auto" and call["max_articles"] == 0 for call in calls))
+        llm.bind_tools.assert_not_called()
+        llm.with_structured_output.assert_not_called()
+        self.assertEqual(store.save_document.await_count, 2)
+        self.assertEqual(output["current_task"].status, "done")
+
+    async def test_an_unreachable_source_makes_the_task_partial(self) -> None:
+        output, _, _, store = await self.collect({"https://a.invalid/pricing": "Pro $10",
+                                                  "https://b.invalid/pricing": None})
+        self.assertEqual(store.save_document.await_count, 1)
+        self.assertEqual(output["current_task"].status, "partial")
+
+
 if __name__ == "__main__":
     unittest.main()
