@@ -529,6 +529,16 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
             self.assertIn(question, scout.follow_up_question)
         self.assertEqual(tool.calls, [])
 
+    async def test_without_the_model_sentence_openers_are_not_rivals(self) -> None:
+        # Recorded with Ollama down: "Tôi", "Mình", "Theo" and "It" were searched as competitors.
+        self.assertEqual(_understand(self.VI_NOTES, None).named, ["NoteNest"])
+        self.assertEqual(_understand("I make NoteNest. Watch my competitors.\nIt is a markdown app.", None).named, [])
+        tool = StubBatchTool([])
+        scout = ScoutDiscovery(tool, page_fetcher=no_page)
+        self.assertEqual(await scout.stage_a("Theo dõi đối thủ giúp mình"), [])
+        self.assertIsNotNone(scout.follow_up_question)
+        self.assertEqual(tool.calls, [])
+
     async def test_planner_returns_no_brief_when_the_model_fails(self) -> None:
         with patch("app.infrastructure.ci_setup_planner.get_llm", side_effect=RuntimeError("offline")):
             self.assertIsNone(await OllamaSetupPlanner().read_brief("I make NoteNest."))

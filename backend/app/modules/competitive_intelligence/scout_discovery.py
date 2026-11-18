@@ -347,7 +347,10 @@ def _follow_up_question(request: _Request) -> str:
 def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
     """Combine keyword rules with a model's reading of the request; only names written in it survive."""
     own = _own_product(prompt)
-    named = [term for term in _product_terms(prompt) if term != own]
+    # Capitalized words count as names only mid-sentence: openers such as "Tôi", "Theo" or "It" became
+    # rival searches whenever the model was unavailable (measured with Ollama down).
+    named = [term for term in _product_terms(prompt)
+             if term != own and not re.search(rf"(?:^|[.!?\n]\s*){re.escape(term)}\b", prompt)]
     category = _category(prompt, own)
     dimensions = _dimensions(prompt)
     if brief is not None:
@@ -367,9 +370,7 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
         if rejected_own and len(rejected_own.split()) <= MAX_OWN_PRODUCT_WORDS:
             model_named.insert(0, rejected_own)  # a product the request names but does not claim is a rival
         if not model_named:
-            # A small model sometimes drops names it was given; keep capitalized words written mid-sentence,
-            # not sentence openers such as "Tôi" or "It".
-            model_named = [term for term in named if not re.search(rf"(?:^|[.!?]\s+){re.escape(term)}\b", prompt)]
+            model_named = list(named)  # a small model sometimes drops names it was given
         named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
         model_category = " ".join(str(brief.category or "").split())[:80]
         # Trust the model's category only when it also copied, verbatim, the words that describe the product.
