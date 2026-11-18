@@ -35,6 +35,7 @@ def main() -> int:
                 "ENVIRONMENT": "test", "ENABLE_MONGODB": "false",
                 "AGENTFLOW_RUN_LIVE_OLLAMA_TESTS": "0",
                 "AGENTFLOW_CRAWLER_BROWSER_ENABLED": "false",
+                "AGENTFLOW_CRAWLER_POLITENESS_ENABLED": "false",
                 "AUTH_SIGNING_SECRET": "unit-tests-only-not-a-deployment-secret",
                 "POSTGRES_URL": "postgresql+asyncpg://unused:unused@127.0.0.1:1/unit_unused",
                 "REDIS_URL": "redis://127.0.0.1:1/15",

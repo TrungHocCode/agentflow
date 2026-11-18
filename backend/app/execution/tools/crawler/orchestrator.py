@@ -12,6 +12,7 @@ from app.shared.collection_scope import scoped_collection
 
 from app.execution.tools.cache import get_cached, set_cached
 from app.execution.tools.contracts import SourceMetadata, failure_result, success_result
+from app.execution.tools.crawler import politeness
 from app.execution.tools.crawler.browser_fetcher import BrowserFetchError, render_page
 from app.execution.tools.crawler.quality import (
     MIN_QUALITY_SCORE,
@@ -361,6 +362,17 @@ def crawl_url(
     cached_result = None if scoped_collection() else get_cached(cached_key)
     if isinstance(cached_result, str):
         return cached_result
+
+    if not politeness.admit(normalized_url):
+        return _failure_json(
+            status="blocked",
+            code="robots_disallowed",
+            message="The site's robots.txt does not allow crawling this page.",
+            requested_url=normalized_url,
+            final_url=normalized_url,
+            duration_ms=round((perf_counter() - started) * 1000),
+            attempts=[],
+        )
 
     attempts: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []

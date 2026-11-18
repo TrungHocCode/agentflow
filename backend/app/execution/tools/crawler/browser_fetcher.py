@@ -93,6 +93,7 @@ def render_page(url: str) -> RenderedPage:
                     "Chromium is unavailable. Install the Playwright Chromium browser before using browser fallback.",
                 ) from exc
 
+            page = None
             try:
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 AgentFlowResearchCrawler/1.0",
@@ -197,6 +198,9 @@ def render_page(url: str) -> RenderedPage:
                     warnings=tuple(warnings),
                 )
             finally:
+                if page is not None:
+                    # Let in-flight route handlers finish quietly instead of failing on the closed page.
+                    page.unroute_all(behavior="ignoreErrors")
                 browser.close()
     except BrowserFetchError:
         raise
