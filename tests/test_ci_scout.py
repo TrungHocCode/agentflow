@@ -15,7 +15,12 @@ from app.api.dependencies import get_current_user_id, get_intelligence_service
 from app.core.config import settings
 from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
 from app.main import app
-from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery, _product_name
+from app.modules.competitive_intelligence.scout_discovery import (
+    ScoutDiscovery,
+    _listed_names,
+    _product_name,
+    _site_of,
+)
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.shared.errors import DependencyUnavailableError, RateLimitExceeded
 
@@ -237,7 +242,33 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
     async def test_platform_words_are_not_product_names(self) -> None:
         tool = StubBatchTool([])
         await ScoutDiscovery(tool).stage_a("I build NoteNest, a markdown notes app for Mac and Windows.")
-        self.assertNotIn("Mac", " ".join(tool.calls[0][0]))
+        self.assertEqual(tool.calls[0][0], ["best markdown notes app for Mac and Windows",
+                                            "markdown notes app for Mac and Windows alternatives"])
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool).stage_a("We run Pipely, a CRM for small agencies.")
+        self.assertEqual(tool.calls[0][0], ["best CRM for small agencies", "CRM for small agencies alternatives"])
+
+    def test_listicle_headings_yield_product_names_only(self) -> None:
+        # Headings recorded from real "best X" articles.
+        markdown = "\n\n".join([
+            "# 12 Best Task Management Software for Agencies", "## How we selected these tools", "## TL;DR",
+            "## 1. TMetric", "### Why agencies choose TMetric", "## 2. ClickUp", "### Key features",
+            "### Bear Notes", "#### Best for", "#### Not ideal if", "### Simplicity + Cross Linking",
+            "### Non-proprietary format", "#### Team fit", "### iA Writer", "### Things 3", "## 6. Monday.com",
+            "### Craft: docs that look great", "### Obsidian (free for personal use)", "Plain paragraph",
+            "## 2. ClickUp",
+        ])
+        self.assertEqual(_listed_names(markdown), ["TMetric", "ClickUp", "Bear Notes", "iA Writer", "Things 3",
+                                                   "Monday.com", "Craft", "Obsidian"])
+
+    def test_product_site_must_match_the_name(self) -> None:
+        def records(*domains):
+            return [{"url": f"https://{domain}/pricing"} for domain in domains]
+        self.assertEqual(_site_of("Craft", records("craftybase.com", "craft.do")), "craft.do")
+        self.assertEqual(_site_of("Bear Notes", records("apple.com", "bear.app")), "bear.app")
+        self.assertEqual(_site_of("Zoho CRM", records("zoho.com")), "zoho.com")
+        self.assertEqual(_site_of("Monday.com", records("www.monday.com")), "monday.com")
+        self.assertIsNone(_site_of("Jira", records("atlassian.com", "trustradius.com")))
 
     def test_product_name_drops_page_words_and_taglines(self) -> None:
         self.assertEqual(_product_name("Acme Pricing Plans: Free and Pro", "acme.com"), "Acme")
@@ -342,6 +373,56 @@ class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
         ])
         found = await ScoutDiscovery(tool, page_fetcher=no_page).stage_b(["craft.do"], "release_notes")
         self.assertEqual([s.url for s in found["craft.do"]], ["https://www.craft.do/whats-new"])
+
+
+class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
+    ARTICLES = {
+        "https://blog.example/best-notes": ("## 1. Obsidian\n\n## 2. Notion\n\n## Pros\n\n## Bear Notes",
+                                            ["https://obsidian.md/download", "https://blog.example/about"]),
+        "https://review.example/notes": ("### Obsidian\n\n### Notion\n\n### InkPad", []),
+    }
+    RESULTS = [
+        {"url": "https://blog.example/best-notes", "title": "The 10 best note apps in 2026", "snippet": "x"},
+        {"url": "https://review.example/notes", "title": "Best note-taking apps compared", "snippet": "x"},
+        {"url": "https://notion.com/pricing", "title": "Notion pricing", "snippet": "Plans"},
+    ]
+
+    async def fetch(self, url):
+        markdown, links = self.ARTICLES.get(url, ("", []))
+        return {"final_url": url, "title": "", "text": markdown, "markdown": markdown, "links": links}
+
+    async def test_reads_comparison_articles_when_no_competitor_is_named(self) -> None:
+        tool = StubBatchTool(self.RESULTS)
+        scout = ScoutDiscovery(tool, page_fetcher=self.fetch)
+        products = await scout.stage_a("I make InkPad, a note-taking app. Find my competitors.")
+
+        self.assertEqual([(p.name, p.official_website, p.suggested, p.kind) for p in products], [
+            ("Obsidian", "https://obsidian.md/", True, "competitor"),  # from the article's own link
+            ("Notion", "https://notion.com/", True, "competitor"),  # from the pricing lookup
+            ("InkPad", None, True, "own"),  # listed in an article, but it is the user's product
+        ])
+        self.assertIn("2 comparison article(s): blog.example, review.example", products[0].rationale)
+        # Bear Notes had no matching site, so only unresolved names were looked up, in one more search.
+        self.assertEqual(tool.calls[1][0], ["Notion pricing", "Bear Notes pricing"])
+        self.assertEqual(len(tool.calls), 2)
+
+    async def test_named_competitors_skip_the_articles(self) -> None:
+        tool = StubBatchTool(self.RESULTS)
+        fetched = []
+
+        async def fetch(url):
+            fetched.append(url)
+            return None
+        await ScoutDiscovery(tool, page_fetcher=fetch).stage_a("I make InkPad. Track pricing of Notion.")
+        self.assertEqual(fetched, [])
+
+    async def test_unreadable_articles_fall_back_to_search_results(self) -> None:
+        async def nothing(_url):
+            return None
+        scout = ScoutDiscovery(StubBatchTool(self.RESULTS), page_fetcher=nothing)
+        products = await scout.stage_a("I make InkPad, a note-taking app. Find my competitors.")
+        self.assertEqual([p.official_website for p in products if p.kind == "competitor"], ["https://notion.com/"])
+        self.assertTrue(any("did not list readable product names" in warning for warning in scout.warnings))
 
 
 class TestScoutRoundCharging(unittest.IsolatedAsyncioTestCase):

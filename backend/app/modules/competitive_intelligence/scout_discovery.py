@@ -14,7 +14,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from app.execution.tools.base import ToolRegistry
 from app.modules.competitive_intelligence.models import public_url
@@ -28,6 +28,7 @@ MAX_RESULTS_PER_QUERY = 5
 MAX_PRODUCTS = 10
 MAX_SOURCES_PER_DOMAIN = 5
 MAX_TOOL_CALLS_PER_STAGE = 2
+MAX_LISTICLES = 4
 
 DIMENSION_QUERY_TERMS: dict[str, str] = {
     "pricing": "pricing page",
@@ -48,6 +49,7 @@ _GENERIC_CAPITALIZED = {
     "Watch", "We", "What", "Who", "Why",
     # Platforms and categories, not products.
     "AI", "Android", "App", "Chrome", "Linux", "Mac", "SaaS", "Web", "Windows",
+    "API", "ATS", "B2B", "B2C", "CMS", "CRM", "ERP", "HR", "LMS", "POS", "SEO", "SMB",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
@@ -64,6 +66,18 @@ _ARTICLE_TITLE = re.compile(
 _NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
 _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
+# The category in "I make NoteNest, a markdown note-taking app for Mac." -> "markdown note-taking app for Mac".
+_CATEGORY = re.compile(r"\b(?:an?|the)\s+([^.;!?]{3,80}?)\s*(?:[.;!?]|$)", re.IGNORECASE)
+_HEADING = re.compile(r"^#{1,4}\s+(.+)$")
+_LIST_NUMBER = re.compile(r"^(?:#?\d{1,2}[.):]?|No\.\s*\d{1,2})\s+")
+# Headings in "best X" articles that are sections, not products. Unverified names are dropped later anyway.
+_SECTION_FIRST_WORDS = {
+    "about", "alternatives", "are", "best", "bottom", "can", "comments", "comparison", "conclusion", "cons",
+    "discover", "do", "does", "faq", "faqs", "features", "final", "frequently", "how", "integrations", "is", "key",
+    "methodology", "more", "not", "other", "our", "overview", "pricing", "pros", "related", "requirements",
+    "share", "should", "summary", "table", "the", "tl;dr", "tools", "top", "verdict", "what", "when", "where",
+    "which", "who", "why", "worth",
+}
 # Templates and single forum threads mention a dimension without being the product's page for it.
 _NOT_A_SOURCE_PATH = re.compile(r"/(?:templates?|t)/", re.IGNORECASE)
 
@@ -80,23 +94,39 @@ SITE_PATHS: dict[str, tuple[str, ...]] = {
 _PRICING_TEXT = re.compile(
     r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
 
-PageFetcher = Callable[[str], Awaitable[dict[str, str] | None]]
+PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
 
 
-async def _default_page_fetcher(url: str) -> dict[str, str] | None:
-    """Fetch one public page with the app's crawler; None when it is not a usable page."""
-    from app.execution.tools.news_crawler_tool import news_crawler  # Lazy: the tool module is heavy.
+async def _default_page_fetcher(url: str) -> dict[str, Any] | None:
+    """Fetch one public page with the app's crawler, plus its links; None when it is not a usable page."""
+    # Lazy: the crawler modules are heavy.
+    from app.execution.tools.crawler.orchestrator import crawl_url
+    from app.execution.tools.network_policy import validate_external_url
+    from app.execution.tools.news_crawler_tool import HTMLContentExtractor, _extract_page
 
-    raw = await asyncio.to_thread(news_crawler.invoke, {"url": url, "mode": "static", "max_articles": 0})
+    safe_url, error = validate_external_url(url)
+    if error or not safe_url:
+        return None
+
+    def extract_with_links(page_url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
+        status, data, warnings = _extract_page(page_url, html)
+        parser = HTMLContentExtractor()
+        parser.feed(html)
+        parser.close()
+        data["links"] = [urljoin(page_url, link["href"]) for link in parser.links[:500]]
+        return status, data, warnings
+
+    raw = await asyncio.to_thread(crawl_url, safe_url, "static", extract_page=extract_with_links)
     result = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(result, dict) or not result.get("ok"):
         return None
     data = result.get("data") or {}
     return {"final_url": str((result.get("source") or {}).get("final_url") or url),
-            "title": str(data.get("title") or ""), "text": str(data.get("text") or "")}
+            "title": str(data.get("title") or ""), "text": str(data.get("text") or ""),
+            "markdown": str(data.get("markdown") or ""), "links": list(data.get("links") or [])}
 
 
-def _page_fits(dimension: str, host: str, page: dict[str, str]) -> bool:
+def _page_fits(dimension: str, host: str, page: dict[str, Any]) -> bool:
     """A probed page counts only if it stayed on the site, is not the home page, and reads like the dimension."""
     final = urlsplit(page.get("final_url") or "")
     if not final.hostname or not same_site(final.hostname.casefold(), host) or final.path.strip("/") == "":
@@ -195,6 +225,46 @@ def _fallback_keywords(prompt: str) -> list[str]:
 def _own_product(prompt: str) -> str | None:
     match = _OWN_PRODUCT.search(prompt)
     return match.group(1).rstrip("&.+_-") if match else None
+
+
+def _category(prompt: str, own: str | None) -> str | None:
+    """The product category the user described, searched as "best <category>" when no rival is named."""
+    start = prompt.find(own) + len(own) if own and own in prompt else 0
+    match = _CATEGORY.search(prompt, start)
+    return " ".join(match.group(1).split()) if match else None
+
+
+def _listed_names(markdown: str) -> list[str]:
+    """Product names from the headings of a "best X" article ("## 2. ClickUp", "### Bear Notes")."""
+    names: list[str] = []
+    for block in markdown.split("\n\n"):
+        heading = _HEADING.match(block.strip())
+        if not heading:
+            continue
+        text = _LIST_NUMBER.sub("", heading.group(1).strip())
+        text = re.split(r"\s*[(\[]", _NAME_SEPARATOR.split(text, maxsplit=1)[0], maxsplit=1)[0].strip(" .:")
+        words = text.split()
+        # Product names capitalize every word ("Bear Notes", "iA Writer", "Things 3"); sections do not.
+        if (not 1 <= len(words) <= 3 or len(text) > 40 or words[0].casefold() in _SECTION_FIRST_WORDS
+                or not all(any(char.isupper() or char.isdigit() for char in word) for word in words)
+                or text in names):
+            continue
+        names.append(text)
+    return names
+
+
+def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
+    """The first result domain that is plausibly the product's own (bear.app for "Bear Notes").
+
+    The domain name must be the product name or part of it; a longer one (craftybase.com for "Craft") is another firm.
+    """
+    wanted = _compact(name)
+    for record in records:
+        domain = _registrable_domain(str(record.get("url") or ""))
+        label = _compact(domain.split(".")[0]) if domain else ""
+        if label and (label == wanted or (len(label) >= 4 and label in wanted)):
+            return domain
+    return None
 
 
 def _compact(value: str) -> str:
@@ -317,6 +387,9 @@ class ScoutDiscovery:
             if len(named) > MAX_NAMED_QUERIES:
                 self._warn(f"Searched the first {MAX_NAMED_QUERIES} named products; add the rest manually: "
                            f"{', '.join(named[MAX_NAMED_QUERIES:])}.")
+        elif category := _category(prompt, own):
+            # Nobody named: "best X" articles list the field; stage A reads their headings.
+            queries = [f"best {category}", f"{category} alternatives"]
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:
@@ -353,6 +426,10 @@ class ScoutDiscovery:
 
         terms = _product_terms(prompt)
         own = _own_product(prompt)
+        if not [term for term in terms if term != own]:
+            listed = await self._listed_products(records, own)
+            if listed:
+                return self._with_own(listed, own)
         ranking_terms = _ranking_terms(prompt, terms)
         ranked: list[tuple[bool, int, int, str, dict[str, Any], set[str], str | None]] = []
         skipped_articles = 0
@@ -408,6 +485,18 @@ class ScoutDiscovery:
                 picked_names.add(named)
             if len(products) >= MAX_PRODUCTS:
                 break
+        products = self._with_own(products, own)
+        if shared_names:
+            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
+                       "ticked. Check each website before tracking.")
+        if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
+            self._warn("Truncated competitor candidates to one per domain.")
+        if not products:
+            self._warn("Search results did not contain usable competitor domains.")
+        return products
+
+    @staticmethod
+    def _with_own(products: list[RecommendedProduct], own: str | None) -> list[RecommendedProduct]:
         if own and not any(product.kind == "own" for product in products):
             # The user named their product ("I make InkPad"); approval needs it even without a website.
             if len(products) >= MAX_PRODUCTS:
@@ -416,13 +505,64 @@ class ScoutDiscovery:
             products.append(RecommendedProduct(name=own, kind="own", suggested=True, company="",
                                                official_website=None, sources=[], provenance="user_supplied",
                                                rationale="Named in your request as your own product."))
-        if shared_names:
-            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
-                       "ticked. Check each website before tracking.")
-        if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
-            self._warn("Truncated competitor candidates to one per domain.")
+        return products
+
+    async def _listed_products(self, records: list[dict[str, Any]], own: str | None) -> list[RecommendedProduct]:
+        """Read the top "best X" articles and keep the products they list that have a website of their own."""
+        articles: list[dict[str, Any]] = []
+        article_domains: set[str] = set()
+        for record in records:
+            domain = _registrable_domain(str(record.get("url") or ""))
+            if domain and domain not in article_domains and _ARTICLE_TITLE.search(str(record.get("title") or "")):
+                article_domains.add(domain)
+                articles.append(record)
+        articles = articles[:MAX_LISTICLES]
+        if not articles:
+            return []
+        pages = await asyncio.gather(*(self.page_fetcher(str(record["url"])) for record in articles),
+                                     return_exceptions=True)
+        counts: dict[str, int] = {}
+        names: dict[str, str] = {}
+        listed_by: dict[str, list[str]] = {}
+        links: list[dict[str, str]] = []
+        for record, page in zip(articles, pages):
+            if not isinstance(page, dict):
+                continue
+            links.extend({"url": link} for link in page.get("links", [])
+                         if _registrable_domain(link) not in article_domains)
+            for name in _listed_names(page.get("markdown", "")):
+                key = _compact(name)
+                if not key or (own and key == _compact(own)):
+                    continue
+                names.setdefault(key, name)
+                counts[key] = counts.get(key, 0) + 1
+                listed_by.setdefault(key, []).append(_registrable_domain(str(record["url"])))
+        if not counts:
+            self._warn("The comparison articles found did not list readable product names.")
+            return []
+        # Products listed by several articles first; a name in only one may be a section heading.
+        ranked = sorted(counts, key=lambda key: -counts[key])[:MAX_PRODUCTS]
+        # The articles usually link each product's own site; search only for the names they do not.
+        sites = {key: _site_of(names[key], links) for key in ranked}
+        unresolved = [key for key in ranked if sites[key] is None][:MAX_BATCH_QUERIES]
+        if unresolved:
+            # Pricing pages live on the product's own site; "<name> official website" mostly finds directories.
+            lookups = await self._search([f"{names[key]} pricing" for key in unresolved], MAX_RESULTS_PER_QUERY)
+            sites.update({key: _site_of(names[key], lookups) for key in unresolved})
+        products: list[RecommendedProduct] = []
+        seen: set[str] = set()
+        for key in ranked:
+            domain = sites[key]
+            if domain is None or domain in seen or domain in article_domains:
+                continue
+            seen.add(domain)
+            rationale = f"Listed in {counts[key]} comparison article(s): {', '.join(listed_by[key])}."
+            products.append(RecommendedProduct(
+                name=names[key], kind="competitor", suggested=counts[key] >= 2, company="",
+                official_website=f"https://{domain}/", sources=[], provenance="web_search", rationale=rationale[:500],
+            ))
         if not products:
-            self._warn("Search results did not contain usable competitor domains.")
+            self._warn("No listed product had a website matching its name; add competitors by hand.")
         return products
 
     async def stage_b(self, domains: list[str], dimension: str) -> dict[str, list[RecommendedSource]]:
