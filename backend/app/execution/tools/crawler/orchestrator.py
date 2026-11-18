@@ -18,6 +18,7 @@ from app.execution.tools.crawler.quality import (
     calculate_quality_score,
     detect_access_challenge,
     looks_client_rendered,
+    pricing_page_without_prices,
 )
 from app.execution.tools.network_policy import (
     MAX_REDIRECTS,
@@ -485,7 +486,10 @@ def crawl_url(
                             # incomplete static shell; render them unless quality is high.
                             or (
                                 looks_client_rendered(html)
-                                and candidate["quality_score"] < 0.4
+                                and (
+                                    candidate["quality_score"] < 0.4
+                                    or pricing_page_without_prices(final_url, candidate["data"].get("text"))
+                                )
                             )
                             or (
                                 candidate["quality_score"] < MIN_QUALITY_SCORE

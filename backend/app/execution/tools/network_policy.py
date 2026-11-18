@@ -60,6 +60,25 @@ def validate_redirect_target(current_url: str, location: str) -> tuple[str | Non
     return candidate, None
 
 
+def validate_subresource_target(url: str) -> str | None:
+    """Let a rendered page load scripts and data from public hosts; returns an error message or None.
+
+    Pages often load their bundles and pricing data from a CDN or API on another site. These
+    requests only help render the approved page and never become evidence themselves, so they
+    need the SSRF checks but not the approved-site bound. Navigation keeps that bound.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        return "Sub-resource URL is not a plain HTTP(S) URL."
+    try:
+        port = parsed.port
+    except ValueError:
+        return "URL contains an invalid port."
+    if scoped_collection() or os.getenv("AGENTFLOW_ALLOW_PRIVATE_NETWORK") != "1":
+        return _check_host_safety(parsed.hostname.lower().rstrip("."), port)
+    return None
+
+
 def _is_private_address(value: str) -> bool:
     try:
         address = ipaddress.ip_address(value)

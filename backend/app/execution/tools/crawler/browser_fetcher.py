@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from time import perf_counter
 from urllib.parse import urlparse
 
-from app.execution.tools.network_policy import MAX_REDIRECTS, validate_external_url, validate_redirect_target
+from app.execution.tools.network_policy import (
+    MAX_REDIRECTS,
+    validate_external_url,
+    validate_redirect_target,
+    validate_subresource_target,
+)
 
 
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
@@ -57,7 +62,8 @@ def render_page(url: str) -> RenderedPage:
 
     timeout_ms = _positive_int_env("AGENTFLOW_CRAWLER_BROWSER_TIMEOUT_MS", 18000, 30000)
     settle_ms = _positive_int_env("AGENTFLOW_CRAWLER_BROWSER_SETTLE_MS", 600, 2000)
-    slot_timeout = _positive_int_env("AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS", 2, 10)
+    # Wait about two renders long so a batch of pages queues for the browser instead of losing the fallback.
+    slot_timeout = _positive_int_env("AGENTFLOW_CRAWLER_BROWSER_SLOT_TIMEOUT_SECONDS", 30, 60)
     started = perf_counter()
 
     try:
@@ -125,9 +131,7 @@ def render_page(url: str) -> RenderedPage:
                         if request.is_navigation_request():
                             _, error = validate_external_url(request.url)
                         else:
-                            # Sub-resources (bundles, XHR) may live on the same site; keep
-                            # them bounded to the approved site plus SSRF checks.
-                            _, error = validate_redirect_target(safe_url, request.url)
+                            error = validate_subresource_target(request.url)
                         is_allowed = error is None
                         validated_hosts[host_key] = is_allowed
                     if not is_allowed:

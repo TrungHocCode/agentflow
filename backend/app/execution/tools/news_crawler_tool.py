@@ -279,6 +279,9 @@ class HTMLContentExtractor(HTMLParser):
 
     @staticmethod
     def _is_boilerplate(tag: str, attrs: dict[str, str]) -> bool:
+        # Page roots carry layout classes such as "no-sidebar" or "modal-open"; skipping one drops the page.
+        if tag in {"html", "body"}:
+            return False
         if (
             tag in SKIPPED_TAGS
             or attrs.get("role", "").lower() in {"navigation", "complementary", "contentinfo"}

@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 
-from app.execution.tools.network_policy import same_site, validate_redirect_target
+from app.execution.tools.network_policy import same_site, validate_redirect_target, validate_subresource_target
 from app.shared.collection_scope import collection_scope
 
 
@@ -57,6 +57,19 @@ class TestRedirectTarget(unittest.TestCase):
                                                                 "https://www.todoist.com/pricing")
             self.assertEqual(redirect_error, None)
             self.assertIn("www.todoist.com", redirect)
+
+
+class TestSubresourceTarget(unittest.TestCase):
+    def test_public_cross_site_assets_allowed_even_in_scope(self) -> None:
+        with collection_scope(["https://www.hubspot.com/pricing/marketing"]):
+            self.assertIsNone(validate_subresource_target("https://static.hsappstatic.net/app.js"))
+
+    def test_private_and_odd_targets_blocked(self) -> None:
+        with collection_scope(["https://todoist.com/pricing"]):
+            self.assertIsNotNone(validate_subresource_target("http://127.0.0.1/admin"))
+            self.assertIsNotNone(validate_subresource_target("http://localhost:8000/"))
+            self.assertIsNotNone(validate_subresource_target("https://user:pass@cdn.example.net/a.js"))
+            self.assertIsNotNone(validate_subresource_target("file:///etc/passwd"))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 
 CHALLENGE_MARKERS = (
@@ -42,6 +44,9 @@ CLIENT_RENDER_MARKERS = (
 )
 
 MIN_QUALITY_SCORE = 0.24
+PRICING_PATH = re.compile(r"/(?:pricing|plans|compare-plans|pricing-plans|premium)(?:[/.-]|$)", re.IGNORECASE)
+# Sites localize the currency by visitor, so a pricing page may show any of these.
+PRICE_TEXT = re.compile(r"[$€£¥₹₫₩]\s?\d|\d\s?(?:[€£₫]|USD|EUR|GBP|VND)")
 
 
 def detect_access_challenge(html: str) -> bool:
@@ -60,6 +65,12 @@ def looks_client_rendered(html: str) -> bool:
         or "application/json" in sample
         or "type=module" in sample
     )
+
+
+def pricing_page_without_prices(url: str, text: str) -> bool:
+    """A pricing URL whose text shows no price usually renders its prices with JavaScript."""
+
+    return bool(PRICING_PATH.search(urlparse(url).path)) and not PRICE_TEXT.search(text or "")
 
 
 def calculate_quality_score(data: dict[str, Any]) -> float:
