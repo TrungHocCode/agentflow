@@ -10,15 +10,13 @@ import {
 } from 'lucide-react';
 import { Button } from './ui/button';
 
+// The assistant is the main way in; the pages below are for following what it set up.
 const PRIMARY_ITEMS = [
-  { id: 'watchlists', label: 'Watchlists', icon: Radar },
+  { id: 'studio', label: 'Assistant', icon: MessageSquareText },
   { id: 'changes', label: 'Changes', icon: GitCompare },
+  { id: 'watchlists', label: 'Watchlists', icon: Radar },
   { id: 'briefs', label: 'Briefs & History', icon: FileText },
   { id: 'settings', label: 'Settings', icon: Settings }
-];
-
-const SECONDARY_ITEMS = [
-  { id: 'studio', label: 'Assistant', icon: MessageSquareText }
 ];
 
 function initials(user) {
@@ -69,18 +67,9 @@ export default function Sidebar({ activeTab, setActiveTab, user, onLogout }) {
           </nav>
         </div>
 
-        <div>
-          <p className="sidebar-section-label">Assistant</p>
-          <nav className="sidebar-nav" data-testid="sidebar-assistant-nav">
-            {SECONDARY_ITEMS.map((item) => (
-              <NavButton key={item.id} item={item} activeTab={activeTab} setActiveTab={setActiveTab} />
-            ))}
-          </nav>
-        </div>
-
         <div className="sidebar-note">
           <BookOpenText aria-hidden="true" />
-          <span>Track competitor sources, review changes, and read the brief.</span>
+          <span>Tell the assistant what to track, then follow changes and briefs here.</span>
         </div>
       </div>
 

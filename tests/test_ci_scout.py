@@ -118,6 +118,10 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
     async def test_ranks_and_dedupes_domains_with_web_search_provenance(self) -> None:
         tool = StubBatchTool(COMPETITOR_RESULTS)
         products = await ScoutDiscovery(tool).stage_a(PROMPT)
+        # The user's own product (TaskFlow) has no search result; it is appended without a website.
+        self.assertEqual((products[-1].name, products[-1].kind, products[-1].official_website),
+                         ("TaskFlow", "own", None))
+        products = products[:-1]
 
         self.assertEqual(len(tool.calls), 1)
         queries, max_results = tool.calls[0]
@@ -185,11 +189,55 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_site["https://monday.com/"].kind, "competitor")
         self.assertEqual(by_site["https://cal.com/"].kind, "own")
 
+    async def test_only_the_top_site_is_ticked_when_companies_share_a_name(self) -> None:
+        # Recorded from a trial: two unrelated companies are both called Craft (and Obsidian).
+        results = [{"url": "https://craft.do/pricing", "title": "Craft pricing", "snippet": "Craft is free to start."},
+                   {"url": "https://craft.io/pricing", "title": "Craft pricing", "snippet": "For product managers."},
+                   {"url": "https://obsidian.md/pricing", "title": "Obsidian", "snippet": "Free and private."},
+                   {"url": "https://obsidian.rip/pricing", "title": "Obsidian", "snippet": "Not self-serve."}]
+        scout = ScoutDiscovery(StubBatchTool(results))
+        products = await scout.stage_a("I make InkPad, a note-taking app. Track pricing of Obsidian and Craft.")
+        ticked = {product.official_website: product.suggested for product in products if product.official_website}
+
+        self.assertEqual(ticked, {"https://craft.do/": True, "https://craft.io/": False,
+                                  "https://obsidian.md/": True, "https://obsidian.rip/": False})
+        self.assertTrue(any("Craft, Obsidian" in warning for warning in scout.warnings))
+
+    async def test_own_product_without_a_website_is_still_listed(self) -> None:
+        results = [{"url": "https://obsidian.md/pricing", "title": "Obsidian", "snippet": "Free and private."}]
+        products = await ScoutDiscovery(StubBatchTool(results)).stage_a(
+            "I make InkPad, a note-taking app. Track pricing of Obsidian.")
+        own = [product for product in products if product.kind == "own"]
+
+        self.assertEqual([(p.name, p.official_website, p.suggested, p.provenance) for p in own],
+                         [("InkPad", None, True, "user_supplied")])
+        full = [{"url": f"https://obsidian{index}.example/", "title": "Obsidian", "snippet": "x"} for index in range(12)]
+        products = await ScoutDiscovery(StubBatchTool(full)).stage_a("I make InkPad. Track Obsidian.")
+        self.assertLessEqual(len(products), 10)
+        self.assertEqual(products[-1].name, "InkPad")
+
     async def test_unnamed_candidates_are_not_suggested(self) -> None:
         results = [{"url": "https://rival.example/", "title": "Rival - Team tasks", "snippet": "Tasks"}]
         products = await ScoutDiscovery(StubBatchTool(results)).stage_a(PROMPT)
         self.assertEqual(products[0].name, "Rival")
         self.assertFalse(products[0].suggested)
+
+    async def test_off_site_pages_about_named_products_are_dropped(self) -> None:
+        # Recorded from a Tavily trial: reviews and a namesake company ranked beside the real sites.
+        results = [{"url": "https://www.notion.com/pricing", "title": "Notion pricing", "snippet": "Plans"},
+                   {"url": "https://www.usecarly.com/notion", "title": "Notion Pricing Tiers & Costs", "snippet": "x"},
+                   {"url": "https://www.globenewswire.com/news", "snippet": "x",
+                    "title": "Obsidian Energy Announces Offering and Pricing of $175 Million Notes"},
+                   {"url": "https://rival.example/", "title": "Rival - notes for teams", "snippet": "x"}]
+        products = await ScoutDiscovery(StubBatchTool(results)).stage_a(
+            "I make NoteNest. Track pricing of Notion and Obsidian.")
+        self.assertEqual([p.official_website for p in products if p.kind == "competitor"],
+                         ["https://notion.com/", "https://rival.example/"])
+
+    async def test_platform_words_are_not_product_names(self) -> None:
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool).stage_a("I build NoteNest, a markdown notes app for Mac and Windows.")
+        self.assertNotIn("Mac", " ".join(tool.calls[0][0]))
 
     def test_product_name_drops_page_words_and_taglines(self) -> None:
         self.assertEqual(_product_name("Acme Pricing Plans: Free and Pro", "acme.com"), "Acme")
@@ -214,10 +262,67 @@ class TestScoutStageA(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("No web search results" in warning for warning in scout.warnings))
 
 
+async def no_page(_url):
+    return None
+
+
+def site_pages(pages):
+    """Page fetcher stub: maps a probed URL to (final_url, title, text); records every probe."""
+    probed = []
+
+    async def fetch(url):
+        probed.append(url)
+        if url not in pages:
+            return None
+        final_url, title, text = pages[url]
+        return {"final_url": final_url, "title": title, "text": text}
+
+    fetch.probed = probed
+    return fetch
+
+
 class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
+    async def test_finds_the_pricing_page_on_the_site_without_searching(self) -> None:
+        tool = StubBatchTool(SOURCE_RESULTS)
+        fetch = site_pages({
+            # Soft 404: /pricing redirects home, so it must not count.
+            "https://evernote.com/pricing": ("https://evernote.com/", "Evernote", "Free $14.99 per month"),
+            "https://evernote.com/plans": ("https://evernote.com/plans", "Plans", "Our plans are flexible"),
+            "https://evernote.com/compare-plans": ("https://evernote.com/compare-plans", "Compare plans",
+                                                   "Personal $14.99 per month"),
+        })
+        scout = ScoutDiscovery(tool, page_fetcher=fetch)
+        found = await scout.stage_b(["https://evernote.com/"], "pricing")
+
+        self.assertEqual([(s.url, s.provenance) for s in found["https://evernote.com/"]],
+                         [("https://evernote.com/compare-plans", "site_crawl")])
+        self.assertEqual(fetch.probed, ["https://evernote.com/pricing", "https://evernote.com/plans",
+                                        "https://evernote.com/compare-plans"])
+        self.assertEqual(tool.calls, [])
+
+    async def test_searches_only_for_sites_without_a_usable_page(self) -> None:
+        tool = StubBatchTool(SOURCE_RESULTS)
+        fetch = site_pages({"https://clickup.com/pricing": ("https://clickup.com/pricing", "Pricing", "$7 per user")})
+        found = await ScoutDiscovery(tool, page_fetcher=fetch).stage_b(["clickup.com", "todoist.com"], "pricing")
+
+        self.assertEqual([s.url for s in found["clickup.com"]], ["https://clickup.com/pricing"])
+        self.assertEqual(tool.calls[0][0], ["site:todoist.com pricing page"])
+        self.assertTrue(found["todoist.com"])
+
+    async def test_refused_search_keeps_pages_found_on_the_sites(self) -> None:
+        fetch = site_pages({"https://clickup.com/pricing": ("https://clickup.com/pricing", "Pricing", "$7 per user")})
+        scout = ScoutDiscovery(refused_batch, page_fetcher=fetch)
+        found = await scout.stage_b(["clickup.com", "todoist.com"], "pricing")
+
+        self.assertEqual([s.url for s in found["clickup.com"]], ["https://clickup.com/pricing"])
+        self.assertEqual(found["todoist.com"], [])
+        self.assertTrue(any("add their URLs by hand" in warning for warning in scout.warnings))
+        with self.assertRaises(DependencyUnavailableError):
+            await ScoutDiscovery(refused_batch, page_fetcher=no_page).stage_b(["todoist.com"], "pricing")
+
     async def test_same_site_filter_dedupes_and_drops_invalid_urls(self) -> None:
         tool = StubBatchTool(SOURCE_RESULTS)
-        scout = ScoutDiscovery(tool)
+        scout = ScoutDiscovery(tool, page_fetcher=no_page)
         found = await scout.stage_b(["todoist.com"], "pricing")
 
         self.assertEqual(list(found), ["todoist.com"])
@@ -229,11 +334,21 @@ class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("Dropped syntactically invalid URL" in warning for warning in scout.warnings))
 
 
+    async def test_templates_and_forum_threads_are_not_sources(self) -> None:
+        tool = StubBatchTool([
+            {"url": "https://www.craft.do/templates/release-notes", "title": "Release notes template", "snippet": "x"},
+            {"url": "https://community.craft.do/t/release-notes-1-2/99", "title": "Release notes 1.2", "snippet": "x"},
+            {"url": "https://www.craft.do/whats-new", "title": "What's new", "snippet": "x"},
+        ])
+        found = await ScoutDiscovery(tool, page_fetcher=no_page).stage_b(["craft.do"], "release_notes")
+        self.assertEqual([s.url for s in found["craft.do"]], ["https://www.craft.do/whats-new"])
+
+
 class TestScoutRoundCharging(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def service(search):
         limiter = AsyncMock()
-        return IntelligenceService(AsyncMock(), MagicMock(), scout=ScoutDiscovery(search), rate_limiter=limiter), limiter
+        return IntelligenceService(AsyncMock(), MagicMock(), scout=ScoutDiscovery(search, page_fetcher=no_page), rate_limiter=limiter), limiter
 
     async def test_successful_round_keeps_its_charge(self) -> None:
         service, limiter = self.service(StubBatchTool(COMPETITOR_RESULTS))
@@ -287,7 +402,7 @@ class TestScoutRoundGuard(unittest.IsolatedAsyncioTestCase):
         with patch("app.infrastructure.redis.rate_limiter.get_redis", AsyncMock(return_value=client)):
             service = IntelligenceService(
                 AsyncMock(), MagicMock(),
-                scout=ScoutDiscovery(StubBatchTool(COMPETITOR_RESULTS)),
+                scout=ScoutDiscovery(StubBatchTool(COMPETITOR_RESULTS), page_fetcher=no_page),
                 rate_limiter=RedisRateLimiter(),
             )
             owner = str(uuid4())
@@ -307,7 +422,7 @@ class TestScoutEndpoints(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.service = IntelligenceService(
             AsyncMock(), MagicMock(),
-            scout=ScoutDiscovery(StubBatchTool(COMPETITOR_RESULTS)),
+            scout=ScoutDiscovery(StubBatchTool(COMPETITOR_RESULTS), page_fetcher=no_page),
             rate_limiter=NoopRateLimiter(),
         )
 
@@ -320,7 +435,8 @@ class TestScoutEndpoints(unittest.IsolatedAsyncioTestCase):
                 competitors = await client.post("/api/v1/watchlists/discover-competitors",
                                                 json={"prompt": PROMPT})
                 self.assertEqual(competitors.status_code, 200, competitors.text)
-                self.assertEqual(len(competitors.json()["products"]), 3)
+                self.assertEqual([item["kind"] for item in competitors.json()["products"]],
+                                 ["competitor", "competitor", "competitor", "own"])
                 self.assertEqual(competitors.json()["products"][0]["provenance"], "web_search")
 
                 empty = await client.post("/api/v1/watchlists/discover-competitors", json={"prompt": ""})

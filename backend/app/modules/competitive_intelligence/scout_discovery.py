@@ -46,6 +46,8 @@ _GENERIC_CAPITALIZED = {
     "Help", "Hi", "Hello", "How", "I", "Keep", "Make", "Monitor", "My", "Need", "Our", "Plan", "Please",
     "Pricing", "Product", "Products", "Show", "Tell", "The", "They", "Track", "Tracking", "Use", "Want",
     "Watch", "We", "What", "Who", "Why",
+    # Platforms and categories, not products.
+    "AI", "Android", "App", "Chrome", "Linux", "Mac", "SaaS", "Web", "Windows",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
@@ -62,8 +64,47 @@ _ARTICLE_TITLE = re.compile(
 _NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
 _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
+# Templates and single forum threads mention a dimension without being the product's page for it.
+_NOT_A_SOURCE_PATH = re.compile(r"/(?:templates?|t)/", re.IGNORECASE)
 
 SearchToolCaller = Callable[[list[str], int], Any | Awaitable[Any]]
+
+
+# Common paths per dimension, tried on the competitor's own site before any web search.
+SITE_PATHS: dict[str, tuple[str, ...]] = {
+    "pricing": ("/pricing", "/plans", "/compare-plans", "/pricing-plans", "/premium"),
+    "features": ("/features", "/product"),
+    "integrations": ("/integrations", "/apps", "/marketplace"),
+    "release_notes": ("/changelog", "/release-notes", "/releases", "/whats-new"),
+}
+_PRICING_TEXT = re.compile(
+    r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
+
+PageFetcher = Callable[[str], Awaitable[dict[str, str] | None]]
+
+
+async def _default_page_fetcher(url: str) -> dict[str, str] | None:
+    """Fetch one public page with the app's crawler; None when it is not a usable page."""
+    from app.execution.tools.news_crawler_tool import news_crawler  # Lazy: the tool module is heavy.
+
+    raw = await asyncio.to_thread(news_crawler.invoke, {"url": url, "mode": "static", "max_articles": 0})
+    result = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(result, dict) or not result.get("ok"):
+        return None
+    data = result.get("data") or {}
+    return {"final_url": str((result.get("source") or {}).get("final_url") or url),
+            "title": str(data.get("title") or ""), "text": str(data.get("text") or "")}
+
+
+def _page_fits(dimension: str, host: str, page: dict[str, str]) -> bool:
+    """A probed page counts only if it stayed on the site, is not the home page, and reads like the dimension."""
+    final = urlsplit(page.get("final_url") or "")
+    if not final.hostname or not same_site(final.hostname.casefold(), host) or final.path.strip("/") == "":
+        return False
+    text = f"{page.get('title', '')}\n{page.get('text', '')[:4000]}"
+    if dimension == "pricing":
+        return bool(_PRICING_TEXT.search(text))
+    return any(keyword in text.casefold() for keyword in _DIMENSION_KEYWORDS[dimension])
 
 
 async def _default_search_tool_caller(queries: list[str], max_results_per_query: int) -> Any:
@@ -216,8 +257,10 @@ def _product_name(title: str, domain: str) -> str:
 class ScoutDiscovery:
     """Deterministic staged discovery over the registered batch search tool."""
 
-    def __init__(self, search_tool_caller: SearchToolCaller | None = None) -> None:
+    def __init__(self, search_tool_caller: SearchToolCaller | None = None,
+                 page_fetcher: PageFetcher | None = None) -> None:
         self.search_tool_caller = search_tool_caller or _default_search_tool_caller
+        self.page_fetcher = page_fetcher or _default_page_fetcher
         self.warnings: list[str] = []
         self._stage_calls = 0
 
@@ -243,6 +286,22 @@ class ScoutDiscovery:
         if _provider_refused(raw):
             raise _search_unavailable()
         return _extract_records(raw)
+
+    async def _probe_site(self, host: str, dimension: str) -> RecommendedSource | None:
+        """Try the site's usual paths for the dimension; the first page that fits wins."""
+        for path in SITE_PATHS[dimension]:
+            try:
+                page = await self.page_fetcher(f"https://{host}{path}")
+            except Exception:
+                page = None
+            if page and _page_fits(dimension, host, page):
+                try:
+                    url = public_url(page["final_url"])
+                except ValueError:
+                    continue
+                return RecommendedSource(url=url, kind=dimension, provenance="site_crawl",
+                                         note=" ".join(page.get("title", "").split())[:500])
+        return None
 
     def _competitor_queries(self, prompt: str) -> list[str]:
         terms = _product_terms(prompt)
@@ -302,7 +361,10 @@ class ScoutDiscovery:
             if not domain:
                 continue
             named = _named_term(domain, terms)
-            if named is None and _ARTICLE_TITLE.search(str(record.get("title") or "")):
+            title = str(record.get("title") or "")
+            # Off-site pages that name a requested product are reviews or namesakes, not other competitors.
+            about_named = any(_compact(term) in _compact(title) for term in terms if term != own)
+            if named is None and (about_named or _ARTICLE_TITLE.search(title)):
                 skipped_articles += 1
                 continue
             matched = _tokens(
@@ -315,10 +377,15 @@ class ScoutDiscovery:
 
         products: list[RecommendedProduct] = []
         seen_domains: set[str] = set()
+        # Different companies share names (craft.do vs craft.io); pre-pick only the top-ranked site.
+        picked_names: set[str] = set()
+        shared_names: set[str] = set()
         for _, _, _, domain, record, matched, named in ranked:
             if domain in seen_domains:
                 continue
             seen_domains.add(domain)
+            if named is not None and named in picked_names:
+                shared_names.add(named)
             rationale = "Found via web search"
             if matched:
                 rationale += f" (keywords: {', '.join(sorted(matched)[:5])})"
@@ -329,7 +396,7 @@ class ScoutDiscovery:
                 RecommendedProduct(
                     name=named or _product_name(str(record.get("title") or ""), domain),
                     kind="own" if named and named == own else "competitor",
-                    suggested=named is not None,
+                    suggested=named is not None and named not in shared_names,
                     company="",
                     official_website=f"https://{domain}/",
                     sources=[],
@@ -337,8 +404,21 @@ class ScoutDiscovery:
                     provenance="web_search",
                 )
             )
+            if named is not None:
+                picked_names.add(named)
             if len(products) >= MAX_PRODUCTS:
                 break
+        if own and not any(product.kind == "own" for product in products):
+            # The user named their product ("I make InkPad"); approval needs it even without a website.
+            if len(products) >= MAX_PRODUCTS:
+                spare = [index for index, product in enumerate(products) if not product.suggested]
+                products.pop(spare[-1] if spare else -1)
+            products.append(RecommendedProduct(name=own, kind="own", suggested=True, company="",
+                                               official_website=None, sources=[], provenance="user_supplied",
+                                               rationale="Named in your request as your own product."))
+        if shared_names:
+            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
+                       "ticked. Check each website before tracking.")
         if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
             self._warn("Truncated competitor candidates to one per domain.")
         if not products:
@@ -366,10 +446,26 @@ class ScoutDiscovery:
             self._warn("No valid domains were provided for source discovery.")
             return {}
 
-        queries = [f"site:{host} {DIMENSION_QUERY_TERMS[dimension]}" for _, host in picked]
-        records = await self._search(queries, MAX_RESULTS_PER_QUERY)
         found: dict[str, list[RecommendedSource]] = {domain: [] for domain, _ in picked}
         seen_urls: set[tuple[str, str]] = set()
+        # The competitor's own site first: it needs no search provider, which often refuses.
+        probed = await asyncio.gather(*(self._probe_site(host, dimension) for _, host in picked))
+        for (domain, _), source in zip(picked, probed):
+            if source is not None:
+                found[domain].append(source)
+                seen_urls.add((domain, normalized_url(source.url)))
+        picked = [(domain, host) for domain, host in picked if not found[domain]]
+        if not picked:
+            return found
+
+        queries = [f"site:{host} {DIMENSION_QUERY_TERMS[dimension]}" for _, host in picked]
+        try:
+            records = await self._search(queries, MAX_RESULTS_PER_QUERY)
+        except DependencyUnavailableError:
+            if not any(found.values()):
+                raise
+            self._warn("Web search is unavailable, so some products have no source yet; add their URLs by hand.")
+            return found
         for record in records:
             raw_url = str(record.get("url") or "").strip()
             try:
@@ -382,6 +478,8 @@ class ScoutDiscovery:
             if not matches:
                 continue
             key = matches[0]
+            if _NOT_A_SOURCE_PATH.search(urlsplit(raw_url).path):
+                continue
             try:
                 public_url(raw_url)
             except ValueError:

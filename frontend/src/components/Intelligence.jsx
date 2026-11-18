@@ -4,8 +4,10 @@ import WatchlistDetail from './WatchlistDetail';
 import WatchlistList from './WatchlistList';
 import WatchlistSetup from './WatchlistSetup';
 
-export default function Intelligence({ onOpenRun }) {
-  const [view, setView] = useState({ name: 'list', watchlistId: null });
+export default function Intelligence({ onOpenRun, initialWatchlistId = null }) {
+  const [view, setView] = useState(initialWatchlistId
+    ? { name: 'detail', watchlistId: initialWatchlistId }
+    : { name: 'list', watchlistId: null });
   const [notice, setNotice] = useState('');
 
   const banner = notice ? (
