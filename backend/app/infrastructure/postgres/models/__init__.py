@@ -5,7 +5,7 @@ from app.infrastructure.postgres.models.catalog import (
     ToolCatalogModel,
 )
 from app.infrastructure.postgres.models.competitive_intelligence import (
-    WatchlistModel, WatchlistRevisionModel, TrackedProductModel, ProductProfileVersionModel, TrackedSourceModel,
+    MyProductModel, WatchlistModel, WatchlistRevisionModel, TrackedProductModel, ProductProfileVersionModel, TrackedSourceModel,
 )
 from app.infrastructure.postgres.models.competitive_intelligence_snapshots import (
     ChangeCandidateModel, FetchOutcomeModel, RunComparisonModel, SourceBaselineModel, SourceSnapshotModel,
@@ -45,6 +45,7 @@ __all__ = [
     "ConversationTurnModel",
     "ConversationTurnEventModel",
     "FlowModel",
+    "MyProductModel",
     "RunEventModel",
     "RunModel",
     "WorkflowVersionModel",

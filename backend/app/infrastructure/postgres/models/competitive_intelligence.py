@@ -5,9 +5,29 @@ from typing import Any
 from sqlalchemy import (
     JSON, Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, String, UniqueConstraint,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+
+
+class MyProductModel(Base):
+    __tablename__ = "ci_my_products"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    description_en: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    website: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    market: Mapped[str] = mapped_column(String(16), nullable=False, default="global", server_default="global")
+    known_competitors: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=False)
+    __table_args__ = (CheckConstraint("market IN ('global','vn')", name="ck_ci_my_product_market"),
+                     Index("uq_ci_my_products_owner_name", "owner_id", func.lower(name), unique=True),
+                     Index("uq_ci_my_products_owner_default", "owner_id", unique=True,
+                           postgresql_where=is_default))
 
 
 class WatchlistModel(Base):
@@ -18,6 +38,8 @@ class WatchlistModel(Base):
     description: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     current_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    my_product_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ci_my_products.id", ondelete="SET NULL", name="fk_ci_watchlists_my_product"), nullable=True)
     __table_args__ = (CheckConstraint("status IN ('active','archived')", name="ck_ci_watchlist_status"),
                      ForeignKeyConstraint(["id", "current_revision_id"],
                          ["ci_watchlist_revisions.watchlist_id", "ci_watchlist_revisions.id"],
