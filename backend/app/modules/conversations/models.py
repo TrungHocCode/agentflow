@@ -63,7 +63,7 @@ class ConversationTurn(BaseModel):
     assistant_message_id: str
     input_fingerprint: str
     status: ConversationTurnStatus = "queued"
-    outcome: Literal["answer", "clarify", "propose_plan"] | None = None
+    outcome: Literal["answer", "clarify", "propose_plan", "setup_tracking"] | None = None
     assistant_content: str = ""
     plan: List[Task] = Field(default_factory=list)
     error_code: str | None = None
@@ -121,7 +121,7 @@ class ConversationTurnSnapshot(BaseModel):
     user_message_id: str
     assistant_message_id: str
     status: ConversationTurnStatus
-    outcome: Literal["answer", "clarify", "propose_plan"] | None = None
+    outcome: Literal["answer", "clarify", "propose_plan", "setup_tracking"] | None = None
     assistant_content: str = ""
     plan: List[Task] = Field(default_factory=list)
     error_code: str | None = None

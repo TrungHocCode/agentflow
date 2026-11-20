@@ -1,7 +1,7 @@
 """Persistence port owned by the Conversations bounded context."""
 
 from datetime import datetime
-from typing import Dict, List, Protocol, Tuple
+from typing import Any, Dict, List, Protocol, Tuple
 
 from app.modules.conversations.events import ConversationEvent
 from app.modules.conversations.models import ConversationMessage, ConversationRecord, ConversationTurn
@@ -109,4 +109,12 @@ class ConversationRepository(Protocol):
         stale_before: datetime,
         queue_expired_before: datetime,
     ) -> List[ConversationTurn]:
+        ...
+
+
+class SetupPort(Protocol):
+    """Runs competitor setup for a chat turn; implemented by the competitive-intelligence service."""
+
+    async def run_setup(self, owner_id: str, prompt: str) -> Dict[str, Any]:
+        """Return ``{"product": {...}, "recommendation": {...}}``; raise when the search cannot run."""
         ...

@@ -1,11 +1,14 @@
-"""Chat messages that ask to track competitors belong to the setup card, not a Supervisor plan.
+"""Code-owned wording and keyword check for the chat -> competitor-setup flow.
 
-Measured on qwen3:8b: the Supervisor answered every such message with its own research plan, which
-hid the setup card, and once planned "identify and list competitors" from model memory. Scout finds
-competitors with web search instead, so these turns get a fixed reply that points to the card.
+The Supervisor chooses ``setup_tracking`` for a request to find or track competitors, but a small model can
+still plan competitor research from memory (measured on qwen3:8b), so code checks the routing with a keyword
+match: a match plus ``propose_plan`` becomes ``setup_tracking``, and when the model call fails the match alone
+decides. The lines that report the setup result are written here, in the language of the request, because they
+state facts from the search that the model must not paraphrase.
 """
 
 import re
+from typing import Any
 
 _TRACKING = re.compile(
     r"\b(?:competitors?|rivals?|competition)\b|đối thủ|"
@@ -14,15 +17,45 @@ _TRACKING = re.compile(
     re.IGNORECASE,
 )
 _VIETNAMESE = re.compile(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", re.IGNORECASE)
+MAX_LISTED_COMPETITORS = 6
+
+_SOURCE_LABELS = {
+    "default": ("default", "mặc định"),
+    "saved": ("saved product", "sản phẩm đã lưu"),
+    "message": ("from your message", "từ tin nhắn của bạn"),
+}
 
 
 def is_tracking_request(text: str) -> bool:
     return bool(_TRACKING.search(text or ""))
 
 
-def tracking_reply(text: str) -> str:
-    if _VIETNAMESE.search(text or ""):
-        return ("Mình sẽ tìm đối thủ bằng web search từ mô tả của bạn. Bấm “Find competitors” ở thẻ bên dưới; "
-                "nếu còn thiếu thông tin, mình sẽ hỏi thêm ở đó.")
-    return ("I'll find competitors with web search from your description. Click “Find competitors” in the "
-            "card below; if something is missing, I'll ask there.")
+def is_vietnamese(text: str) -> bool:
+    return bool(_VIETNAMESE.search(text or ""))
+
+
+def setup_acknowledgement(text: str) -> str:
+    """Reply text when no Supervisor text exists (model failure, or the user answered a follow-up question)."""
+    return "Mình sẽ tìm đối thủ ngay." if is_vietnamese(text) else "I'll look for competitors now."
+
+
+def setup_report(text: str, setup: dict[str, Any] | None) -> str:
+    """The code-written lines that follow the Supervisor's text; ``setup`` is None when the search failed."""
+    vietnamese = is_vietnamese(text)
+    if setup is None:
+        return ("Tìm kiếm đối thủ bị lỗi. Bấm “Search again” ở thẻ bên dưới để thử lại." if vietnamese
+                else "The competitor search failed. Use “Search again” in the card below to retry.")
+    product = setup.get("product") or {}
+    recommendation = setup.get("recommendation") or {}
+    label = _SOURCE_LABELS.get(product.get("source"), _SOURCE_LABELS["message"])[1 if vietnamese else 0]
+    name = product.get("name")
+    using = (f"Đang dùng: {name} ({label})" if vietnamese else f"Using: {name} ({label})") if name else (
+        "Đang dùng: tin nhắn của bạn" if vietnamese else "Using: your message")
+    question = recommendation.get("follow_up_question")
+    if question:
+        return f"{using}\n\n{question}"
+    names = [item["name"] for item in recommendation.get("products") or [] if item.get("kind") == "competitor"]
+    if not names:
+        return f"{using}\n\n" + ("Chưa tìm thấy đối thủ nào." if vietnamese else "No competitors were found.")
+    listed = ", ".join(names[:MAX_LISTED_COMPETITORS])
+    return f"{using}\n\n" + (f"Đối thủ gợi ý: {listed}." if vietnamese else f"Suggested competitors: {listed}.")

@@ -121,7 +121,7 @@ class PlannedTask(BaseModel):
 class SupervisorOutput(BaseModel):
     """Validated decision contract for one Supervisor conversation turn."""
 
-    decision: Literal["clarify", "propose_plan", "answer"]
+    decision: Literal["clarify", "propose_plan", "answer", "setup_tracking"]
     mode: Literal["conversation", "executing"] = "conversation"
     assistant_message: str = Field(min_length=1, max_length=4000)
     plan: List[PlannedTask] = Field(default_factory=list)

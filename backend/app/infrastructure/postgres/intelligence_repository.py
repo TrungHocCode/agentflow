@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.postgres_client import AsyncSessionLocal
 from app.infrastructure.postgres.models import (
     FlowModel, RunModel, WorkflowVersionModel, WatchlistModel, WatchlistRevisionModel,
-    TrackedProductModel, TrackedSourceModel, ProductProfileVersionModel, EvidenceModel,
+    TrackedProductModel, TrackedSourceModel, ProductProfileVersionModel, EvidenceModel, MyProductModel,
 )
 from app.infrastructure.postgres.models.competitive_intelligence_snapshots import SourceBaselineModel
 from app.infrastructure.postgres.run_repository import PostgresRunRepository
@@ -70,8 +70,12 @@ class PostgresIntelligenceRepository:
 
     async def create(self, request: CreateWatchlist, owner_id: str) -> Watchlist:
         async with self.session() as session:
+            my_product_id = str(request.my_product_id) if request.my_product_id else None
+            if my_product_id and (await session.execute(select(MyProductModel.id).where(
+                    MyProductModel.id == my_product_id, MyProductModel.owner_id == owner_id))).first() is None:
+                raise ValidationError("The selected product was not found.", code="ci_my_product_not_found")
             record = WatchlistModel(id=str(uuid4()), owner_id=owner_id, name=request.name,
-                                    description=request.description, status="active")
+                                    description=request.description, status="active", my_product_id=my_product_id)
             session.add(record)
             await session.flush()
             await self.new_revision(session, record, request.config, 1)

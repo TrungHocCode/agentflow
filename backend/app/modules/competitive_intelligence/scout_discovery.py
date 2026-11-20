@@ -13,12 +13,12 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from app.execution.tools.base import ToolRegistry
-from app.modules.competitive_intelligence.models import public_url
+from app.modules.competitive_intelligence.models import MyProduct, public_url
 from app.modules.competitive_intelligence.setup_recommend import (
     ProductBrief,
     RecommendedProduct,
@@ -147,6 +147,7 @@ class _Request:
     category: str | None
     dimensions: list[str]
     local_description: str | None = None  # the user's own words, in the request's language
+    market: str = "global"  # "vn" searches Vietnamese queries even for an English request
 
     @property
     def terms(self) -> list[str]:
@@ -358,6 +359,20 @@ def _ranking_terms(request: _Request) -> set[str]:
     return terms
 
 
+def _vietnamese(request: _Request) -> bool:
+    return request.market == "vn" or bool(_VIETNAMESE.search(request.prompt))
+
+
+def _with_product(request: _Request, product: MyProduct) -> _Request:
+    """Search for a saved product: its description and market replace what the message says."""
+    named = [name for name in dict.fromkeys([*request.named, *product.known_competitors])
+             if name.casefold() != product.name.casefold()]
+    english = product.description_en or product.description
+    local = product.description if product.market == "vn" and product.description != english else None
+    return replace(request, own=product.name, named=named, category=english or request.category,
+                   local_description=local or request.local_description, market=product.market)
+
+
 def _follow_up_question(request: _Request) -> str:
     """Ask for what Scout needs: a description of the user's product, or rivals they already know."""
     if _VIETNAMESE.search(request.prompt):
@@ -462,11 +477,17 @@ class ScoutDiscovery:
         self.warnings: list[str] = []
         self.dimensions: list[str] = []
         self.follow_up_question: str | None = None
+        # What the last stage A searched for, so the caller can show which product it used.
+        self.used_fallback = False
+        self.own_name: str | None = None
+        self.own_description: str | None = None
         self._stage_calls = 0
 
     def _reset_stage(self) -> None:
         self.warnings = []
         self.follow_up_question = None
+        self.used_fallback = False
+        self.own_name = self.own_description = None
         self._stage_calls = 0
 
     def _warn(self, message: str) -> None:
@@ -549,7 +570,7 @@ class ScoutDiscovery:
             queries = [f"best {category}", f"{category} alternatives"]
             # Local products rank for the user's own words (measured: English-only found Toast and Square for a
             # Vietnamese cafe POS), so the Vietnamese description is searched first.
-            if _VIETNAMESE.search(prompt) and request.local_description:
+            if _vietnamese(request) and request.local_description:
                 queries.insert(0, f"{request.local_description} tốt nhất")
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
@@ -572,11 +593,21 @@ class ScoutDiscovery:
                 deduped.append(normalized)
         return deduped[:MAX_NAMED_QUERIES]
 
-    async def stage_a(self, prompt: str) -> list[RecommendedProduct]:
-        """Discover competitor candidates from up to two bounded search queries."""
+    async def stage_a(self, prompt: str, product: MyProduct | None = None,
+                      fallback: MyProduct | None = None) -> list[RecommendedProduct]:
+        """Discover competitor candidates from up to two bounded search queries.
+
+        ``product`` is a saved product the request names; ``fallback`` (the default product) is used only when
+        the request names no product of its own and describes none.
+        """
 
         self._reset_stage()
         request = await self._understand(prompt)
+        if product is None and fallback is not None and request.own is None and request.category is None:
+            product, self.used_fallback = fallback, True
+        if product is not None:
+            request = _with_product(request, product)
+        self.own_name, self.own_description = request.own, request.local_description or request.category
         if not request.named and not request.category:
             # Nothing to search for yet: ask instead of searching on guesses (measured: "Theo dõi đối thủ
             # giúp mình" searched "best Marketing" and returned Barbie and Diablo IV).
@@ -596,7 +627,7 @@ class ScoutDiscovery:
             listed = await self._listed_products(records, own, request.category)
             if listed:
                 return self._with_own(listed, own)
-        elif _VIETNAMESE.search(prompt):
+        elif _vietnamese(request):
             found = {_named_term(_registrable_domain(str(record.get("url") or "")), terms) for record in records}
             missing = [term for term in request.named if term not in found][:MAX_NAMED_QUERIES]
             if missing:

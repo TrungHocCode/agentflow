@@ -131,6 +131,7 @@ def build_conversation_service(session: AsyncSession | None = None) -> Conversat
         repository=PostgresConversationRepository(session),
         execution_port=build_execution_port(),
         workflow_repository=PostgresWorkflowRepository(session),
+        setup_port=build_intelligence_service(session),
         event_publisher=(
             get_in_memory_conversation_publisher()
             if settings.REPOSITORY_BACKEND == "memory"
@@ -183,7 +184,8 @@ def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
     planner = OllamaSetupPlanner()
     return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
                                PostgresConversationRepository(), planner,
-                               scout=ScoutDiscovery(brief_reader=planner.read_brief), rate_limiter=rate_limiter)
+                               scout=ScoutDiscovery(brief_reader=planner.read_brief), rate_limiter=rate_limiter,
+                               my_products=PostgresMyProductRepository())
 
 
 def build_my_product_repository() -> PostgresMyProductRepository:

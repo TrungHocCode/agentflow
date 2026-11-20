@@ -21,8 +21,8 @@ from app.modules.conversations.models import (
     ConversationTurn,
 )
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
-from app.modules.conversations.ports import ConversationRepository
-from app.modules.conversations.tracking_intent import is_tracking_request, tracking_reply
+from app.modules.conversations.ports import ConversationRepository, SetupPort
+from app.modules.conversations.tracking_intent import is_tracking_request, setup_acknowledgement, setup_report
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
 from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
@@ -42,11 +42,13 @@ class ConversationService:
         execution_port: ExecutionPort,
         event_publisher: ConversationEventPublisher | None = None,
         workflow_repository: WorkflowRepository | None = None,
+        setup_port: SetupPort | None = None,
     ) -> None:
         self.repository = repository
         self.execution_port = execution_port
         self.event_publisher = event_publisher
         self.workflow_repository = workflow_repository
+        self.setup_port = setup_port
 
     async def create_conversation(
         self,
@@ -134,10 +136,7 @@ class ConversationService:
         )
         await self.repository.add_message(user_message)
 
-        result_state = self._tracking_turn(conversation, content)
-        if result_state is not None:
-            pass
-        elif self._should_continue(conversation):
+        if self._should_continue(conversation):
             result_state = await self.execution_port.continue_conversation(
                 conversation.id,
                 content,
@@ -413,13 +412,15 @@ class ConversationService:
             }
             latest = next((message.content for message in reversed(history)
                            if message.role == "user" and message.content), "")
-            result_state = self._tracking_turn(conversation, latest)
-            if result_state is None:
-                result_state = await self.execution_port.create_plan(
-                    turn.id,
-                    initial_state,
-                    on_assistant_token=publish_assistant_token,
-                )
+            user_texts = [m.content for m in history if m.role == "user" and m.content][-4:]
+            ci_setup: Dict[str, Any] | None = None
+            if conversation.metadata.get("ci_setup_pending") and self.setup_port is not None:
+                # The user is answering Scout's follow-up question: no Supervisor call, code writes the reply.
+                result_state = self._setup_state(setup_acknowledgement(latest))
+            else:
+                result_state = await self._supervisor_state(turn, initial_state, latest, publish_assistant_token)
+            if (result_state.get("metadata") or {}).get("supervisor_decision") == "setup_tracking":
+                result_state, ci_setup = await self._run_setup(turn, result_state, latest, user_texts)
             decision, effective_plan, assistant_messages = self._interpret_planner_result(
                 result_state,
                 [],
@@ -427,6 +428,9 @@ class ConversationService:
             self._accumulate_execution_timings(conversation, result_state)
             self._accumulate_llm_call_metrics(conversation, result_state)
             conversation.metadata.update(result_state.get("metadata") or {})
+            conversation.metadata.pop("ci_setup_pending", None)
+            if ci_setup and (ci_setup.get("recommendation") or {}).get("follow_up_question"):
+                conversation.metadata["ci_setup_pending"] = True
             conversation.draft_plan = effective_plan
             conversation.metadata["supervisor_decision"] = decision
             assistant_content = assistant_messages[-1]
@@ -457,6 +461,7 @@ class ConversationService:
                 assistant_content,
                 status="completed",
                 outcome=decision,
+                ci_setup=ci_setup,
             )
             await flush_delta(force=True)
             events = await self.repository.finalize_turn(
@@ -466,7 +471,11 @@ class ConversationService:
                 [
                     (
                         "assistant_message",
-                        {"assistant_message_id": turn.assistant_message_id, "content": assistant_content},
+                        {
+                            "assistant_message_id": turn.assistant_message_id,
+                            "content": assistant_content,
+                            **({"ci_setup": ci_setup} if ci_setup else {}),
+                        },
                     ),
                     (
                         "workflow_draft",
@@ -653,6 +662,7 @@ class ConversationService:
         status: str,
         outcome: str | None = None,
         error_id: str | None = None,
+        ci_setup: Dict[str, Any] | None = None,
     ) -> ConversationMessage:
         current = next(
             (
@@ -668,6 +678,8 @@ class ConversationService:
             metadata["outcome"] = outcome
         if error_id:
             metadata["error_id"] = error_id
+        if ci_setup:
+            metadata["ci_setup"] = ci_setup
         return ConversationMessage(
             id=turn.assistant_message_id,
             conversation_id=turn.conversation_id,
@@ -918,15 +930,53 @@ class ConversationService:
         conversation.metadata = metadata
 
     @staticmethod
-    def _tracking_turn(conversation: ConversationRecord, content: str) -> State | None:
-        """Answer a competitor-tracking turn without the Supervisor; the setup card searches instead."""
-        # Follow-up answers ("it is a markdown app") carry no tracking words, so the
-        # conversation stays with the setup card once it starts there.
-        if not (conversation.metadata.get("ci_setup") or is_tracking_request(content)):
-            return None
-        conversation.metadata["ci_setup"] = True
-        return {"messages": [AIMessage(content=tracking_reply(content))], "plan": [],
-                "metadata": {"supervisor_decision": "answer"}}
+    def _setup_state(text: str) -> State:
+        return {"messages": [AIMessage(content=text)], "plan": [],
+                "metadata": {"supervisor_decision": "setup_tracking"}}
+
+    async def _supervisor_state(
+        self,
+        turn: ConversationTurn,
+        initial_state: State,
+        latest: str,
+        on_token: Any,
+    ) -> State:
+        """Ask the Supervisor, then let code correct the routing of a competitor-tracking request."""
+        tracking = self.setup_port is not None and is_tracking_request(latest)
+        try:
+            result_state = await self.execution_port.create_plan(turn.id, initial_state, on_assistant_token=on_token)
+        except Exception:
+            if not tracking:
+                raise
+            logger.warning("Supervisor failed on a tracking request; code routes it to setup", exc_info=True)
+            return self._setup_state(setup_acknowledgement(latest))
+        metadata = result_state.get("metadata") or {}
+        if tracking and (metadata.get("planning_failed") or metadata.get("supervisor_decision") == "propose_plan"):
+            # The Supervisor must not plan competitor research from memory; its plan text no longer applies.
+            return self._setup_state(setup_acknowledgement(latest))
+        return result_state
+
+    async def _run_setup(
+        self,
+        turn: ConversationTurn,
+        result_state: State,
+        latest: str,
+        user_texts: List[str],
+    ) -> tuple[State, Dict[str, Any] | None]:
+        """Run competitor setup in this turn; a failed search still completes the turn with a retry card."""
+        if self.setup_port is None:
+            return result_state, None
+        supervisor_text = next(iter(self._assistant_messages(result_state.get("messages") or [])), "")
+        prompt = "\n".join(user_texts)[-2000:] or latest
+        try:
+            ci_setup: Dict[str, Any] | None = await self.setup_port.run_setup(turn.user_id, prompt)
+        except Exception:
+            logger.warning("Competitor setup failed in a chat turn", exc_info=True, extra={"turn_id": turn.id})
+            ci_setup = None
+        text = "\n\n".join(part for part in (supervisor_text, setup_report(latest, ci_setup)) if part)
+        metadata = {**(result_state.get("metadata") or {}), "supervisor_decision": "setup_tracking"}
+        stored = ci_setup or {"product": None, "recommendation": None, "failed": True}
+        return {**result_state, "messages": [AIMessage(content=text)], "plan": [], "metadata": metadata}, stored
 
     @staticmethod
     def _assistant_messages(messages: List[Any]) -> List[str]:
@@ -944,7 +994,7 @@ class ConversationService:
 
         return bool(conversation.draft_plan) or conversation.metadata.get(
             "supervisor_decision"
-        ) in {"clarify", "answer"}
+        ) in {"clarify", "answer", "setup_tracking"}
 
     @classmethod
     def _interpret_planner_result(
@@ -966,7 +1016,7 @@ class ConversationService:
         # Keep deterministic test adapters and the legacy non-LLM planner usable.
         if decision is None and plan:
             decision = "propose_plan"
-        if decision not in {"clarify", "propose_plan", "answer"}:
+        if decision not in {"clarify", "propose_plan", "answer", "setup_tracking"}:
             raise RuntimeError("Supervisor returned an unknown or missing decision.")
         if not assistant_messages:
             raise RuntimeError("Supervisor returned a blank assistant message.")
@@ -975,9 +1025,9 @@ class ConversationService:
             if not plan:
                 raise RuntimeError("Supervisor proposed a workflow without any tasks.")
             return decision, plan, assistant_messages
-        if decision == "clarify":
+        if decision in {"clarify", "setup_tracking"}:
             if plan:
-                raise RuntimeError("A clarification response must not contain a workflow plan.")
+                raise RuntimeError("A clarification or setup response must not contain a workflow plan.")
             return decision, [], assistant_messages
         # A fresh answer is not authorization to keep or approve a prior draft.
         return decision, [], assistant_messages

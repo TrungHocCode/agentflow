@@ -178,6 +178,7 @@ class CreateWatchlist(Contract):
     name: ShortText
     description: str = Field("", max_length=2000)
     config: WatchlistConfig
+    my_product_id: UUID | None = None
 
 
 class UpdateWatchlist(CreateWatchlist):
