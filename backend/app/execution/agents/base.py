@@ -432,6 +432,9 @@ class WorkerAgent(BaseAgent):
             raise ValueError(f"Worker '{self.name}' executed but 'current_task' is missing in state.")
         if self.mode == "reduce_evidence" and self.evidence_store is not None:
             return await self._synthesize(state, current_task)
+        if ((current_task.config or {}).get("ci_collection") and self.mode == "collect_evidence"
+                and self.evidence_store is not None and (state.get("metadata") or {}).get("run_id")):
+            return await self._collect_sources(state, current_task)
         if self.mode == "render_report" and self.evidence_store is not None:
             return await self._present(state, current_task)
         timing_enabled = settings.ENABLE_EXECUTION_BENCHMARK_METRICS
@@ -951,6 +954,40 @@ class WorkerAgent(BaseAgent):
                 ).model_dump(mode="json")
             ]
         return updates
+
+    async def _collect_sources(self, state: State, task: Task) -> Dict[str, Any]:
+        """CI collection fetches every approved URL with code, never a model: the URLs are fixed, a model
+        may skip one or turn off browser rendering, and the snapshot diff decides what changed."""
+        metadata = state.get("metadata") or {}
+        input_data = metadata.get("input_data") or {}
+        urls = list(dict.fromkeys(url for url in input_data.get("urls") or [] if isinstance(url, str)))
+        crawler = next((tool for tool in self.tools if tool.name == "news_crawler"), None)
+        processor = EvidenceProcessor(self.llm, self.evidence_store, metadata["run_id"], str(task.id), extract=False)
+        status, error = "done", None
+        if crawler is None or not urls:
+            status, error = "failed", "CI collection needs the news_crawler tool and at least one approved URL."
+        else:
+            for url in urls:
+                try:
+                    raw = await bounded_operation(lambda: crawler.ainvoke({"url": url, "max_articles": 0}))
+                except (RunBudgetExceeded, RunNoLongerActive):
+                    raise
+                except Exception as exc:
+                    logger.error("CI collection fetch failed", extra={"task_id": task.id,
+                                                                      "error_type": type(exc).__name__})
+                    raw = f"Error: tool execution failed ({type(exc).__name__})."
+                await processor.process(parse_tool_result(raw, tool_name="news_crawler"), "")
+            status = {"complete": "done", "partial": "partial"}.get(processor.bundle.status, "failed")
+            if status != "done":
+                error = "Some approved sources could not be fetched." if status == "partial" else (
+                    "No approved source could be fetched.")
+        updated = task.model_copy(update={"status": status, "error": error})
+        fetched = sum(outcome.status == "processed" for outcome in processor.bundle.source_outcomes)
+        return {"plan": [updated], "current_task": updated,
+                "logs": [f"[{self.name}] Collected {fetched}/{len(urls)} approved sources without a model call."],
+                "result_storage": [{"task_id": task.id, "node": self.name, "description": task.description,
+                                    "result": processor.bundle.model_dump(mode="json"), "status": status,
+                                    "error": error}]}
 
     async def _present(self, state: State, task: Task) -> Dict[str, Any]:
         """Use the authorized renderer with validated analysis; never ask an LLM to rewrite facts."""

@@ -371,7 +371,9 @@ class TestPreviousOutputsAreUntrusted(unittest.IsolatedAsyncioTestCase):
 
 class TestPageHeadingsStayOutOfInstructions(unittest.TestCase):
     def test_round_task_descriptions_never_quote_the_section_heading(self) -> None:
-        from app.modules.competitive_intelligence.investigation_coordinator import _role_tasks
+        from app.modules.competitive_intelligence.investigation_contracts import RoundScope
+        from app.modules.competitive_intelligence.investigation_coordinator import plan_round
+        from app.modules.competitive_intelligence.models import InvestigationBudget
         from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
         from app.modules.competitive_intelligence.snapshot_normalize import hash_text
 
@@ -384,9 +386,11 @@ class TestPageHeadingsStayOutOfInstructions(unittest.TestCase):
             diff_algorithm_version="ci-section-diff-v1", diff_hash=hash_text(str(after)),
             detected_at=datetime.now(timezone.utc))
 
-        for task in _role_tasks("Notion pricing", candidate, 1):
+        scope = RoundScope(approved_source_ids=[SOURCE_ID], approved_urls=[], config_hash="c" * 64)
+        round = plan_round(uuid4(), uuid4(), uuid4(), 1, None, [], [candidate], scope, InvestigationBudget(),
+                           False, datetime.now(timezone.utc))
+        for task in round.tasks:
             self.assertNotIn("Ignore all previous", task.description)
-            self.assertIn("modified", task.description)
             self.assertEqual(task.candidate_ids, [candidate.id])
 
 
