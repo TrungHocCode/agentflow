@@ -53,6 +53,7 @@ from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
 from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
+from app.modules.competitive_intelligence.supervisor_decision import SupervisorDecider
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
 from app.modules.competitive_intelligence.brief_service import BriefService
 from app.modules.competitive_intelligence.scheduling_service import SchedulingService
@@ -169,7 +170,8 @@ def build_ci_loop_hooks(run_service: RunService) -> CILoopHooks:
     return CILoopHooks(snapshots, InvestigationService(PostgresInvestigationRepository(), snapshot_repository),
                        briefs, PostgresResearchRepository(), LocalArtifactStorage(),
                        agent_profiles=PostgresAgentProfileProvider(),
-                       notifications=PostgresScheduleRepository())
+                       notifications=PostgresScheduleRepository(),
+                       decider=SupervisorDecider() if settings.CI_SUPERVISOR_DECISIONS else None)
 
 
 def build_research_result_service(session: AsyncSession | None = None) -> ResearchResultService:

@@ -8,27 +8,35 @@ by the existing dispatcher/worker path. Any hook failure is contained by the cal
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID, uuid5, NAMESPACE_URL
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
 from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
 from app.execution.state import Task
-from app.modules.competitive_intelligence.investigation_contracts import InvestigationQuestion, RoundScope
+from app.modules.competitive_intelligence.investigation_contracts import (
+    CoverageEntry, InvestigationQuestion, RoundScope,
+)
 from app.modules.competitive_intelligence.investigation_coordinator import coverage_status, should_terminate
+from app.modules.competitive_intelligence.investigation_service import COORDINATOR_IDENTITY, change_text
 from app.modules.competitive_intelligence.models import InvestigationBudget, WatchlistConfig, digest
 from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
 from app.modules.competitive_intelligence.snapshot_policy import promotion_plan
 from app.shared.collection_scope import normalized_url, same_site
 
 
+CHANGE_EXCERPT_CHARS = 600
+
+
 class CILoopHooks:
     """Domain observer for CI runs; no-ops on runs without frozen CI scope."""
 
     def __init__(self, snapshots, investigations, briefs, research, artifacts,
-                 agent_profiles=None, notifications=None) -> None:
+                 agent_profiles=None, notifications=None, decider=None) -> None:
         self.snapshots, self.investigations, self.briefs = snapshots, investigations, briefs
         self.research, self.artifacts = research, artifacts
         self.agent_profiles = agent_profiles
         self.notifications = notifications
+        # None keeps today's code-planned rounds; a SupervisorDecider lets the Supervisor choose.
+        self.decider = decider
 
     async def _collects_evidence(self, task: Task) -> bool:
         """Whether the task's agent collects source pages. Workflow-seeded tasks may carry a
@@ -126,7 +134,7 @@ class CILoopHooks:
         # A run holds one comparison per source, made from its initial collection. Round
         # researchers confirm that change; capturing again would conflict with it.
         if (task.config or {}).get("investigation_round_id"):
-            return []
+            return await self._after_round(run, scope, task) if self.decider is not None else []
         if not await self._collects_evidence(task):
             return []
         frozen = scope.get("baselines", {}) or {}
@@ -167,14 +175,117 @@ class CILoopHooks:
         if should_terminate(len(accepted) + 1, coverage_status(questions, accepted), budget,
                             spent_calls)[0]:
             return []
-        stored, decision = await self.investigations.propose_round(
-            UUID(run.run_id), UUID(scope["watchlist_id"]), UUID(scope["revision_id"]), run.user_id,
-            questions, changed, self._round_scope(scope), budget, spent_calls, spent_tokens, spent_tasks,
-            False, datetime.now(timezone.utc))
+        return await self._plan_and_materialize(run, scope, budget, questions, changed, accepted,
+                                                spent_calls, spent_tokens, spent_tasks)
+
+    async def _plan_and_materialize(self, run, scope: dict, budget: InvestigationBudget,
+                                    questions: list[InvestigationQuestion], changed: list[ChangeCandidate],
+                                    accepted: list, spent_calls: int, spent_tokens: int, spent_tasks: int,
+                                    end_of_round: bool = False) -> list[Task]:
+        """One decision point. The Supervisor chooses when enabled; any failure runs the default plan,
+        except at end of round where the default is to stop (the changes were already analyzed)."""
+        planner, candidates = COORDINATOR_IDENTITY, changed
+        if self.decider is not None:
+            choice = await self._supervisor_choice(run, scope, changed, accepted, budget, spent_calls)
+            if choice is None and end_of_round:
+                return []
+            if choice is not None:
+                if choice[0] is None:
+                    return []
+                planner, candidates = "supervisor", choice[0]
+        args = (UUID(run.run_id), UUID(scope["watchlist_id"]), UUID(scope["revision_id"]), run.user_id,
+                questions, candidates, self._round_scope(scope), budget, spent_calls, spent_tokens, spent_tasks,
+                False, datetime.now(timezone.utc))
+        stored, decision = await self.investigations.propose_round(*args, planner)
+        if decision != "accepted" and planner != COORDINATOR_IDENTITY:
+            self._record(run, {"action": "rejected_by_validation", "targets": []})
+            if end_of_round:
+                return []
+            args = (*args[:5], changed, *args[6:])
+            stored, decision = await self.investigations.propose_round(*args, COORDINATOR_IDENTITY)
         if decision != "accepted":
             return []
         start_id = max([task.id for task in (run.plan or [])] + [0]) + 1
         return await self.investigations.materialize_tasks(stored, start_id, run.user_id)
+
+    @staticmethod
+    def _record(run, entry: dict) -> None:
+        """Audit trail on the run document: every Supervisor decision and pending question."""
+        run.metadata.setdefault("supervisor", {}).setdefault("decisions", []).append(entry)
+
+    async def _supervisor_choice(self, run, scope: dict, changed: list[ChangeCandidate], accepted: list,
+                                 budget: InvestigationBudget,
+                                 spent_calls: int) -> tuple[list[ChangeCandidate] | None] | None:
+        """Ask the Supervisor. None = use the default; (None,) = no round; ([...],) = round on these."""
+        config = WatchlistConfig.model_validate(scope["config"])
+        analyzed = {str(source_id) for round in accepted for task in round.tasks
+                    if task.role == "competitive_analyst" for source_id in task.source_ids}
+        by_source: dict[str, list[ChangeCandidate]] = {}
+        for candidate in changed:
+            by_source.setdefault(str(candidate.source_id), []).append(candidate)
+        try:
+            comparisons = {str(item.source_id): item.outcome
+                           for item in await self.snapshots.list_comparisons(run.run_id, run.user_id)}
+            labels: dict[str, str] = {}
+            sources: list[dict] = []
+            for product in config.products:
+                for source in product.sources:
+                    if not source.enabled or source.id is None or str(source.id) not in comparisons:
+                        continue
+                    label = f"S{len(labels) + 1}"
+                    labels[label] = str(source.id)
+                    item = {"id": label, "product": product.name, "dimension": source.kind,
+                            "status": comparisons[str(source.id)], "analyzed": str(source.id) in analyzed}
+                    if str(source.id) in by_source:
+                        text = "\n".join(change_text(candidate) for candidate in by_source[str(source.id)])
+                        item["change"] = text[:CHANGE_EXCERPT_CHARS]
+                    sources.append(item)
+            own = next((product for product in config.products if product.kind == "own"), None)
+            raw = {"goal": config.goal, "round": len(accepted) + 1,
+                   "budget_calls_left": max(0, budget.max_llm_calls - spent_calls), "sources": sources,
+                   "actions_taken": [f"analyze_change {label}" for label, identity in labels.items()
+                                     if identity in analyzed]}
+            if own is not None:
+                raw["own_product"] = {"name": own.name, "description": own.description[:300]}
+            decision = await self.decider.decide(raw)
+        except Exception:  # the Supervisor can never make a run worse: fall back to the default plan
+            return None
+        if decision is None:
+            return None
+        self._record(run, {"round": raw["round"], "action": decision.action, "targets": decision.targets,
+                           "situation": decision.situation[:300], "reason": decision.reason[:300]})
+        if decision.action == "ask_user":
+            # The question is the model's reason field; pending until the user sees it on the run.
+            run.metadata["supervisor"].setdefault("pending_questions", []).append(decision.reason[:300])
+        if decision.action != "analyze_change":
+            return (None,)
+        wanted = {labels[target] for target in decision.targets}
+        return ([candidate for candidate in changed if str(candidate.source_id) in wanted],)
+
+    async def _after_round(self, run, scope: dict, task: Task) -> list[Task]:
+        """End of round: when every task of the round is terminal, one more decision point (once per round)."""
+        round_id = task.config["investigation_round_id"]
+        state = run.metadata.setdefault("supervisor", {})
+        siblings = [other for other in (run.plan or []) if (other.config or {}).get("investigation_round_id")
+                    == round_id and other.id != task.id]
+        if round_id in state.get("rounds_closed", []) or any(
+                other.status not in ("done", "partial", "failed", "skipped", "interrupted") for other in siblings):
+            return []
+        state.setdefault("rounds_closed", []).append(round_id)
+        budget = InvestigationBudget.model_validate(scope["config"]["budget"])
+        accepted = [round for round in await self.investigations.list_rounds(
+            UUID(run.run_id), run.user_id) if round.status in ("accepted", "completed")]
+        spent_calls, spent_tokens, spent_tasks = self._spent(run)
+        # Unanalyzed changes count as uncovered work; the round and call budgets stay the hard stop.
+        if should_terminate(len(accepted) + 1, [CoverageEntry(question_id=uuid4(), status="uncovered")],
+                            budget, spent_calls)[0]:
+            return []
+        changed = await self.snapshots.list_candidates(run.run_id, run.user_id)
+        if not changed:
+            return []
+        questions = self._questions(scope, UUID(scope["watchlist_id"]), changed)
+        return await self._plan_and_materialize(run, scope, budget, questions, changed, accepted,
+                                                spent_calls, spent_tokens, spent_tasks, end_of_round=True)
 
     async def on_run_completed(self, run) -> None:
         """Promote eligible pointers by CAS, record final promotion states, then build the brief."""
