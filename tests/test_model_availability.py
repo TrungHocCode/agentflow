@@ -28,6 +28,17 @@ class ResponseError(Exception):
 ResponseError.__module__ = "ollama._types"
 
 
+class TestThinkingSetting(unittest.TestCase):
+    def test_thinking_setting_reaches_the_model(self) -> None:
+        from unittest.mock import patch
+
+        from app.core.config import settings
+        from app.execution.llm import get_llm
+        for value in (None, False):
+            with self.subTest(value=value), patch.object(settings, "LLM_THINKING", value):
+                self.assertIs(get_llm(model_name_override="qwen3:8b").reasoning, value)
+
+
 class TestClassifyModelFailure(unittest.TestCase):
     def test_ollama_pre_load_memory_error(self) -> None:
         error = ResponseError("model requires more system memory (8.3 GiB) than is available (6.9 GiB)")

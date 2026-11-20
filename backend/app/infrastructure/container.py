@@ -50,6 +50,7 @@ from app.infrastructure.postgres.intelligence_schedule_repository import Postgre
 from app.infrastructure.artifacts.snapshot_blobs import SnapshotFileStore
 from app.infrastructure.artifacts.brief_blobs import BriefFileStore
 from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
+from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
@@ -179,9 +180,10 @@ def build_research_result_service(session: AsyncSession | None = None) -> Resear
 
 def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
     rate_limiter = NoopRateLimiter() if settings.REPOSITORY_BACKEND == "memory" else RedisRateLimiter()
+    planner = OllamaSetupPlanner()
     return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
-                               PostgresConversationRepository(), OllamaSetupPlanner(),
-                               rate_limiter=rate_limiter)
+                               PostgresConversationRepository(), planner,
+                               scout=ScoutDiscovery(brief_reader=planner.read_brief), rate_limiter=rate_limiter)
 
 
 def build_my_product_repository() -> PostgresMyProductRepository:

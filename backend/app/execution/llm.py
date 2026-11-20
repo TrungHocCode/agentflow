@@ -95,4 +95,5 @@ def get_llm(
         base_url=url,
         num_ctx=settings.LLM_CONTEXT_TOKENS,
         num_predict=settings.LLM_OUTPUT_TOKENS,
+        reasoning=settings.LLM_THINKING,
     )

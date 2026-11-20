@@ -14,7 +14,7 @@ from app.modules.competitive_intelligence.snapshot_contracts import (
 from app.modules.competitive_intelligence.brief_contracts import IntelligenceBrief
 from app.modules.competitive_intelligence.investigation_contracts import InvestigationRound
 from app.modules.competitive_intelligence.schedule_contracts import Notification, Schedule
-from app.modules.competitive_intelligence.setup_recommend import SetupRecommendation
+from app.modules.competitive_intelligence.setup_recommend import ProductBrief, SetupRecommendation
 from app.modules.runs.models import RunDocument
 
 
@@ -113,3 +113,4 @@ class MyProductRepository(Protocol):
 class SetupPlanner(Protocol):
     async def propose(self, messages: list[dict[str, str]]) -> CreateWatchlist: ...
     async def recommend(self, prompt: str) -> SetupRecommendation: ...
+    async def read_brief(self, prompt: str) -> ProductBrief | None: ...
