@@ -16,6 +16,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - CORS_ORIGINS=http://localhost:5173
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://127.0.0.1:8080/v1}
+      - LLAMACPP_API_KEY=${LLAMACPP_API_KEY:-not-needed}
       - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
@@ -57,6 +60,9 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://127.0.0.1:8080/v1}
+      - LLAMACPP_API_KEY=${LLAMACPP_API_KEY:-not-needed}
       - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}
@@ -92,6 +98,9 @@ services:
       - ENABLE_MONGODB=false
       - REDIS_URL=redis://redis:6379/0
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLAMACPP_BASE_URL=${LLAMACPP_BASE_URL:-http://127.0.0.1:8080/v1}
+      - LLAMACPP_API_KEY=${LLAMACPP_API_KEY:-not-needed}
       - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
       - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - LLM_CHAT_MODEL=${LLM_CHAT_MODEL:-qwen3:0.6b}

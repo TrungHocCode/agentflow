@@ -34,7 +34,12 @@ class Settings(BaseSettings):
     AUTH_SIGNING_SECRET: str = "development-only-change-me"
     ACCESS_TOKEN_TTL: int = 3600
     CORS_ORIGINS: str = "http://localhost:5173"
+    # Local model server: Ollama (LLM_BASE_URL) or llama.cpp's llama-server (OpenAI-compatible API).
+    LLM_PROVIDER: Literal["ollama", "llamacpp"] = "ollama"
     LLM_BASE_URL: str = "http://localhost:11434"
+    LLAMACPP_BASE_URL: str = "http://127.0.0.1:8080/v1"
+    # llama-server ignores the key unless started with --api-key.
+    LLAMACPP_API_KEY: str = "not-needed"
     LLM_CHAT_MODEL: str = "qwen3:0.6b"
     LLM_PLANNER_MODEL: str = "qwen3:8b"
     LLM_WORKER_MODEL: str = "qwen3:8b"

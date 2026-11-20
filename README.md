@@ -2,7 +2,7 @@
 
 **A local-first multi-agent platform evolving toward evidence-backed competitive intelligence.**
 
-AgentFlow's product direction is to help founders and product teams understand how competitors' products change, compare those changes with their own product, and identify relevant opportunities and risks. Its existing foundation combines a conversational planner, user-approved workflows, a deterministic execution engine, local LLMs through Ollama, source collection, and downloadable research artifacts.
+AgentFlow's product direction is to help founders and product teams understand how competitors' products change, compare those changes with their own product, and identify relevant opportunities and risks. Its existing foundation combines a conversational planner, user-approved workflows, a deterministic execution engine, local LLMs through Ollama or llama.cpp, source collection, and downloadable research artifacts.
 
 > **Project status:** active personal-project prototype in a domain refactor. The workflow/research foundation and backend APIs for approved watchlists and versioned product profiles exist. Cross-run snapshots, change detection, adaptive investigation and competitive briefs are still planned; the complete competitive-intelligence experience is not available yet. AgentFlow is not a production-ready hosted service.
 
@@ -117,14 +117,14 @@ flowchart LR
 | PostgreSQL | Users, conversations, workflows, run state, and durable event/result metadata |
 | Redis | Run queue and realtime event distribution |
 | Local artifact storage | Generated reports, charts, and downloadable files under `workspace_data/` |
-| Ollama | Local LLM inference; model files are managed separately by Ollama |
+| Ollama / llama.cpp | Local LLM inference; model files are managed separately (Ollama store or a GGUF passed to `llama-server`) |
 
 MongoDB and Mongo Express also start with the Compose stack for development experiments. Application-level MongoDB persistence is disabled, and the current run-persistence path does not require MongoDB.
 
 ## Technology
 
 - **Backend:** Python 3.11, FastAPI, SQLAlchemy, Pydantic
-- **Agent runtime:** LangChain, LangGraph, Ollama
+- **Agent runtime:** LangChain, LangGraph, Ollama or llama.cpp
 - **Frontend:** React 18, Vite
 - **Persistence and coordination:** PostgreSQL, Redis; local filesystem for artifacts
 - **Crawler:** static-first fetching with optional Playwright/Chromium fallback
@@ -190,6 +190,22 @@ ollama list
 ```
 
 AgentFlow defaults to `http://localhost:11434`. Model routing is configured on the backend with `LLM_CHAT_MODEL`, `LLM_PLANNER_MODEL`, and `LLM_WORKER_MODEL` in `.env`; changing these values does not add a model picker to the user interface. The default router sends obvious short questions and small-talk to the chat profile, routes research/workflow requests to the planner profile, and assigns the worker profile to tool-using tasks. Ambiguous requests default to planning.
+
+#### Local model: Ollama or llama.cpp
+
+`LLM_PROVIDER` selects the server: `ollama` (default) or `llamacpp`. For llama.cpp, start `llama-server` with `--jinja` (required for tool calling) and point AgentFlow at its OpenAI-compatible API:
+
+```powershell
+llama-server -m <model.gguf> --port 8080 --jinja -c 8192
+```
+
+```
+LLM_PROVIDER=llamacpp
+LLAMACPP_BASE_URL=http://127.0.0.1:8080/v1
+LLAMACPP_API_KEY=not-needed   # only checked if llama-server was started with --api-key
+```
+
+llama-server serves the model it loaded, so the `LLM_*_MODEL` names are not used to select a model; `LLM_THINKING=false` is sent as `enable_thinking=false`. Set `-c` at least as high as `LLM_CONTEXT_TOKENS`; on llama.cpp the context size is fixed by the server, not per request.
 
 ### 4. Start the API
 
