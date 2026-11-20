@@ -74,7 +74,7 @@ class EvidenceCoverageContractTests(unittest.IsolatedAsyncioTestCase):
         model.with_structured_output.return_value.ainvoke = AsyncMock(return_value=SynthesisResult(
             findings=[SynthesisFinding(text="Price 20 USD", evidence_ids=["e1"])],
         ))
-        worker = WorkerAgent("synthesis_agent", "Compare", model)
+        worker = WorkerAgent("synthesis_agent", "Compare", model, mode="reduce_evidence")
         worker.evidence_store = store
         output = await worker.execute({"current_task": Task(id=2, node="synthesis_agent", status="pending",
             description="Compare", dependencies=[1]), "metadata": {"run_id": "run"},

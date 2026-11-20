@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid5, NAMESPACE_URL
 
+from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
 from app.execution.state import Task
 from app.modules.competitive_intelligence.investigation_contracts import InvestigationQuestion, RoundScope
 from app.modules.competitive_intelligence.investigation_coordinator import coverage_status, should_terminate
@@ -17,8 +18,6 @@ from app.modules.competitive_intelligence.models import InvestigationBudget, Wat
 from app.modules.competitive_intelligence.snapshot_contracts import ChangeCandidate
 from app.modules.competitive_intelligence.snapshot_policy import promotion_plan
 from app.shared.collection_scope import normalized_url, same_site
-
-COLLECTION_ROLE = "source_researcher"
 
 
 class CILoopHooks:
@@ -31,19 +30,15 @@ class CILoopHooks:
         self.agent_profiles = agent_profiles
         self.notifications = notifications
 
-    async def _task_role(self, task: Task) -> str | None:
-        """Resolve the task's agent role. Runtime tasks may carry a catalog UUID in
-        agent_id/node (workflow-seeded), while round tasks carry the role name."""
-        identifier = task.agent_id or task.node
+    async def _collects_evidence(self, task: Task) -> bool:
+        """Whether the task's agent collects source pages. Workflow-seeded tasks may carry a
+        catalog UUID in agent_id/node, while round tasks carry the profile name."""
+        identifier = str(task.agent_id or task.node or "")
         if not identifier:
-            return None
-        if identifier == COLLECTION_ROLE:
-            return identifier
-        if self.agent_profiles is not None:
-            profile = await self.agent_profiles.get_agent(str(identifier))
-            if profile is not None:
-                return profile.name
-        return str(identifier)
+            return False
+        profile = await self.agent_profiles.get_agent(identifier) if self.agent_profiles is not None else None
+        profile = profile or DEFAULT_AGENT_PROFILES.get(identifier)
+        return profile is not None and profile.mode == "collect_evidence"
 
     @staticmethod
     def ci_scope(run) -> dict | None:
@@ -132,7 +127,7 @@ class CILoopHooks:
         # researchers confirm that change; capturing again would conflict with it.
         if (task.config or {}).get("investigation_round_id"):
             return []
-        if await self._task_role(task) != COLLECTION_ROLE:
+        if not await self._collects_evidence(task):
             return []
         frozen = scope.get("baselines", {}) or {}
         mapping = self._source_map(scope)

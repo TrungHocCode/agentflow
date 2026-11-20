@@ -134,7 +134,7 @@ class TestCIPhaseOneContracts(IsolatedAsyncioTestCase):
 
     async def test_report_worker_has_no_final_llm_rewrite_and_same_name_does_not_overwrite(self) -> None:
         model = MagicMock()
-        worker = WorkerAgent("report_agent", "Render", model, [markdown_report_generator])
+        worker = WorkerAgent("report_agent", "Render", model, [markdown_report_generator], mode="render_report")
         worker.evidence_store = MagicMock()
         state = {"current_task": Task(id=3, node="report_agent", status="pending",
                                       description="Brief", dependencies=[2]),

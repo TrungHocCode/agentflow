@@ -42,7 +42,7 @@ class EvidenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
         mapper.bind_tools.return_value.ainvoke = AsyncMock(side_effect=[
             AIMessage(content="", tool_calls=[{"name": "news_crawler", "args": {"url": url}, "id": "crawl1"}]),
             AIMessage(content="Collected evidence")])
-        source = WorkerAgent("source_researcher", "Collect evidence", mapper, [crawl])
+        source = WorkerAgent("source_researcher", "Collect evidence", mapper, [crawl], mode="collect_evidence")
         source.evidence_store = store
         source_output = await source.execute({"current_task": Task(id=1, node="source_researcher",
             status="pending", description="Collect benchmark evidence"), "metadata": {"run_id": "fixture"}})
@@ -54,7 +54,7 @@ class EvidenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
         reducer.model = "mock-model"
         reducer.with_structured_output.return_value.ainvoke = AsyncMock(return_value=SynthesisResult(findings=[
             SynthesisFinding(text=excerpt, evidence_ids=[identity])]))
-        synthesis = WorkerAgent("synthesis_agent", "Reconcile", reducer)
+        synthesis = WorkerAgent("synthesis_agent", "Reconcile", reducer, mode="reduce_evidence")
         synthesis.evidence_store = store
         synthesized = await synthesis.execute({"current_task": Task(id=2, node="synthesis_agent", status="pending",
             description="Reconcile scores", dependencies=[1]), "metadata": {"run_id": "fixture"},
@@ -66,7 +66,7 @@ class EvidenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
             "id": "report1", "name": "markdown_report_generator", "args": {"title": "Fixture report",
                 "sections": [{"header": "Finding", "content": f"{excerpt} [Source]({url})"}],
                 "filename": "fixture-report.md"}}]), AIMessage(content="Report saved")])
-        reporter = WorkerAgent("report_agent", "Write a sourced report", writer, [markdown_report_generator])
+        reporter = WorkerAgent("report_agent", "Write a sourced report", writer, [markdown_report_generator], mode="render_report")
         reporter.evidence_store = store
         with isolated_workspace() as root:
             report = await reporter.execute({"current_task": Task(id=3, node="report_agent", status="pending",

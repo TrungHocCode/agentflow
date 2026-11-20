@@ -185,7 +185,7 @@ class TestCIRealBriefs(unittest.IsolatedAsyncioTestCase):
                     ).scalars().all()
                 self.assertIn("ci_briefs", tables)
                 version = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(version, "0011_ci_scheduling")
+                self.assertEqual(version, "0012_agent_profile_mode")
         finally:
             async with engine.begin() as connection:
                 await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
