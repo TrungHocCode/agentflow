@@ -124,7 +124,7 @@ class HttpResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             AIMessage(content="", tool_calls=[{"id": "http1", "name": "http_request", "args": {"url": URL}}]),
             AIMessage(content="This prose is not the evidence result"),
         ])
-        worker = WorkerAgent("source_researcher", "Collect source evidence", llm, [fetch])
+        worker = WorkerAgent("source_researcher", "Collect source evidence", llm, [fetch], mode="collect_evidence")
         worker.evidence_store = store
         output = await worker.execute({"current_task": Task(id=1, node="source_researcher", status="pending",
             description="Collect the score"), "metadata": {"run_id": "fixture"}, "messages": []})

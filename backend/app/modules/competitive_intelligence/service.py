@@ -8,6 +8,7 @@ from typing import TypeVar
 from urllib.parse import urlsplit
 
 from app.core.config import settings
+from app.modules.competitive_intelligence.investigation_contracts import CI_ROLE_TOOLS, CI_TOOLS
 from app.modules.competitive_intelligence.models import (
     CreateWatchlist, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
     UpdateWatchlist, Watchlist, digest, public_url,
@@ -29,10 +30,8 @@ Found = TypeVar("Found", list[RecommendedProduct], dict[str, list[RecommendedSou
 
 SCOUT_SCOPE = "ci-scout"
 
-SAFE_ROLES = {"source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst",
-              "synthesis_agent", "report_agent"}
-SAFE_TOOLS = {"news_crawler", "news_crawler_batch", "http_request", "text_summarizer",
-              "markdown_report_generator", "chart_generator"}
+SAFE_ROLES = {*CI_ROLE_TOOLS, "synthesis_agent"}
+SAFE_TOOLS = CI_TOOLS
 
 
 class IntelligenceService:
@@ -115,7 +114,8 @@ class IntelligenceService:
         """Return search-grounded competitor candidates; nothing is persisted or approved."""
 
         products = await self._scout_round(owner_id, lambda: self.scout.stage_a(prompt))
-        return SetupRecommendation(products=products, warnings=list(self.scout.warnings)[:16])
+        return SetupRecommendation(products=products, suggested_dimensions=self.scout.dimensions[:4],
+                                   warnings=list(self.scout.warnings)[:16])
 
     async def discover_sources(self, domains: list[str], dimension: str,
                                owner_id: str) -> dict[str, list[RecommendedSource]]:

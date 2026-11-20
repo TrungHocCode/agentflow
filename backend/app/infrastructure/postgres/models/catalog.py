@@ -23,6 +23,9 @@ class AgentCatalogModel(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     tool_names: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="tool_loop", server_default="tool_loop")
+    reads_product_context: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False,
+                                                        server_default="false")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

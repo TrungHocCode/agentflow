@@ -56,14 +56,14 @@ def round_task(**updates) -> Task:
 
 class TestRoundContext(unittest.TestCase):
     def test_gives_evidence_and_comparison_context(self) -> None:
-        context = _round_context(state(round_task()), round_task())
+        context = _round_context(state(round_task()), round_task(), reads_product_context=True)
         self.assertIn("Before: $5", context)
         self.assertIn("NoteNest", context)
         self.assertIn("SMB", context)
         self.assertIn("Affordability", context)
 
     def test_collected_text_is_wrapped_as_untrusted_and_competitors_are_left_out(self) -> None:
-        context = _round_context(state(round_task()), round_task())
+        context = _round_context(state(round_task()), round_task(), reads_product_context=True)
         self.assertLess(context.index("<tool_output>"), context.index("Before: $5"))
         self.assertLess(context.index("Before: $5"), context.index("</tool_output>"))
         self.assertNotIn("Notion", context)
@@ -103,10 +103,13 @@ class TestRoundContext(unittest.TestCase):
         self.assertEqual(parsed["own_products"][0]["name"], "Ours")
 
     def test_collecting_roles_never_see_private_product_context(self) -> None:
+        from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
         for role in ("source_researcher", "evidence_verifier"):
             with self.subTest(role=role):
+                profile = DEFAULT_AGENT_PROFILES[role]
+                self.assertFalse(profile.reads_product_context)
                 task = round_task(node=role)
-                context = _round_context(state(task), task)
+                context = _round_context(state(task), task, profile.reads_product_context)
                 self.assertIn("Before: $5", context)
                 self.assertNotIn("NoteNest", context)
                 self.assertNotIn("SMB", context)
@@ -159,7 +162,7 @@ class TestWorkerPromptIncludesRoundContext(unittest.IsolatedAsyncioTestCase):
     async def test_analyst_prompt_contains_the_change(self) -> None:
         llm = MagicMock(spec=BaseChatModel)
         llm.ainvoke = AsyncMock(return_value=AIMessage(content="Notion raised prices."))
-        agent = WorkerAgent(name="competitive_analyst", system_prompt="Compare.", llm=llm)
+        agent = WorkerAgent(name="competitive_analyst", system_prompt="Compare.", llm=llm, reads_product_context=True)
 
         await agent.execute(state(round_task()))
 

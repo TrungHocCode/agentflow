@@ -2032,6 +2032,9 @@ class RunService:
                 "system_prompt": agent.system_prompt if agent is not None else fallback.system_prompt,
                 "tool_names": list(agent.tool_names if agent is not None else fallback.tool_names),
                 "runtime_name": fallback.runtime_name,
+                "mode": agent.mode if agent is not None else fallback.mode,
+                "reads_product_context": (agent.reads_product_context if agent is not None
+                                          else fallback.reads_product_context),
             }
             for reference in (task.agent_id, task.node, profile["name"]):
                 if reference:

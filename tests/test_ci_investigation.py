@@ -344,6 +344,24 @@ class TestCIRolesResolve(unittest.TestCase):
             self.assertTrue(set(profile.tool_names) <= SAFE_TOOLS)
             self.assertTrue(set(profile.tool_names) <= set(CI_ROLE_TOOLS[role]))
 
+    def test_worker_behaviour_comes_from_the_profile_not_the_name(self) -> None:
+        from unittest.mock import MagicMock
+
+        from app.execution.agents.resolver import AgentProfile, AgentResolver, ResolvedAgent
+        from app.execution.state import Task
+        task = Task(id=1, node="pricing_watcher", status="running", description="Collect")
+        profile = AgentProfile(name="pricing_watcher", system_prompt="Collect.", mode="collect_evidence",
+                               reads_product_context=True)
+        agent = AgentResolver.create_agent(ResolvedAgent(profile=profile, tools=[]), MagicMock(), task)
+        self.assertEqual((agent.name, agent.mode, agent.reads_product_context),
+                         ("pricing_watcher", "collect_evidence", True))
+
+    def test_ci_tools_are_the_ci_safe_part_of_each_profile(self) -> None:
+        from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
+        self.assertEqual(CI_ROLE_TOOLS["source_researcher"], ["news_crawler", "news_crawler_batch", "http_request"])
+        for role, tools in CI_ROLE_TOOLS.items():
+            self.assertTrue(set(tools) <= set(DEFAULT_AGENT_PROFILES[role].tool_names))
+
     def test_ci_workflows_accept_new_roles_but_reject_unknown(self) -> None:
         from app.modules.competitive_intelligence.service import IntelligenceService
         from app.modules.runs.models import RunDocument

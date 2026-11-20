@@ -1,26 +1,36 @@
 """Resolve workflow tasks to catalog-backed agent profiles and tools."""
 
 from dataclasses import dataclass
-from typing import Dict, Mapping, Protocol
+from typing import Dict, Literal, Mapping, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
-from app.execution.agents.base import BaseAgent
+from app.execution.agents.base import BaseAgent, WorkerAgent
 from app.execution.agents.registry import AgentRegistry
 from app.execution.state import Task
 from app.execution.tools.base import ToolRegistry
 
 
+# How the shared WorkerAgent runs a profile:
+# tool_loop: model + tools (ReAct); collect_evidence: tool_loop that also maps crawled pages to claims;
+# reduce_evidence / render_report: no model, the backend merges or renders collected evidence.
+AgentMode = Literal["tool_loop", "collect_evidence", "reduce_evidence", "render_report"]
+
+
 class AgentProfile(BaseModel):
-    """Runtime-safe subset of an agent catalog record."""
+    """Runtime-safe subset of an agent catalog record. A new agent is a new profile, not a new class."""
 
     name: str
     system_prompt: str
+    description: str = ""
     tool_names: list[str] = Field(default_factory=list)
     runtime_name: str = "worker"
+    mode: AgentMode = "tool_loop"
+    # The own-product profile is private; only analysts that compare against it receive it.
+    reads_product_context: bool = False
     catalog_tool_names: list[str] | None = None
 
 
@@ -44,11 +54,14 @@ class ResolvedAgent:
 DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     "worker": AgentProfile(
         name="worker",
+        description="Generic Worker Agent",
         system_prompt="You execute the assigned task using only the tools provided to you.",
         tool_names=["web_search", "file_reader"],
     ),
     "source_researcher": AgentProfile(
         name="source_researcher",
+        description="Collects web sources and extracts source content.",
+        mode="collect_evidence",
         system_prompt=(
             "You discover and collect reliable, independent sources for a technology research task. "
             "Search distinct angles, crawl selected source URLs, preserve provenance, and distinguish "
@@ -64,6 +77,7 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "scout": AgentProfile(
         name="scout",
+        description="Discovers search-grounded competitor and source candidates.",
         system_prompt=(
             "You discover candidate competitor products and public source URLs using web search only. "
             "Return search-grounded candidates with their URLs; never invent a URL or fill gaps from memory. "
@@ -73,6 +87,8 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "synthesis_agent": AgentProfile(
         name="synthesis_agent",
+        description="Synthesizes source material into supported findings.",
+        mode="reduce_evidence",
         system_prompt=(
             "You synthesize the outputs of earlier research tasks into concise, "
             "well-supported findings without inventing evidence."
@@ -81,6 +97,8 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "report_agent": AgentProfile(
         name="report_agent",
+        description="Produces structured Markdown research reports.",
+        mode="render_report",
         system_prompt=(
             "You are AgentFlow's evidence-grounded research analyst and report writer. "
             "Turn validated research inputs into a useful, analytical Markdown report."
@@ -89,6 +107,7 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "chart_agent": AgentProfile(
         name="chart_agent",
+        description="Creates chart specifications from structured research data.",
         system_prompt=(
             "You turn structured research data into an accurate, readable chart "
             "specification and explain the data fields used."
@@ -97,6 +116,8 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "product_analyst": AgentProfile(
         name="product_analyst",
+        description="Compares confirmed observations with the own-product profile.",
+        reads_product_context=True,
         system_prompt=(
             "You compare confirmed source observations with the own-product profile, "
             "customer segments and explicit comparison criteria. Distinguish observed "
@@ -106,6 +127,7 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "evidence_verifier": AgentProfile(
         name="evidence_verifier",
+        description="Examines supporting and contradictory evidence per candidate.",
         system_prompt=(
             "You examine supporting and contradictory evidence for one change candidate. "
             "Label each claim observed or unresolved with exact snapshot offsets. "
@@ -116,6 +138,8 @@ DEFAULT_AGENT_PROFILES: Mapping[str, AgentProfile] = {
     ),
     "competitive_analyst": AgentProfile(
         name="competitive_analyst",
+        description="Assesses competitor observations against the own-product profile.",
+        reads_product_context=True,
         system_prompt=(
             "You assess what a confirmed competitor observation means against the "
             "own-product profile and recorded customer segments. Ground every "
@@ -466,9 +490,13 @@ class AgentResolver:
         ])
         system_prompt = system_prompt_override or "\n".join(prompt_sections)
         agent_class = AgentRegistry.get_agent_class(resolved.profile.runtime_name)
+        profile_options = ({"mode": resolved.profile.mode,
+                            "reads_product_context": resolved.profile.reads_product_context}
+                           if issubclass(agent_class, WorkerAgent) else {})
         return agent_class(
             name=resolved.profile.name,
             system_prompt=system_prompt,
             llm=llm,
             tools=resolved.tools,
+            **profile_options,
         )

@@ -52,6 +52,19 @@ class SetupRecommendation(Contract):
     warnings: list[str] = Field(default_factory=list, max_length=16)
 
 
+# What a setup request says about the user's own product. A model fills it; Scout keeps a competitor
+# name only when the request contains it verbatim. No docstring: it would become the schema text the model reads.
+# Every field is required: with optional fields, schema-constrained decoding let the model skip them.
+class ProductBrief(Contract):
+    own_product: str | None = Field(max_length=200, description=(
+        "Name of the user's own product, exactly as written; null if not given."))
+    named_competitors: list[str] = Field(max_length=10, description=(
+        "Other products the user names in the request, exactly as written; empty if none are named."))
+    category: str | None = Field(max_length=120, description=(
+        "What kind of product the user's own product is: a short English noun phrase (2-6 words) "
+        "that a buyer would type into a search engine; null if the request does not say."))
+
+
 class RecommendRequest(Contract):
     prompt: str = Field(min_length=1, max_length=2000)
 

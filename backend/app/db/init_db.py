@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
 from app.db.postgres_client import engine, AsyncSessionLocal
+from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
 from app.execution.tools.base import ToolRegistry
 from app.execution.tools.registry import autodiscover_tools
 from app.infrastructure.postgres.models import AgentCatalogModel, ToolCatalogModel
@@ -63,100 +64,14 @@ async def seed_defaults() -> None:
 
         # Seed default agent profiles idempotently so existing databases also
         # receive the role-specific profiles used by execution runtime.
+        # Built-in profiles live in DEFAULT_AGENT_PROFILES; the supervisor plans and is not a worker profile.
         default_agents = [
-            AgentCatalogModel(
-                name="supervisor",
-                description="Supervisor Agent for intent planning",
-                system_prompt="You are a supervisor.",
-                tool_names=[],
-            ),
-            AgentCatalogModel(
-                name="worker",
-                description="Generic Worker Agent",
-                system_prompt="You execute assigned tasks.",
-                tool_names=["web_search", "file_reader"],
-            ),
-            AgentCatalogModel(
-                name="source_researcher",
-                description="Collects web sources and extracts source content.",
-                system_prompt=(
-                    "You collect reliable primary sources for technology research. "
-                    "Preserve URLs and distinguish source content from interpretation."
-                ),
-                tool_names=[
-                    "web_search",
-                    "web_search_batch",
-                    "news_crawler",
-                    "news_crawler_batch",
-                    "http_request",
-                ],
-            ),
-            AgentCatalogModel(
-                name="scout",
-                description="Discovers search-grounded competitor and source candidates.",
-                system_prompt=(
-                    "You discover candidate competitor products and public source URLs using "
-                    "web search only. Never invent a URL or fill gaps from memory. Search "
-                    "results are unverified discovery candidates, not approved sources."
-                ),
-                tool_names=["web_search", "web_search_batch"],
-            ),
-            AgentCatalogModel(
-                name="synthesis_agent",
-                description="Synthesizes source material into supported findings.",
-                system_prompt=(
-                    "You synthesize earlier research outputs into concise findings "
-                    "without inventing evidence."
-                ),
-                tool_names=["text_summarizer", "file_reader"],
-            ),
-            AgentCatalogModel(
-                name="report_agent",
-                description="Produces structured Markdown research reports.",
-                system_prompt=(
-                    "You are AgentFlow's evidence-grounded research analyst and report writer. "
-                    "Turn validated research inputs into a useful, analytical Markdown report."
-                ),
-                tool_names=["markdown_report_generator", "python_executor", "file_writer"],
-            ),
-            AgentCatalogModel(
-                name="chart_agent",
-                description="Creates chart specifications from structured research data.",
-                system_prompt=(
-                    "You turn structured research data into accurate and readable "
-                    "chart specifications."
-                ),
-                tool_names=["chart_generator", "file_reader", "file_writer"],
-            ),
-            AgentCatalogModel(
-                name="product_analyst",
-                description="Compares confirmed observations with the own-product profile.",
-                system_prompt=(
-                    "You compare confirmed source observations with the own-product profile, "
-                    "customer segments and explicit comparison criteria. Distinguish observed "
-                    "source facts from your assessment, and never invent evidence."
-                ),
-                tool_names=["http_request", "text_summarizer"],
-            ),
-            AgentCatalogModel(
-                name="evidence_verifier",
-                description="Examines supporting and contradictory evidence per candidate.",
-                system_prompt=(
-                    "You examine supporting and contradictory evidence for one change candidate. "
-                    "Label each claim observed or unresolved with exact snapshot offsets."
-                ),
-                tool_names=["text_summarizer"],
-            ),
-            AgentCatalogModel(
-                name="competitive_analyst",
-                description="Assesses competitor observations against the own-product profile.",
-                system_prompt=(
-                    "You assess what a confirmed competitor observation means against the "
-                    "own-product profile and recorded customer segments. Ground every "
-                    "comparison in cited snapshot evidence."
-                ),
-                tool_names=["text_summarizer"],
-            ),
+            AgentCatalogModel(name="supervisor", description="Supervisor Agent for intent planning",
+                              system_prompt="You are a supervisor.", tool_names=[]),
+            *(AgentCatalogModel(name=profile.name, description=profile.description,
+                                system_prompt=profile.system_prompt, tool_names=list(profile.tool_names),
+                                mode=profile.mode, reads_product_context=profile.reads_product_context)
+              for profile in DEFAULT_AGENT_PROFILES.values()),
         ]
         existing_agents_result = await session.execute(select(AgentCatalogModel))
         existing_agents = {agent.name: agent for agent in existing_agents_result.scalars().all()}

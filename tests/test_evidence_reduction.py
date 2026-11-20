@@ -34,7 +34,7 @@ class EvidenceReductionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_synthesis_retains_source_lineage_and_limitations(self) -> None:
         model, store = self.fixture(["e1"])
-        worker = WorkerAgent("synthesis_agent", "Reconcile evidence", model)
+        worker = WorkerAgent("synthesis_agent", "Reconcile evidence", model, mode="reduce_evidence")
         worker.evidence_store = store
         result = await worker.execute({"current_task": Task(id=2, node="synthesis_agent", status="pending",
             description="Compare benchmarks", dependencies=[1]), "metadata": {"run_id": "run"},
@@ -78,7 +78,7 @@ class EvidenceReductionTests(unittest.IsolatedAsyncioTestCase):
         model = MagicMock()
         model.bind_tools.return_value.ainvoke = AsyncMock(return_value=AIMessage(content="", tool_calls=[
             {"id": "report1", "name": "report", "args": {"content": "Source https://invented.example/paper"}}]))
-        worker = WorkerAgent("report_agent", "Write a report", model, [report])
+        worker = WorkerAgent("report_agent", "Write a report", model, [report], mode="render_report")
         worker.evidence_store = MagicMock()
         output = await worker.execute({"current_task": Task(id=3, node="report_agent", status="pending",
             description="Report", dependencies=[2]), "result_storage": [{"task_id": 2, "result": {

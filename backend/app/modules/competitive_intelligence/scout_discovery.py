@@ -13,12 +13,17 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from app.execution.tools.base import ToolRegistry
 from app.modules.competitive_intelligence.models import public_url
-from app.modules.competitive_intelligence.setup_recommend import RecommendedProduct, RecommendedSource
+from app.modules.competitive_intelligence.setup_recommend import (
+    ProductBrief,
+    RecommendedProduct,
+    RecommendedSource,
+)
 from app.shared.collection_scope import normalized_url, same_site
 from app.shared.errors import DependencyUnavailableError
 
@@ -28,6 +33,7 @@ MAX_RESULTS_PER_QUERY = 5
 MAX_PRODUCTS = 10
 MAX_SOURCES_PER_DOMAIN = 5
 MAX_TOOL_CALLS_PER_STAGE = 2
+MAX_LISTICLES = 4
 
 DIMENSION_QUERY_TERMS: dict[str, str] = {
     "pricing": "pricing page",
@@ -35,11 +41,24 @@ DIMENSION_QUERY_TERMS: dict[str, str] = {
     "integrations": "integrations",
     "release_notes": "release notes",
 }
+# Local products rank for searches in the request's language ("iPOS bảng giá" finds ipos.vn, "iPOS pricing page"
+# does not), while global ones rank for English; Scout searches English first and Vietnamese for the misses.
+_VIETNAMESE = re.compile(r"[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", re.IGNORECASE)
+VIETNAMESE_QUERY_TERMS: dict[str, str] = {
+    "pricing": "bảng giá",
+    "features": "tính năng",
+    "integrations": "tích hợp",
+    "release_notes": "cập nhật mới",
+}
+# These sites host hundreds of products; "Apple Notes" on apple.com is not a site Scout can track.
+_PLATFORM_DOMAINS = {"amazon.com", "apple.com", "facebook.com", "google.com", "meta.com", "microsoft.com"}
 _DIMENSION_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "pricing": ("pricing", "price", "plans", "cost"),
-    "features": ("features", "feature", "capabilities", "functionality"),
-    "integrations": ("integrations", "integration", "connectors"),
-    "release_notes": ("release notes", "releases", "changelog", "what's new"),
+    # Vietnamese phrases avoid a bare "giá", which also appears in "đánh giá" (to review).
+    "pricing": ("pricing", "price", "plans", "cost", "bảng giá", "giá của", "giá cả", "mức giá", "giá bán",
+                "theo dõi giá", "so sánh giá", "gói cước"),
+    "features": ("features", "feature", "capabilities", "functionality", "tính năng"),
+    "integrations": ("integrations", "integration", "connectors", "tích hợp"),
+    "release_notes": ("release notes", "releases", "changelog", "what's new", "cập nhật mới", "phiên bản mới"),
 }
 _GENERIC_CAPITALIZED = {
     "A", "An", "And", "Build", "Check", "Compare", "Competitor", "Competitors", "Find", "Focus", "Follow",
@@ -48,13 +67,14 @@ _GENERIC_CAPITALIZED = {
     "Watch", "We", "What", "Who", "Why",
     # Platforms and categories, not products.
     "AI", "Android", "App", "Chrome", "Linux", "Mac", "SaaS", "Web", "Windows",
+    "API", "ATS", "B2B", "B2C", "CMS", "CRM", "ERP", "HR", "LMS", "POS", "SEO", "SMB", "URL", "URLs",
 }
 _STOPWORDS = {
     "about", "and", "are", "compare", "competitor", "competitors", "for", "from", "into",
     "make", "my", "of", "our", "please", "products", "that", "the", "their", "track",
     "want", "with",
 }
-_WORD = re.compile(r"[A-Za-z][A-Za-z0-9&.+_-]*")
+_WORD = re.compile(r"[^\W\d_][\w&.+-]*")  # Any script, so "Tôi" stays one word instead of "T" + "i".
 _OWN_PRODUCT = re.compile(
     r"\b(?i:i|we)(?i:'m|'re| am| are)?\s+(?i:make|making|build|building|built|run|running|sell|selling|own|develop|"
     r"developing|created?)\s+([A-Z][A-Za-z0-9&.+_-]*)")
@@ -64,6 +84,18 @@ _ARTICLE_TITLE = re.compile(
 _NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
 _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
+# The category in "I make NoteNest, a markdown note-taking app for Mac." -> "markdown note-taking app for Mac".
+_CATEGORY = re.compile(r"\b(?:an?|the)\s+([^.;!?]{3,80}?)\s*(?:[.;!?]|$)", re.IGNORECASE)
+_HEADING = re.compile(r"^#{1,4}\s+(.+)$")
+_LIST_NUMBER = re.compile(r"^(?:#?\d{1,2}[.):]?|No\.\s*\d{1,2})\s+")
+# Headings in "best X" articles that are sections, not products. Unverified names are dropped later anyway.
+_SECTION_FIRST_WORDS = {
+    "about", "alternatives", "are", "best", "bottom", "can", "comments", "comparison", "conclusion", "cons",
+    "discover", "do", "does", "faq", "faqs", "features", "final", "frequently", "how", "integrations", "is", "key",
+    "methodology", "more", "not", "other", "our", "overview", "pricing", "pros", "related", "requirements",
+    "share", "should", "summary", "table", "the", "tl;dr", "tools", "top", "verdict", "what", "when", "where",
+    "which", "who", "why", "worth",
+}
 # Templates and single forum threads mention a dimension without being the product's page for it.
 _NOT_A_SOURCE_PATH = re.compile(r"/(?:templates?|t)/", re.IGNORECASE)
 
@@ -80,23 +112,55 @@ SITE_PATHS: dict[str, tuple[str, ...]] = {
 _PRICING_TEXT = re.compile(
     r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
 
-PageFetcher = Callable[[str], Awaitable[dict[str, str] | None]]
+PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
+BriefReader = Callable[[str], Awaitable[ProductBrief | None]]
 
 
-async def _default_page_fetcher(url: str) -> dict[str, str] | None:
-    """Fetch one public page with the app's crawler; None when it is not a usable page."""
-    from app.execution.tools.news_crawler_tool import news_crawler  # Lazy: the tool module is heavy.
+@dataclass(frozen=True)
+class _Request:
+    """What Scout searches for: the user's product, the rivals they named, the category and what to track."""
 
-    raw = await asyncio.to_thread(news_crawler.invoke, {"url": url, "mode": "static", "max_articles": 0})
+    prompt: str
+    own: str | None
+    named: list[str]
+    category: str | None
+    dimensions: list[str]
+
+    @property
+    def terms(self) -> list[str]:
+        return [*self.named, *([self.own] if self.own else [])]
+
+
+async def _default_page_fetcher(url: str) -> dict[str, Any] | None:
+    """Fetch one public page with the app's crawler, plus its links; None when it is not a usable page."""
+    # Lazy: the crawler modules are heavy.
+    from app.execution.tools.crawler.orchestrator import crawl_url
+    from app.execution.tools.network_policy import validate_external_url
+    from app.execution.tools.news_crawler_tool import HTMLContentExtractor, _extract_page
+
+    safe_url, error = validate_external_url(url)
+    if error or not safe_url:
+        return None
+
+    def extract_with_links(page_url: str, html: str) -> tuple[str, dict[str, Any], list[str]]:
+        status, data, warnings = _extract_page(page_url, html)
+        parser = HTMLContentExtractor()
+        parser.feed(html)
+        parser.close()
+        data["links"] = [urljoin(page_url, link["href"]) for link in parser.links[:500]]
+        return status, data, warnings
+
+    raw = await asyncio.to_thread(crawl_url, safe_url, "static", extract_page=extract_with_links)
     result = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(result, dict) or not result.get("ok"):
         return None
     data = result.get("data") or {}
     return {"final_url": str((result.get("source") or {}).get("final_url") or url),
-            "title": str(data.get("title") or ""), "text": str(data.get("text") or "")}
+            "title": str(data.get("title") or ""), "text": str(data.get("text") or ""),
+            "markdown": str(data.get("markdown") or ""), "links": list(data.get("links") or [])}
 
 
-def _page_fits(dimension: str, host: str, page: dict[str, str]) -> bool:
+def _page_fits(dimension: str, host: str, page: dict[str, Any]) -> bool:
     """A probed page counts only if it stayed on the site, is not the home page, and reads like the dimension."""
     final = urlsplit(page.get("final_url") or "")
     if not final.hostname or not same_site(final.hostname.casefold(), host) or final.path.strip("/") == "":
@@ -176,7 +240,7 @@ def _product_terms(prompt: str) -> list[str]:
     for match in _WORD.finditer(prompt):
         token = match.group().rstrip("&.+_-")
         key = token.casefold()
-        if (not token[0].isupper() or token in _GENERIC_CAPITALIZED or key in seen
+        if (len(token) < 2 or not token[0].isupper() or token in _GENERIC_CAPITALIZED or key in seen
                 or token in dimension_words):
             continue
         seen.add(key)
@@ -197,6 +261,46 @@ def _own_product(prompt: str) -> str | None:
     return match.group(1).rstrip("&.+_-") if match else None
 
 
+def _category(prompt: str, own: str | None) -> str | None:
+    """The product category the user described, searched as "best <category>" when no rival is named."""
+    start = prompt.find(own) + len(own) if own and own in prompt else 0
+    match = _CATEGORY.search(prompt, start)
+    return " ".join(match.group(1).split()) if match else None
+
+
+def _listed_names(markdown: str) -> list[str]:
+    """Product names from the headings of a "best X" article ("## 2. ClickUp", "### Bear Notes")."""
+    names: list[str] = []
+    for block in markdown.split("\n\n"):
+        heading = _HEADING.match(block.strip())
+        if not heading:
+            continue
+        text = _LIST_NUMBER.sub("", heading.group(1).strip())
+        text = re.split(r"\s*[(\[]", _NAME_SEPARATOR.split(text, maxsplit=1)[0], maxsplit=1)[0].strip(" .:")
+        words = text.split()
+        # Product names capitalize every word ("Bear Notes", "iA Writer", "Things 3"); sections do not.
+        if (not 1 <= len(words) <= 3 or len(text) > 40 or words[0].casefold() in _SECTION_FIRST_WORDS
+                or not all(any(char.isupper() or char.isdigit() for char in word) for word in words)
+                or text in names):
+            continue
+        names.append(text)
+    return names
+
+
+def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
+    """The first result domain that is plausibly the product's own (bear.app for "Bear Notes").
+
+    The domain name must be the product name or part of it; a longer one (craftybase.com for "Craft") is another firm.
+    """
+    wanted = _compact(name)
+    for record in records:
+        domain = _registrable_domain(str(record.get("url") or ""))
+        label = _compact(domain.split(".")[0]) if domain else ""
+        if label and (label == wanted or (len(label) >= 4 and label in wanted and domain not in _PLATFORM_DOMAINS)):
+            return domain
+    return None
+
+
 def _compact(value: str) -> str:
     return "".join(_TOKEN.findall(value.casefold()))
 
@@ -209,13 +313,40 @@ def _named_term(domain: str, terms: list[str]) -> str | None:
     return next((term for term in terms if _compact(term) in names), None)
 
 
-def _ranking_terms(prompt: str, product_terms: list[str]) -> set[str]:
-    terms = {token.casefold() for token in product_terms}
-    for dimension in _dimensions(prompt):
+def _ranking_terms(request: _Request) -> set[str]:
+    terms = {token.casefold() for token in request.terms}
+    for dimension in request.dimensions:
         terms.update(_DIMENSION_KEYWORDS[dimension])
     if not terms:
-        terms.update(_fallback_keywords(prompt))
+        terms.update(_fallback_keywords(request.prompt))
     return terms
+
+
+def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
+    """Combine keyword rules with a model's reading of the request; only names written in it survive."""
+    own = _own_product(prompt)
+    named = [term for term in _product_terms(prompt) if term != own]
+    category = _category(prompt, own)
+    dimensions = _dimensions(prompt)
+    if brief is not None:
+        lowered = prompt.casefold()
+
+        def written(name: str | None) -> str | None:
+            cleaned = " ".join(str(name or "").split())
+            return cleaned if len(cleaned) >= 2 and cleaned.casefold() in lowered else None
+
+        own = written(brief.own_product) or own
+        # The model reads any language and skips words like "Mac", but it also invents rivals: keep written ones.
+        model_named = [name for name in map(written, brief.named_competitors) if name]
+        if not model_named:
+            # A small model sometimes drops names it was given; keep capitalized words written mid-sentence,
+            # not sentence openers such as "Tôi" or "It".
+            model_named = [term for term in named if not re.search(rf"(?:^|[.!?]\s+){re.escape(term)}\b", prompt)]
+        named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
+        model_category = " ".join(str(brief.category or "").split())[:80]
+        if model_category and "://" not in model_category:
+            category = model_category
+    return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions)
 
 
 def _registrable_domain(value: str) -> str:
@@ -258,10 +389,13 @@ class ScoutDiscovery:
     """Deterministic staged discovery over the registered batch search tool."""
 
     def __init__(self, search_tool_caller: SearchToolCaller | None = None,
-                 page_fetcher: PageFetcher | None = None) -> None:
+                 page_fetcher: PageFetcher | None = None, brief_reader: BriefReader | None = None) -> None:
         self.search_tool_caller = search_tool_caller or _default_search_tool_caller
         self.page_fetcher = page_fetcher or _default_page_fetcher
+        # Optional model that reads the request; without it, keyword rules alone pick the search terms.
+        self.brief_reader = brief_reader
         self.warnings: list[str] = []
+        self.dimensions: list[str] = []
         self._stage_calls = 0
 
     def _reset_stage(self) -> None:
@@ -303,11 +437,20 @@ class ScoutDiscovery:
                                          note=" ".join(page.get("title", "").split())[:500])
         return None
 
-    def _competitor_queries(self, prompt: str) -> list[str]:
-        terms = _product_terms(prompt)
-        dimensions = _dimensions(prompt)
-        own = _own_product(prompt)
-        named = [term for term in terms if term != own]
+    async def _understand(self, prompt: str) -> _Request:
+        brief = None
+        if self.brief_reader is not None:
+            try:
+                brief = await self.brief_reader(prompt)
+            except Exception:  # The reader is optional; keyword rules still work.
+                brief = None
+        request = _understand(prompt, brief)
+        self.dimensions = request.dimensions
+        return request
+
+    def _competitor_queries(self, request: _Request) -> list[str]:
+        prompt, own, named, dimensions = request.prompt, request.own, request.named, request.dimensions
+        terms = request.terms
         queries: list[str] = []
         if named:
             # Named competitors: look each one up, since a combined "alternatives" query
@@ -317,6 +460,9 @@ class ScoutDiscovery:
             if len(named) > MAX_NAMED_QUERIES:
                 self._warn(f"Searched the first {MAX_NAMED_QUERIES} named products; add the rest manually: "
                            f"{', '.join(named[MAX_NAMED_QUERIES:])}.")
+        elif category := request.category:
+            # Nobody named: "best X" articles list the field; stage A reads their headings.
+            queries = [f"best {category}", f"{category} alternatives"]
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:
@@ -342,7 +488,8 @@ class ScoutDiscovery:
         """Discover competitor candidates from up to two bounded search queries."""
 
         self._reset_stage()
-        queries = self._competitor_queries(prompt)
+        request = await self._understand(prompt)
+        queries = self._competitor_queries(request)
         if not queries:
             self._warn("Could not derive competitor search terms from the prompt.")
             return []
@@ -351,9 +498,19 @@ class ScoutDiscovery:
             self._warn("No web search results were returned for competitor discovery.")
             return []
 
-        terms = _product_terms(prompt)
-        own = _own_product(prompt)
-        ranking_terms = _ranking_terms(prompt, terms)
+        terms, own = request.terms, request.own
+        if not request.named:
+            listed = await self._listed_products(records, own)
+            if listed:
+                return self._with_own(listed, own)
+        elif _VIETNAMESE.search(prompt):
+            found = {_named_term(_registrable_domain(str(record.get("url") or "")), terms) for record in records}
+            missing = [term for term in request.named if term not in found][:MAX_NAMED_QUERIES]
+            if missing:
+                local = VIETNAMESE_QUERY_TERMS[request.dimensions[0]] if request.dimensions else "trang chủ"
+                records = [*records, *await self._search([f"{term} {local}" for term in missing],
+                                                          MAX_RESULTS_PER_QUERY)]
+        ranking_terms = _ranking_terms(request)
         ranked: list[tuple[bool, int, int, str, dict[str, Any], set[str], str | None]] = []
         skipped_articles = 0
         for index, record in enumerate(records):
@@ -408,6 +565,18 @@ class ScoutDiscovery:
                 picked_names.add(named)
             if len(products) >= MAX_PRODUCTS:
                 break
+        products = self._with_own(products, own)
+        if shared_names:
+            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
+                       "ticked. Check each website before tracking.")
+        if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
+            self._warn("Truncated competitor candidates to one per domain.")
+        if not products:
+            self._warn("Search results did not contain usable competitor domains.")
+        return products
+
+    @staticmethod
+    def _with_own(products: list[RecommendedProduct], own: str | None) -> list[RecommendedProduct]:
         if own and not any(product.kind == "own" for product in products):
             # The user named their product ("I make InkPad"); approval needs it even without a website.
             if len(products) >= MAX_PRODUCTS:
@@ -416,13 +585,64 @@ class ScoutDiscovery:
             products.append(RecommendedProduct(name=own, kind="own", suggested=True, company="",
                                                official_website=None, sources=[], provenance="user_supplied",
                                                rationale="Named in your request as your own product."))
-        if shared_names:
-            self._warn(f"Several websites are named {', '.join(sorted(shared_names))}; only the top result is "
-                       "ticked. Check each website before tracking.")
-        if len(products) < MAX_PRODUCTS and len(seen_domains) > len(products):
-            self._warn("Truncated competitor candidates to one per domain.")
+        return products
+
+    async def _listed_products(self, records: list[dict[str, Any]], own: str | None) -> list[RecommendedProduct]:
+        """Read the top "best X" articles and keep the products they list that have a website of their own."""
+        articles: list[dict[str, Any]] = []
+        article_domains: set[str] = set()
+        for record in records:
+            domain = _registrable_domain(str(record.get("url") or ""))
+            if domain and domain not in article_domains and _ARTICLE_TITLE.search(str(record.get("title") or "")):
+                article_domains.add(domain)
+                articles.append(record)
+        articles = articles[:MAX_LISTICLES]
+        if not articles:
+            return []
+        pages = await asyncio.gather(*(self.page_fetcher(str(record["url"])) for record in articles),
+                                     return_exceptions=True)
+        counts: dict[str, int] = {}
+        names: dict[str, str] = {}
+        listed_by: dict[str, list[str]] = {}
+        links: list[dict[str, str]] = []
+        for record, page in zip(articles, pages):
+            if not isinstance(page, dict):
+                continue
+            links.extend({"url": link} for link in page.get("links", [])
+                         if _registrable_domain(link) not in article_domains)
+            for name in _listed_names(page.get("markdown", "")):
+                key = _compact(name)
+                if not key or (own and key == _compact(own)):
+                    continue
+                names.setdefault(key, name)
+                counts[key] = counts.get(key, 0) + 1
+                listed_by.setdefault(key, []).append(_registrable_domain(str(record["url"])))
+        if not counts:
+            self._warn("The comparison articles found did not list readable product names.")
+            return []
+        # Products listed by several articles first; a name in only one may be a section heading.
+        ranked = sorted(counts, key=lambda key: -counts[key])[:MAX_PRODUCTS]
+        # The articles usually link each product's own site; search only for the names they do not.
+        sites = {key: _site_of(names[key], links) for key in ranked}
+        unresolved = [key for key in ranked if sites[key] is None][:MAX_BATCH_QUERIES]
+        if unresolved:
+            # Pricing pages live on the product's own site; "<name> official website" mostly finds directories.
+            lookups = await self._search([f"{names[key]} pricing" for key in unresolved], MAX_RESULTS_PER_QUERY)
+            sites.update({key: _site_of(names[key], lookups) for key in unresolved})
+        products: list[RecommendedProduct] = []
+        seen: set[str] = set()
+        for key in ranked:
+            domain = sites[key]
+            if domain is None or domain in seen or domain in article_domains:
+                continue
+            seen.add(domain)
+            rationale = f"Listed in {counts[key]} comparison article(s): {', '.join(listed_by[key])}."
+            products.append(RecommendedProduct(
+                name=names[key], kind="competitor", suggested=counts[key] >= 2, company="",
+                official_website=f"https://{domain}/", sources=[], provenance="web_search", rationale=rationale[:500],
+            ))
         if not products:
-            self._warn("Search results did not contain usable competitor domains.")
+            self._warn("No listed product had a website matching its name; add competitors by hand.")
         return products
 
     async def stage_b(self, domains: list[str], dimension: str) -> dict[str, list[RecommendedSource]]:
