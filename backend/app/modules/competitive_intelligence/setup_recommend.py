@@ -57,18 +57,17 @@ class SetupRecommendation(Contract):
 # What a setup request says about the user's own product. A model fills it; Scout keeps a competitor
 # name only when the request contains it verbatim. No docstring: it would become the schema text the model reads.
 # Every field is required: with optional fields, schema-constrained decoding let the model skip them.
+# Ollama does not show the model these descriptions; the real instructions are in read_brief's system prompt.
+# One job per field, in decoding order (the bool is a decision step): one "category" field that had to decide,
+# copy and translate scored 15/24 on qwen3 4B over 8 requests, these four scored 23/24.
 class ProductBrief(Contract):
-    own_product: str | None = Field(max_length=200, description=(
-        "Name of the product the user makes or sells, exactly as written; null if the request does not say "
-        "which product is theirs."))
-    named_competitors: list[str] = Field(max_length=10, description=(
-        "Other products the user names in the request, exactly as written; empty if none are named."))
-    # Measured on qwen3:8b: "a short noun phrase a buyer would search" turned "markdown note-taking app for Mac"
-    # into "productivity software", and the search then found Slack and Miro.
-    category: str | None = Field(max_length=120, description=(
-        "The user's own description of their product in English (translate if needed). Keep its specific "
-        "words: what it does, for whom, on which platform. Do not replace them with a broader category. "
-        "Null if the request does not describe the product."))
+    own_product: str | None = Field(max_length=200, description="Name of the user's own product, or null.")
+    named_competitors: list[str] = Field(max_length=10, description="Other product names written in the request.")
+    describes_own_product: bool = Field(description="True only if the request says what the user's product is.")
+    own_product_description: str | None = Field(max_length=200, description=(
+        "The user's words describing their product, in the request's language, or null."))
+    description_in_english: str | None = Field(max_length=200, description=(
+        "own_product_description translated to English, or null."))
 
 
 class RecommendRequest(Contract):

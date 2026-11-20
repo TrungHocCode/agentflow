@@ -90,8 +90,6 @@ _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integr
 _TOKEN = re.compile(r"[a-z0-9]+")
 # The category in "I make NoteNest, a markdown note-taking app for Mac." -> "markdown note-taking app for Mac".
 _CATEGORY = re.compile(r"\b(?:an?|the)\s+([^.;!?]{3,80}?)\s*(?:[.;!?]|$)", re.IGNORECASE)
-# The user's own description of the product in Vietnamese, after "<own>,": "CafePOS, phần mềm quản lý quán cafe".
-_DESCRIPTION_AFTER_NAME = r",\s*([^,.;!?\n]{3,80})"
 # A product is the user's own only when the request says so ("I make", "our app", "tôi bán", "của mình").
 # Measured: from "Track pricing of Notion and Obsidian." qwen3:8b made Notion the user's product.
 _OWNERSHIP = re.compile(
@@ -100,25 +98,6 @@ _OWNERSHIP = re.compile(
     r"software|service)\b|\b(?:called|named)\b|(?:tôi|mình|chúng tôi|bọn mình|em)\s+(?:đang\s+)?(?:làm|bán|"
     r"phát triển|xây dựng|có|kinh doanh)\b|của\s+(?:tôi|mình|chúng tôi)\b|\btên là\b", re.IGNORECASE)
 MAX_OWN_PRODUCT_WORDS = 4
-# Words that frame a request rather than describe a product (English words, Vietnamese syllables).
-# Code, not the model, decides whether the request describes the product: measured, qwen3 guessed a
-# category from a bare name ("NoteNest" -> note-taking) and 4B would not copy the description verbatim.
-_REQUEST_FRAME_WORDS = {
-    "a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "with", "is", "it", "its", "it's", "this", "that",
-    "their", "them", "they", "i", "i'm", "we", "we're", "me", "my", "our", "us", "you", "your", "am", "are", "be",
-    "do", "does", "make", "making", "build", "building", "built", "run", "running", "sell", "selling", "own",
-    "develop", "developing", "create", "created", "launched", "called", "named", "find", "track", "tracking",
-    "monitor", "monitoring", "watch", "watching", "follow", "compare", "help", "please", "want", "need", "show",
-    "tell", "check", "keep", "list", "who", "what", "which", "how", "competes", "compete", "competitor",
-    "competitors", "rival", "rivals", "rivals'", "competition", "pricing", "price", "prices", "plan", "plans",
-    "feature", "features", "changelog", "releases", "integrations", "page", "pages", "website", "product",
-    "products",
-    "tôi", "mình", "chúng", "bọn", "em", "anh", "chị", "bạn", "đang", "làm", "bán", "có", "là", "tên", "muốn",
-    "cần", "giúp", "nhé", "ạ", "với", "và", "của", "các", "những", "cho", "theo", "dõi", "đối", "thủ", "giá",
-    "bảng", "so", "sánh", "tìm", "xem", "gói", "tính", "năng", "cập", "nhật", "phát", "triển", "xây", "dựng",
-    "kinh", "doanh", "một", "này", "đó", "sản", "phẩm",
-}
-MIN_DESCRIPTION_WORDS = 2
 _HEADING = re.compile(r"^#{1,4}\s+(.+)$")
 _LIST_NUMBER = re.compile(r"^(?:#?\d{1,2}[.):]?|No\.\s*\d{1,2})\s+")
 # Headings in "best X" articles that are sections, not products. Unverified names are dropped later anyway.
@@ -167,6 +146,7 @@ class _Request:
     named: list[str]
     category: str | None
     dimensions: list[str]
+    local_description: str | None = None  # the user's own words, in the request's language
 
     @property
     def terms(self) -> list[str]:
@@ -303,12 +283,13 @@ def _own_product(prompt: str) -> str | None:
     return match.group(1).rstrip("&.+_-") if match else None
 
 
-def _describes_product(prompt: str, names: list[str]) -> bool:
-    """Whether the request says what the product is: some words left after names and request framing."""
+def _says_something(text: str, names: list[str]) -> bool:
+    """A model's description counts when it has a word beyond the product names; URLs are never descriptions."""
+    if not text or "://" in text:
+        return False
     name_words = {word.casefold().rstrip("&.+-") for name in names for word in _WORD.findall(name)}
-    content = [word for word in (token.casefold().rstrip("&.+-") for token in _WORD.findall(prompt))
-               if len(word) >= 2 and word not in _REQUEST_FRAME_WORDS and word not in name_words]
-    return len(content) >= MIN_DESCRIPTION_WORDS
+    return any(word not in name_words and word not in _STOPWORDS and len(word) >= 2
+               for word in (token.casefold().rstrip("&.+-") for token in _WORD.findall(text)))
 
 
 def _category(prompt: str, own: str | None) -> str | None:
@@ -395,7 +376,7 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
     # rival searches whenever the model was unavailable (measured with Ollama down).
     named = [term for term in _product_terms(prompt)
              if term != own and not re.search(rf"(?:^|[.!?\n]\s*){re.escape(term)}\b", prompt)]
-    category = _category(prompt, own)
+    category, local_description = _category(prompt, own), None
     dimensions = _dimensions(prompt)
     if brief is not None:
         lowered = prompt.casefold()
@@ -416,20 +397,21 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
         if not model_named:
             model_named = list(named)  # a small model sometimes drops names it was given
         named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
-        model_category = " ".join(str(brief.category or "").split())[:80]
-        # Use a category only when the request itself describes the product. Measured: from a
-        # bare name, qwen3 guessed "Productivity Tools" (8B) or "note-taking applications" (4B), and the
-        # search then found Slack and Miro.
-        described = _describes_product(prompt, [*([own] if own else []), *named])
-        if model_category and "://" not in model_category and described:
-            # Measured: qwen3 4B and 8B broadened "a markdown note-taking app for Mac" to "note-taking apps" and
-            # found OneNote instead of Bear; the user's own words found the right field. Only Vietnamese needs
-            # the model, which translates it for the English search.
-            if _VIETNAMESE.search(prompt) or not category:
-                category = model_category
-        elif own is None:
-            category = None  # without the user's product, "the ..." is rarely its description
-    return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions)
+        # The model extracts the description; code only verifies it. Measured on qwen3 4B: "I make NoteNest."
+        # came back as describing the product, with the description "NoteNest".
+        category = None
+        if brief.describes_own_product:
+            english = " ".join(str(brief.description_in_english or "").split())
+            local = " ".join(str(brief.own_product_description or "").split())
+            if _says_something(english, [*([own] if own else []), *named]) and (
+                    not local or _says_something(local, [*([own] if own else []), *named])):
+                # Query formatting only: 4B keeps the article ("best a markdown app"), and it often translates the
+                # "original" too, which must not become a mixed-language "... tốt nhất" query.
+                category, local = (re.sub(r"^(?:an?|the)\s+", "", text, flags=re.IGNORECASE)
+                                   for text in (english, local))
+                local_description = local if local and local.casefold() != category.casefold() else None
+    return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions,
+                    local_description=local_description)
 
 
 def _registrable_domain(value: str) -> str:
@@ -551,7 +533,7 @@ class ScoutDiscovery:
         return request
 
     def _competitor_queries(self, request: _Request) -> list[str]:
-        prompt, own, named, dimensions = request.prompt, request.own, request.named, request.dimensions
+        prompt, named, dimensions = request.prompt, request.named, request.dimensions
         terms = request.terms
         queries: list[str] = []
         if named:
@@ -567,9 +549,8 @@ class ScoutDiscovery:
             queries = [f"best {category}", f"{category} alternatives"]
             # Local products rank for the user's own words (measured: English-only found Toast and Square for a
             # Vietnamese cafe POS), so the Vietnamese description is searched first.
-            if _VIETNAMESE.search(prompt) and own and (
-                    described := re.search(re.escape(own) + _DESCRIPTION_AFTER_NAME, prompt)):
-                queries.insert(0, f"{described.group(1).strip()} tốt nhất")
+            if _VIETNAMESE.search(prompt) and request.local_description:
+                queries.insert(0, f"{request.local_description} tốt nhất")
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:

@@ -471,8 +471,10 @@ class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("did not list readable product names" in warning for warning in scout.warnings))
 
 
-def brief(own=None, named=(), category=None):
-    return ProductBrief(own_product=own, named_competitors=list(named), category=category)
+def brief(own=None, named=(), category=None, local=None):
+    """A model reading: `category` is the English description, `local` the one in the request's language."""
+    return ProductBrief(own_product=own, named_competitors=list(named), describes_own_product=bool(category),
+                        own_product_description=local or category, description_in_english=category)
 
 
 class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
@@ -502,7 +504,7 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
 
     async def test_scout_searches_the_category_the_model_read(self) -> None:
         async def reader(_prompt):
-            return brief("NoteNest", [], "note-taking apps for Mac")
+            return brief("NoteNest", [], "note-taking apps for Mac", "app ghi chú markdown cho Mac")
         tool = StubBatchTool([])
         scout = ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader)
         await scout.stage_a(self.VI_NOTES)
@@ -512,7 +514,7 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_vietnamese_request_without_rivals_is_searched_in_vietnamese_first(self) -> None:
         async def reader(_prompt):
-            return brief("CafePOS", [], "cafe management software")
+            return brief("CafePOS", [], "cafe management software", "phần mềm quản lý quán cafe")
         tool = StubBatchTool([])
         await ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader).stage_a(
             "Mình làm CafePOS, phần mềm quản lý quán cafe. Tìm đối thủ giúp mình.")
@@ -547,29 +549,47 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
     def test_a_named_product_is_the_users_own_only_when_the_request_says_so(self) -> None:
         # Recorded on qwen3:8b: Notion became the user's product; a whole request became a product name.
         request = _understand("Track pricing of Notion and Obsidian.",
-                              brief("Notion", ["Obsidian"], "Pricing Monitoring"))
+                              brief("Notion", ["Obsidian"]))
         self.assertEqual((request.own, request.named, request.category), (None, ["Notion", "Obsidian"], None))
         vague = _understand("Theo dõi đối thủ giúp mình",
-                            brief("Theo dõi đối thủ giúp mình", [], "Market Research"))
+                            brief("Theo dõi đối thủ giúp mình"))
         self.assertEqual((vague.own, vague.named, vague.category), (None, [], None))
 
-    def test_a_category_needs_a_request_that_describes_the_product(self) -> None:
-        # Recorded: "I make NoteNest." alone gave "Productivity Tools" (8B) and "note-taking applications" (4B).
-        guessed = _understand("I make NoteNest. Watch my competitors.", brief("NoteNest", [], "note-taking apps"))
-        self.assertEqual((guessed.own, guessed.category), ("NoteNest", None))
-        answered = _understand("I make NoteNest. Watch my competitors.\nIt is a markdown note-taking app for Mac.",
-                               brief("NoteNest", [], "markdown note-taking apps"))
-        self.assertEqual(answered.category, "markdown note-taking app for Mac")  # the user's words win
+    def test_the_model_decides_whether_the_request_describes_the_product(self) -> None:
+        # Recorded on qwen3 4B: "I make NoteNest." alone was read as describing the product, as "NoteNest".
+        prompt = "I make NoteNest. Watch my competitors."
+        echoed = _understand(prompt, ProductBrief(
+            own_product="NoteNest", named_competitors=[], describes_own_product=True,
+            own_product_description="NoteNest", description_in_english="NoteNest"))
+        self.assertEqual((echoed.own, echoed.category), ("NoteNest", None))
+        # A description string without the model's yes is ignored.
+        denied = _understand(prompt, ProductBrief(
+            own_product="NoteNest", named_competitors=[], describes_own_product=False,
+            own_product_description="note-taking app", description_in_english="note-taking app"))
+        self.assertEqual((denied.category, denied.local_description), (None, None))
+        # English: the model's description is used as given, not replaced by a phrase found in the request.
+        text = "I make NoteNest. Watch my competitors.\nIt is a markdown note-taking app for Mac."
+        answered = _understand(text, brief("NoteNest", [], "markdown note-taking apps"))
+        self.assertEqual(answered.category, "markdown note-taking apps")
         cafe = _understand("Theo dõi đối thủ giúp mình\nMình làm CafePOS, phần mềm quản lý quán cafe",
-                           brief("CafePOS", [], "cafe management software"))
-        self.assertEqual((cafe.own, cafe.category), ("CafePOS", "cafe management software"))
+                           brief("CafePOS", [], "cafe management software", "phần mềm quản lý quán cafe"))
+        self.assertEqual((cafe.own, cafe.category, cafe.local_description),
+                         ("CafePOS", "cafe management software", "phần mềm quản lý quán cafe"))
+
+    async def test_an_english_request_searches_the_models_english_description(self) -> None:
+        async def reader(_prompt):
+            return brief("InkPad", [], "markdown note-taking apps")
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader).stage_a(
+            "I make InkPad, a markdown note-taking app for Mac. Find my competitors.")
+        self.assertEqual(tool.calls[0][0], ["best markdown note-taking apps", "markdown note-taking apps alternatives"])
 
     async def test_a_thin_request_gets_a_question_instead_of_a_search(self) -> None:
         tool = StubBatchTool([])
         for prompt, reader_brief, question in (
-            ("I make NoteNest. Watch my competitors.", brief("NoteNest", [], "Productivity Tools"),
-             "What does NoteNest do"),
-            ("Theo dõi đối thủ giúp mình", brief(None, [], "Market Research"), "Sản phẩm của bạn là sản phẩm gì"),
+            ("I make NoteNest. Watch my competitors.", brief("NoteNest", [], "NoteNest"), "What does NoteNest do"),
+            ("I make NoteNest. Watch my competitors.", brief("NoteNest"), "What does NoteNest do"),
+            ("Theo dõi đối thủ giúp mình", brief(None), "Sản phẩm của bạn là sản phẩm gì"),
         ):
             async def reader(_prompt, value=reader_brief):
                 return value
