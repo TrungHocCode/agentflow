@@ -1,0 +1,114 @@
+"""source_finder: profile shape and the code checks that stop invented URLs and quotes; no network, no model."""
+
+import os
+import sys
+import unittest
+from unittest.mock import MagicMock
+
+from langchain_core.messages import AIMessage
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
+
+from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
+from app.execution.tools.registry import autodiscover_tools
+from app.modules.competitive_intelligence.source_finder import (
+    SOURCE_FINDER_MAX_ITERATIONS,
+    _parse_answer,
+    find_source,
+)
+
+QUOTE = "Pro plan costs $12 per month"
+PAGE_TEXT = f"Pricing\nFree for everyone. {QUOTE}, billed yearly."
+
+
+def llm_answering(*replies):
+    """A model that returns the given replies in order, repeating the last one."""
+    llm = MagicMock()
+    calls = iter(range(10**6))
+
+    async def invoke(*args, **kwargs):
+        return replies[min(next(calls), len(replies) - 1)]
+
+    llm.bind_tools.return_value = llm
+    llm.ainvoke = invoke
+    return llm
+
+
+def fetcher(final_url, text=PAGE_TEXT):
+    async def fetch(url):
+        return {"final_url": final_url, "title": "Pricing", "text": text, "markdown": "", "links": []}
+    return fetch
+
+
+def final(url, quote=QUOTE):
+    return AIMessage(content=f"URL: {url}\nQUOTE: {quote}")
+
+
+class TestSourceFinder(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        autodiscover_tools()
+
+    def test_profile_is_read_only_tool_loop(self) -> None:
+        profile = DEFAULT_AGENT_PROFILES["source_finder"]
+        self.assertEqual(profile.mode, "tool_loop")
+        self.assertEqual(profile.tool_names, ["web_search", "fetch_page"])
+        self.assertEqual(SOURCE_FINDER_MAX_ITERATIONS, 4)
+
+    def test_answer_parsing_is_tolerant(self) -> None:
+        self.assertEqual(_parse_answer("URL: https://a.com/pricing.\nQUOTE: \"hello there world\"")[:2],
+                         ("https://a.com/pricing", "hello there world"))
+        self.assertEqual(_parse_answer('See **https://a.com/pricing** - "costs twelve dollars"')[:2],
+                         ("https://a.com/pricing", "costs twelve dollars"))
+        self.assertEqual(_parse_answer("NOT PUBLIC: sales only"), (None, None, "sales only"))
+
+    async def test_found_and_verified(self) -> None:
+        url = "https://acme.com/pricing"
+        result = await find_source("Acme", "acme.com", "pricing", llm=llm_answering(final(url)),
+                                   page_fetcher=fetcher(url))
+        self.assertTrue(result.found)
+        self.assertEqual((result.url, result.quote, result.steps), (url, QUOTE, 1))
+
+    async def test_off_site_url_rejected(self) -> None:
+        url = "https://blog.example.org/acme-pricing"
+        result = await find_source("Acme", "acme.com", "pricing", llm=llm_answering(final(url)),
+                                   page_fetcher=fetcher(url))
+        self.assertFalse(result.found)
+        self.assertIn("off-site", result.reason)
+
+    async def test_home_page_rejected(self) -> None:
+        result = await find_source("Acme", "acme.com", "pricing", llm=llm_answering(final("https://acme.com/")),
+                                   page_fetcher=fetcher("https://acme.com/"))
+        self.assertFalse(result.found)
+
+    async def test_invented_quote_rejected(self) -> None:
+        url = "https://acme.com/pricing"
+        result = await find_source("Acme", "acme.com", "pricing",
+                                   llm=llm_answering(final(url, "Enterprise costs $999 per seat")),
+                                   page_fetcher=fetcher(url))
+        self.assertFalse(result.found)
+        self.assertIn("quote", result.reason)
+
+    async def test_unfetchable_url_rejected(self) -> None:
+        async def nothing(url):
+            return None
+        result = await find_source("Acme", "acme.com", "pricing",
+                                   llm=llm_answering(final("https://acme.com/made-up")), page_fetcher=nothing)
+        self.assertFalse(result.found)
+
+    async def test_not_public(self) -> None:
+        result = await find_source("Acme", "acme.com", "pricing",
+                                   llm=llm_answering(AIMessage(content="NOT PUBLIC: pricing is by quote only")),
+                                   page_fetcher=fetcher("https://acme.com/pricing"))
+        self.assertFalse(result.found)
+        self.assertIn("pricing is by quote only", result.reason)
+
+    async def test_iteration_cap(self) -> None:
+        loop = AIMessage(content="", tool_calls=[{"name": "unknown_tool", "args": {}, "id": "t1"}])
+        result = await find_source("Acme", "acme.com", "pricing", llm=llm_answering(loop),
+                                   page_fetcher=fetcher("https://acme.com/pricing"))
+        self.assertFalse(result.found)
+        self.assertEqual(result.steps, SOURCE_FINDER_MAX_ITERATIONS)
+
+
+if __name__ == "__main__":
+    unittest.main()
