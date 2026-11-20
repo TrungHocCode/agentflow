@@ -27,6 +27,12 @@ const SOURCES = {
   ]
 };
 
+const PRODUCT = { name: 'TaskFlow', description: 'team task manager', source: 'default', my_product_id: 'p1' };
+
+function setupOf(recommendation, product = PRODUCT) {
+  return { product, recommendation };
+}
+
 function response(payload) {
   return { ok: true, json: async () => payload };
 }
@@ -47,11 +53,10 @@ describe('ChatWatchlistProposal', () => {
     }));
   });
 
-  it('asks the follow-up question and sends the earlier request with the answer', async () => {
-    fetch.mockImplementation(async (url) => (String(url).includes('/discover-competitors')
-      ? response({ products: [], warnings: [], follow_up_question: 'What does NoteNest do, and for whom?' })
-      : response({ status: 'ok' })));
+  it('shows the follow-up question and searches again with the earlier request and the answer', async () => {
+    const asked = { products: [], warnings: [], follow_up_question: 'What does NoteNest do, and for whom?' };
     render(<ChatWatchlistProposal
+      setup={setupOf(asked, { name: '', description: '', source: 'message', my_product_id: null })}
       messages={[
         { sender: 'user', content: 'I make NoteNest. Watch my competitors.' },
         { sender: 'assistant', content: 'Click Find competitors.' },
@@ -59,21 +64,29 @@ describe('ChatWatchlistProposal', () => {
       ]}
       onCreated={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('What does NoteNest do'));
+    expect(screen.getByRole('status')).toHaveTextContent('What does NoteNest do');
+    expect(screen.getByTestId('chat-proposal-using')).toHaveTextContent('Using: your message');
+    expect(screen.queryByText(/unverified draft/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /search again/i }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => String(url).includes('/discover-competitors'))).toBe(true));
     const body = JSON.parse(fetch.mock.calls.find(([url]) => String(url).includes('/discover-competitors'))[1].body);
     expect(body.prompt).toBe('I make NoteNest. Watch my competitors.\nIt is a markdown note-taking app for Mac.');
-    expect(screen.queryByText(/unverified draft/i)).not.toBeInTheDocument();
   });
 
   it('discovers competitors, then source URLs, and creates from picks', async () => {
     const onCreated = vi.fn();
-    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={onCreated} />);
-    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
-    await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument());
+    render(<ChatWatchlistProposal
+      setup={setupOf(COMPETITORS)}
+      messages={[{ sender: 'user', content: 'I make TaskFlow' }]}
+      onCreated={onCreated}
+    />);
+    // The competitors are preloaded: no click is needed to search.
+    expect(screen.getByTestId('chat-proposal-using')).toHaveTextContent('Using: TaskFlow (default)');
+    expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument();
     expect(screen.getAllByText('web_search').length).toBeGreaterThan(0);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/discover-competitors'))).toBe(false);
 
-    // Source pages for the pre-ticked products load without a second click.
+    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
     await waitFor(() => expect(screen.getByDisplayValue('https://todoist.com/pricing')).toBeInTheDocument());
     expect(screen.getByLabelText('Track source https://todoist.com/pricing')).toBeInTheDocument();
     expect(fetch.mock.calls.filter(([url]) => String(url).includes('/discover-sources'))).toHaveLength(1);
@@ -88,6 +101,7 @@ describe('ChatWatchlistProposal', () => {
     await waitFor(() => expect(screen.getByTestId('chat-proposal-done')).toBeInTheDocument());
     const created = JSON.parse(fetch.mock.calls.find(([url, options]) => String(url).endsWith('/watchlists')
       && options?.method === 'POST')[1].body);
+    expect(created.my_product_id).toBe('p1');
     expect(created.config.products.map((item) => [item.name, item.kind])).toEqual(
       [['Todoist', 'competitor'], ['TaskFlow', 'own']]
     );
@@ -105,12 +119,15 @@ describe('ChatWatchlistProposal', () => {
   });
 
   it('shows each website and flags a URL typed under the wrong same-named product', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => response({ ...COMPETITORS, products: [
+    const found = { ...COMPETITORS, products: [
       { ...COMPETITORS.products[0], name: 'Craft', official_website: 'https://craft.io/', suggested: true },
       { ...COMPETITORS.products[0], name: 'InkPad', kind: 'own', official_website: null, suggested: true }
-    ] })));
-    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make InkPad' }]} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    ] };
+    render(<ChatWatchlistProposal
+      setup={setupOf(found)}
+      messages={[{ sender: 'user', content: 'I make InkPad' }]}
+      onCreated={() => {}}
+    />);
     expect(await screen.findByText('craft.io')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /add source url/i }));
@@ -123,12 +140,11 @@ describe('ChatWatchlistProposal', () => {
   });
 
   it('lets the user type a source URL when search finds none', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
-      ? { 'https://todoist.com/': [] }
-      : COMPETITORS)));
-    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
-    await waitFor(() => expect(screen.getByLabelText('Track Todoist')).toBeInTheDocument());
+    render(<ChatWatchlistProposal
+      setup={setupOf(COMPETITORS)}
+      messages={[{ sender: 'user', content: 'I make TaskFlow' }]}
+      onCreated={() => {}}
+    />);
     fireEvent.change(screen.getByLabelText('Your product'), { target: { value: 'TaskFlow' } });
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }));
     expect(screen.getByRole('status')).toHaveTextContent(/a source url for a competitor/i);
@@ -140,19 +156,61 @@ describe('ChatWatchlistProposal', () => {
   });
 
   it('leaves unnamed candidates unpicked and says when no sources were found', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/discover-sources')
-      ? { 'https://todoist.com/': [] }
-      : { ...COMPETITORS, products: [
-        { ...COMPETITORS.products[0], name: 'Named', official_website: 'https://todoist.com/' },
-        { ...COMPETITORS.products[0], name: 'Unnamed', official_website: 'https://blog.example/', suggested: false }
-      ] })));
-    render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    vi.stubGlobal('fetch', vi.fn(async () => response({ 'https://todoist.com/': [] })));
+    const found = { ...COMPETITORS, products: [
+      { ...COMPETITORS.products[0], name: 'Named', official_website: 'https://todoist.com/' },
+      { ...COMPETITORS.products[0], name: 'Unnamed', official_website: 'https://blog.example/', suggested: false }
+    ] };
+    render(<ChatWatchlistProposal
+      setup={setupOf(found)}
+      messages={[{ sender: 'user', content: 'I make TaskFlow' }]}
+      onCreated={() => {}}
+    />);
 
-    await waitFor(() => expect(screen.getByLabelText('Track Named')).toBeChecked());
+    expect(screen.getByLabelText('Track Named')).toBeChecked();
     expect(screen.getByLabelText('Track Unnamed')).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /find source urls/i }));
     expect(await screen.findByText(/no source page was found/i)).toBeInTheDocument();
     const asked = JSON.parse(fetch.mock.calls.find(([url]) => String(url).includes('/discover-sources'))[1].body);
     expect(asked.domains).toEqual(['https://todoist.com/']);
+  });
+
+  it('saves a product described in the message first, then links it to the watchlist', async () => {
+    fetch.mockImplementation(async (url, options = {}) => (String(url).endsWith('/my-products') && options.method === 'POST'
+      ? response({ id: 'saved-1' })
+      : response({ id: 'w1' })));
+    const found = { ...COMPETITORS, products: [
+      { ...COMPETITORS.products[0], official_website: 'https://todoist.com/' },
+      { ...COMPETITORS.products[0], name: 'NoteNest', kind: 'own', official_website: null, suggested: true }
+    ] };
+    render(<ChatWatchlistProposal
+      setup={setupOf(found, { name: 'NoteNest', description: 'markdown app', source: 'message', my_product_id: null })}
+      messages={[{ sender: 'user', content: 'I make NoteNest, a markdown app' }]}
+      onCreated={() => {}}
+    />);
+    expect(screen.getByTestId('chat-proposal-using')).toHaveTextContent('Using: NoteNest (from your message)');
+    expect(screen.getByLabelText('Save as my product')).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /add source url/i }));
+    fireEvent.change(screen.getByLabelText('Source URL for Todoist'), { target: { value: 'https://todoist.com/pricing' } });
+    fireEvent.click(screen.getByRole('button', { name: /create watchlist from picks/i }));
+    await waitFor(() => expect(screen.getByTestId('chat-proposal-done')).toBeInTheDocument());
+
+    const posts = fetch.mock.calls.filter(([, options]) => options?.method === 'POST').map(([url]) => String(url));
+    expect(posts.findIndex((url) => url.endsWith('/my-products')))
+      .toBeLessThan(posts.findIndex((url) => url.endsWith('/watchlists')));
+    const created = JSON.parse(fetch.mock.calls.find(([url, options]) => String(url).endsWith('/watchlists')
+      && options?.method === 'POST')[1].body);
+    expect(created.my_product_id).toBe('saved-1');
+  });
+
+  it('retries a failed search from the card', async () => {
+    render(<ChatWatchlistProposal
+      setup={{ product: null, recommendation: null, failed: true }}
+      messages={[{ sender: 'user', content: 'Find my competitors' }]}
+      onCreated={() => {}}
+    />);
+    expect(screen.getByRole('status')).toHaveTextContent(/search failed/i);
+    fireEvent.click(screen.getByRole('button', { name: /search again/i }));
+    expect(await screen.findByLabelText('Track Todoist')).toBeInTheDocument();
   });
 });

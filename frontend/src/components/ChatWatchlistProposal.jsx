@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Play, Plus, Search, Sparkles } from 'lucide-react';
-import { approveAndRun, createWatchlist, discoverCompetitors, discoverSources } from '../services/ciApi';
+import {
+  approveAndRun, createMyProduct, createWatchlist, discoverCompetitors, discoverSources
+} from '../services/ciApi';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -10,6 +12,8 @@ import { Label } from './ui/label';
 import { Spinner } from './ui/spinner';
 import ConfirmationBanner from './ConfirmationBanner';
 import ErrorNotice from './ErrorNotice';
+
+const SOURCE_LABELS = { default: 'default', saved: 'saved product', message: 'from your message' };
 
 const PROVENANCE_HINTS = {
   model_knowledge: 'may be stale — verify',
@@ -44,11 +48,14 @@ function userText(messages) {
   return texts.slice(-4).join('\n').slice(-MAX_PROMPT_CHARS);
 }
 
-// Turns the chat into a reviewable watchlist draft; the chat input is the only place
-// the user types, so there is no separate setup form.
-export default function ChatWatchlistProposal({ messages, onCreated }) {
+// Renders inside the assistant message that carries the setup result (`setup` = message metadata.ci_setup):
+// the competitors are already found, so the user reviews, picks and creates. `messages` are the chat
+// messages before that answer; "Search again" re-runs the search from them.
+export default function ChatWatchlistProposal({ setup, messages, onCreated }) {
   const prompt = userText(messages);
-  const [recommendation, setRecommendation] = useState(null);
+  const product = setup?.product || null;
+  const [recommendation, setRecommendation] = useState(setup?.recommendation || null);
+  const [saveProduct, setSaveProduct] = useState(true);
   const [picks, setPicks] = useState({});
   const [urls, setUrls] = useState({});
   const [urlPicks, setUrlPicks] = useState({});
@@ -62,8 +69,6 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   const [ownName, setOwnName] = useState('');
   const [running, setRunning] = useState(false);
   const [started, setStarted] = useState(false);
-
-  if (!prompt) return null;
 
   function sourceKey(productIndex, sourceIndex) {
     return `${productIndex}:${sourceIndex}`;
@@ -147,9 +152,8 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
   async function handleDiscoverCompetitors() {
     setLoading(true);
     setError('');
-    let found;
     try {
-      found = await discoverCompetitors(prompt);
+      const found = await discoverCompetitors(prompt);
       setRecommendation(found);
       setPicks({});
       setUrls({});
@@ -161,11 +165,6 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
     } finally {
       setLoading(false);
     }
-    // Go straight on to the source pages of the pre-ticked products, so the user only reviews.
-    const domains = (found.products || [])
-      .filter((item) => item.suggested && item.official_website)
-      .map((item) => item.official_website);
-    if (domains.length) await findSources(domains, found.suggested_dimensions?.[0] || 'pricing');
   }
 
   async function findSources(domains, kind) {
@@ -207,7 +206,20 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       const tracked = (recommendation.products || [])
         .map((item, index) => ({ item, index }))
         .filter(({ index }) => isPicked(index));
+      // A product described only in the message is saved first, then linked to the watchlist.
+      let myProductId = product?.my_product_id || null;
+      if (product?.source === 'message' && product.name && saveProduct) {
+        const saved = await createMyProduct({
+          name: product.name,
+          description: product.description || '',
+          description_en: product.description || '',
+          market: 'global',
+          known_competitors: []
+        });
+        myProductId = saved.id;
+      }
       const watchlist = await createWatchlist({
+        my_product_id: myProductId,
         name: name.trim() || `${tracked[0]?.item.name || 'Competitive'} watch`,
         description: '',
         config: {
@@ -279,10 +291,14 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       <div className="wizard-panel__heading">
         <span className="wizard-panel__mark" aria-hidden="true"><Sparkles /></span>
         <div>
-          <p className="wizard-panel__title">Turn this chat into a watchlist</p>
+          <p className="wizard-panel__title">Competitors for this request</p>
+          {product && (
+            <p className="wizard-panel__description" data-testid="chat-proposal-using">
+              Using: {product.name || 'your message'}{product.name ? ` (${SOURCE_LABELS[product.source] || product.source})` : ''}
+            </p>
+          )}
           <p className="wizard-panel__description">
-            AgentFlow searches the web for competitors, then finds same-site source URLs only for the competitors you pick.
-            Review everything before creating.
+            Pick the competitors to track, then find their same-site source URLs. Review everything before creating.
           </p>
         </div>
       </div>
@@ -291,7 +307,7 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
           {loading
             ? <Spinner data-icon="inline-start" aria-hidden="true" />
             : <Search data-icon="inline-start" />}
-          {loading ? 'Searching…' : 'Find competitors'}
+          {loading ? 'Searching…' : 'Search again'}
         </Button>
         {recommendation && (
           <Button
@@ -308,11 +324,14 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       {error && (
         <ErrorNotice message={error} onDismiss={() => setError('')} />
       )}
+      {!recommendation && setup?.failed && (
+        <Alert role="status">
+          <AlertDescription>The competitor search failed. Press Search again to retry.</AlertDescription>
+        </Alert>
+      )}
       {recommendation?.follow_up_question && (
         <Alert role="status">
-          <AlertDescription>
-            {recommendation.follow_up_question} Answer in the chat, then press Find competitors again.
-          </AlertDescription>
+          <AlertDescription>{recommendation.follow_up_question} Answer in the chat.</AlertDescription>
         </Alert>
       )}
       {recommendation && !recommendation.follow_up_question && (
@@ -409,6 +428,12 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
                 </Button>
               </div>
             </div>
+          )}
+          {product?.source === 'message' && product.name && (
+            <label className="wizard-check">
+              <input type="checkbox" checked={saveProduct} onChange={(event) => setSaveProduct(event.target.checked)} />
+              <span>Save as my product</span>
+            </label>
           )}
           <div className="wizard-field">
             <Label htmlFor="chat-proposal-name">Watchlist name</Label>

@@ -52,7 +52,8 @@ const toChatMessages = (persistedMessages = []) => persistedMessages
     turnId: message.metadata?.turn_id,
     isGenerating: ['queued', 'running', 'cancel_requested'].includes(message.metadata?.status),
     isError: ['failed', 'interrupted'].includes(message.metadata?.status),
-    errorId: message.metadata?.error_id
+    errorId: message.metadata?.error_id,
+    ciSetup: message.metadata?.ci_setup
   }));
 
 function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
@@ -84,7 +85,7 @@ function applyConversationTurnEvent(turnId, eventData, setters, streamRef) {
   }
   if (eventData.type === 'assistant_message' && payload.content !== undefined) {
     setMessages(previous => ensureAssistant(previous).map(message => message.turnId === turnId
-      ? { ...message, text: payload.content, isGenerating: true }
+      ? { ...message, text: payload.content, ciSetup: payload.ci_setup, isGenerating: true }
       : message));
     return;
   }
