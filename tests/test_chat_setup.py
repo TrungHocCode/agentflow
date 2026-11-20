@@ -96,6 +96,21 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.metadata["outcome"], "setup_tracking")
         self.assertNotIn("drafted a workflow", message.content)
 
+    async def test_keyword_match_overrides_clarify(self) -> None:
+        port = ScriptedPort("clarify")
+        _, message, _ = await self.start(
+            port, FakeSetup(SETUP), "I build CafePOS, a cafe POS in Vietnam. Compare it with competitors.")
+        self.assertEqual(message.metadata["outcome"], "setup_tracking")
+        self.assertIn("Using: NoteNest", message.content)
+
+    def test_pending_prompt_frames_the_answer_with_the_question_and_keeps_the_cap(self) -> None:
+        build = ConversationService._setup_prompt
+        self.assertEqual(
+            build(["Find my competitors please.", "It is a note app called Inkwell."], "x", {"question": "What?"}),
+            "Find my competitors please.\nAsked: What?\nUser's answer: It is a note app called Inkwell.")
+        self.assertEqual(build(["a", "b"], "b", None), "a\nb")
+        self.assertEqual(len(build(["a" * 3000, "b"], "b", {"question": "q"})), 2000)
+
     async def test_model_failure_falls_back_to_the_keyword_match(self) -> None:
         _, message, _ = await self.start(
             ScriptedPort(fail=True), FakeSetup(SETUP, reply=None), "Theo dõi đối thủ giúp mình")
@@ -112,12 +127,15 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_follow_up_answer_skips_the_supervisor_and_pending_clears_after(self) -> None:
         port, setup = ScriptedPort("setup_tracking"), FakeSetup(ASK, SETUP)
         _, asked, conversation = await self.start(port, setup, "Track my competitors")
-        self.assertIn("What does your product do?", asked.content)
+        self.assertEqual(asked.content, "What does your product do?")  # no model reply, no "Using:" without a name
+        self.assertEqual(setup.replied, [])
+        self.assertEqual(conversation.metadata["ci_setup_pending"], {"question": "What does your product do?"})
         self.assertTrue(conversation.metadata["ci_setup_pending"])
         self.assertEqual(port.calls, 1)
         _, answered, conversation = await self.start(port, setup, "It is a markdown note app")
         self.assertEqual(port.calls, 1)  # no Supervisor call for the answer
-        self.assertEqual(setup.prompts[1], "Track my competitors\nIt is a markdown note app")
+        self.assertEqual(setup.prompts[1], "Track my competitors\nAsked: What does your product do?\n"
+                                           "User's answer: It is a markdown note app")
         self.assertNotIn("ci_setup_pending", conversation.metadata)
         self.assertEqual(answered.metadata["outcome"], "setup_tracking")
 

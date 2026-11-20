@@ -68,7 +68,7 @@ def setup_report(text: str, setup: dict[str, Any] | None) -> str:
         "Đang dùng: tin nhắn của bạn" if vietnamese else "Using: your message")
     question = recommendation.get("follow_up_question")
     if question:
-        return f"{using}\n\n{question}"
+        return f"{using}\n\n{question}" if name else question
     names = [item["name"] for item in recommendation.get("products") or [] if item.get("kind") == "competitor"]
     if not names:
         return f"{using}\n\n" + ("Chưa tìm thấy đối thủ nào." if vietnamese else "No competitors were found.")

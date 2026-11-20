@@ -416,13 +416,15 @@ class ConversationService:
                            if message.role == "user" and message.content), "")
             user_texts = [m.content for m in history if m.role == "user" and m.content][-4:]
             ci_setup: Dict[str, Any] | None = None
-            if conversation.metadata.get("ci_setup_pending") and self.setup_port is not None:
+            pending = conversation.metadata.get("ci_setup_pending")
+            if pending and self.setup_port is not None:
                 # The user is answering Scout's follow-up question: no Supervisor call, code writes the reply.
                 result_state = self._setup_state(setup_acknowledgement(latest))
             else:
                 result_state = await self._supervisor_state(turn, initial_state, latest, publish_assistant_token)
             if (result_state.get("metadata") or {}).get("supervisor_decision") == "setup_tracking":
-                result_state, ci_setup = await self._run_setup(turn, result_state, latest, user_texts)
+                result_state, ci_setup = await self._run_setup(
+                    turn, result_state, latest, user_texts, pending if isinstance(pending, dict) else None)
             decision, effective_plan, assistant_messages = self._interpret_planner_result(
                 result_state,
                 [],
@@ -431,8 +433,9 @@ class ConversationService:
             self._accumulate_llm_call_metrics(conversation, result_state)
             conversation.metadata.update(result_state.get("metadata") or {})
             conversation.metadata.pop("ci_setup_pending", None)
-            if ci_setup and (ci_setup.get("recommendation") or {}).get("follow_up_question"):
-                conversation.metadata["ci_setup_pending"] = True
+            question = ((ci_setup or {}).get("recommendation") or {}).get("follow_up_question")
+            if question:
+                conversation.metadata["ci_setup_pending"] = {"question": question}
             conversation.draft_plan = effective_plan
             conversation.metadata["supervisor_decision"] = decision
             assistant_content = assistant_messages[-1]
@@ -957,10 +960,19 @@ class ConversationService:
             # Only a message that itself asks to find or track competitors starts a search; a follow-up
             # question about earlier results is answered with the Supervisor's own text.
             return {**result_state, "metadata": {**metadata, "supervisor_decision": "answer"}}
-        if tracking and (metadata.get("planning_failed") or metadata.get("supervisor_decision") == "propose_plan"):
+        if tracking and (metadata.get("planning_failed")
+                         or metadata.get("supervisor_decision") in {"propose_plan", "clarify"}):
             # The Supervisor must not plan competitor research from memory; its plan text no longer applies.
             return self._setup_state(setup_acknowledgement(latest))
         return result_state
+
+    @staticmethod
+    def _setup_prompt(user_texts: List[str], latest: str, pending: Dict[str, Any] | None) -> str:
+        """Setup request text; an answer to a follow-up question is framed with the question it answers."""
+        question = (pending or {}).get("question")
+        if question and len(user_texts) >= 2:
+            return f"{user_texts[-2]}\nAsked: {question}\nUser's answer: {user_texts[-1]}"[-2000:]
+        return "\n".join(user_texts)[-2000:] or latest
 
     async def _run_setup(
         self,
@@ -968,11 +980,12 @@ class ConversationService:
         result_state: State,
         latest: str,
         user_texts: List[str],
+        pending: Dict[str, Any] | None = None,
     ) -> tuple[State, Dict[str, Any] | None]:
         """Run competitor setup in this turn; a failed search still completes the turn with a retry card."""
         if self.setup_port is None:
             return result_state, None
-        prompt = "\n".join(user_texts)[-2000:] or latest
+        prompt = self._setup_prompt(user_texts, latest, pending)
         try:
             ci_setup: Dict[str, Any] | None = await self.setup_port.run_setup(turn.user_id, prompt)
         except Exception:
@@ -980,12 +993,15 @@ class ConversationService:
             ci_setup = None
         # The Supervisor's text was written before the search ran, so a short model reply written from the
         # result replaces it; code lines state the facts.
-        try:
-            lead = await self.setup_port.write_reply(latest, ci_setup)
-        except Exception:
-            logger.warning("Could not write the setup reply", exc_info=True, extra={"turn_id": turn.id})
-            lead = None
-        text = "\n\n".join((lead or setup_summary(latest, ci_setup), setup_report(latest, ci_setup)))
+        asked = bool(((ci_setup or {}).get("recommendation") or {}).get("follow_up_question"))
+        lead = None
+        if not asked:  # a model reply written from an empty result would claim the search found nothing
+            try:
+                lead = await self.setup_port.write_reply(latest, ci_setup)
+            except Exception:
+                logger.warning("Could not write the setup reply", exc_info=True, extra={"turn_id": turn.id})
+        report = setup_report(latest, ci_setup)
+        text = report if asked else "\n\n".join((lead or setup_summary(latest, ci_setup), report))
         metadata = {**(result_state.get("metadata") or {}), "supervisor_decision": "setup_tracking"}
         stored = ci_setup or {"product": None, "recommendation": None, "failed": True}
         return {**result_state, "messages": [AIMessage(content=text)], "plan": [], "metadata": metadata}, stored
