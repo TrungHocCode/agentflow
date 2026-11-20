@@ -46,6 +46,7 @@ python-dotenv>=1.0.0
 pydantic-settings>=2.0.0
 alembic>=1.13.0
 langchain-ollama>=0.3.0
+langchain-openai==1.3.3  # llama.cpp provider (OpenAI-compatible llama-server)
 uvicorn[standard]>=0.25.0
 tzdata>=2024.1  # IANA database for schedule timezones on platforms without system tzdata
 

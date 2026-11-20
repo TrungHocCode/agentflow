@@ -39,7 +39,7 @@ class TestExecutionHardening(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-        self.assertIn("ollama could not be reached", result["messages"][0].lower())
+        self.assertIn("model server could not be reached", result["messages"][0].lower())
         self.assertTrue(result["metadata"]["planning_failed"])
         self.assertEqual(result["metadata"]["planning_error_code"], "model_unreachable")
         self.assertEqual(result["metadata"]["planning_error_category"], "dependency")

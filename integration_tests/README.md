@@ -4,7 +4,7 @@ Unit tests: `python scripts/run_tests.py unit` from the repository root.
 The runner uses a temporary working directory, test adapters, deterministic DNS
 and blocks unmocked Requests/HTTPX transports. Attempted HTTP fails the suite even
 if application code catches the exception. This is test isolation, not an OS sandbox.
-Live Ollama tests stay opt-in and are not part of CI's unit suite.
+Live model tests (Ollama; llama.cpp via `LLM_PROVIDER=llamacpp`) stay opt-in and are not part of CI's unit suite.
 
 Real integration uses separate PostgreSQL/Redis services, not the application's volumes:
 

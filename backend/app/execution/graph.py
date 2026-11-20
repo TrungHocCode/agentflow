@@ -335,7 +335,7 @@ async def _execute_worker_node(
                     "[WorkerNode Warning] Task tool override was restricted by "
                     f"agent policy: {', '.join(resolved_agent.denied_tool_names)}."
                 )
-            logs.append(f"[WorkerNode] Initializing live Ollama LLM ({model_name}) for ReAct loop.")
+            logs.append(f"[WorkerNode] Initializing live LLM ({model_name}) for ReAct loop.")
             llm = get_llm(
                 purpose=InferencePurpose.WORKER,
                 temperature=float(resolved_config.get("worker_temperature", 0.2)),

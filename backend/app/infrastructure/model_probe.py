@@ -3,7 +3,7 @@
 import httpx
 
 from app.core.config import settings
-from app.execution.llm import MODEL_NOT_FOUND, MODEL_UNAVAILABLE, MODEL_UNREACHABLE, ollama_base_url
+from app.execution.llm import MODEL_NOT_FOUND, MODEL_UNAVAILABLE, MODEL_UNREACHABLE, model_server_base_url
 from app.modules.system.health import ModelHealth
 
 
@@ -16,17 +16,27 @@ class OllamaModelProbe:
 
     def __init__(self, base_url: str | None = None, model: str | None = None,
                  transport: httpx.AsyncBaseTransport | None = None, timeout_seconds: float = 3.0) -> None:
-        self.base_url = (base_url or ollama_base_url()).rstrip("/")
+        self.base_url = (base_url or model_server_base_url()).rstrip("/")
         self.model = model or settings.LLM_WORKER_MODEL
         self.transport = transport
         self.timeout_seconds = timeout_seconds
+        self.llamacpp = settings.LLM_PROVIDER == "llamacpp"
 
     async def check(self) -> ModelHealth:
         try:
             async with httpx.AsyncClient(transport=self.transport, timeout=self.timeout_seconds) as client:
-                response = await client.get(f"{self.base_url}/api/tags")
+                response = await client.get(
+                    f"{self.base_url}/models" if self.llamacpp else f"{self.base_url}/api/tags",
+                    headers={"Authorization": f"Bearer {settings.LLAMACPP_API_KEY}"} if self.llamacpp else None,
+                )
             response.raise_for_status()
-            installed = {str(item.get("name")) for item in response.json().get("models", [])}
+            body = response.json()
+            if self.llamacpp:
+                # llama-server serves its loaded model whatever name is requested, so reachability is the check.
+                if not isinstance(body.get("data"), list):
+                    raise ValueError("unexpected /models payload")
+                return ModelHealth(status="ok")
+            installed = {str(item.get("name")) for item in body.get("models", [])}
         except httpx.TransportError:
             return ModelHealth(status="unavailable", code=MODEL_UNREACHABLE.code, message=MODEL_UNREACHABLE.message)
         except (httpx.HTTPStatusError, ValueError, AttributeError):
