@@ -45,6 +45,7 @@ from app.infrastructure.postgres.intelligence_repository import PostgresIntellig
 from app.infrastructure.postgres.intelligence_snapshot_repository import PostgresSnapshotRepository
 from app.infrastructure.postgres.intelligence_investigation_repository import PostgresInvestigationRepository
 from app.infrastructure.postgres.intelligence_brief_repository import PostgresBriefRepository
+from app.infrastructure.postgres.my_product_repository import PostgresMyProductRepository
 from app.infrastructure.postgres.intelligence_schedule_repository import PostgresScheduleRepository
 from app.infrastructure.artifacts.snapshot_blobs import SnapshotFileStore
 from app.infrastructure.artifacts.brief_blobs import BriefFileStore
@@ -183,6 +184,11 @@ def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
     return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
                                PostgresConversationRepository(), planner,
                                scout=ScoutDiscovery(brief_reader=planner.read_brief), rate_limiter=rate_limiter)
+
+
+def build_my_product_repository() -> PostgresMyProductRepository:
+    """Return the owner-scoped store of the account's own products."""
+    return PostgresMyProductRepository()
 
 
 def build_snapshot_service() -> SnapshotService:

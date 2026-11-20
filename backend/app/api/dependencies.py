@@ -20,6 +20,7 @@ from app.infrastructure.container import (
     build_brief_service,
     build_scheduling_service,
     build_history_qa,
+    build_my_product_repository,
     build_timeline_service,
 )
 from app.modules.catalog.service import CatalogService
@@ -34,6 +35,7 @@ from app.infrastructure.artifacts.storage import LocalArtifactStorage
 from app.infrastructure.redis.rate_limiter import NoopRateLimiter, RedisRateLimiter
 from app.modules.system.ports import RateLimiter
 from app.shared.errors import AuthenticationError
+from app.modules.competitive_intelligence.ports import MyProductRepository
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
 from app.modules.competitive_intelligence.investigation_service import InvestigationService
@@ -45,6 +47,10 @@ from app.modules.competitive_intelligence.timeline_service import TimelineServic
 
 async def get_intelligence_service(db: AsyncSession = Depends(get_db)) -> IntelligenceService:
     return build_intelligence_service(db)
+
+
+async def get_my_product_repository() -> MyProductRepository:
+    return build_my_product_repository()
 
 
 async def get_snapshot_service() -> SnapshotService:

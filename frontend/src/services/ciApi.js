@@ -248,6 +248,26 @@ export async function approveAndRun(watchlistId) {
   return startWatchlistRun(watchlistId, revision.id, workflowVersionId);
 }
 
+export async function listMyProducts() {
+  return ciRequest('/my-products');
+}
+
+export async function createMyProduct(body) {
+  return ciRequest('/my-products', json('POST', body));
+}
+
+export async function updateMyProduct(id, body) {
+  return ciRequest(`/my-products/${enc(id)}`, json('PATCH', body));
+}
+
+export async function setDefaultMyProduct(id) {
+  return ciRequest(`/my-products/${enc(id)}/default`, { method: 'POST' });
+}
+
+export async function deleteMyProduct(id) {
+  return ciRequest(`/my-products/${enc(id)}`, { method: 'DELETE' });
+}
+
 export function saveBlob(blob, filename) {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement('a');

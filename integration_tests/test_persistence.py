@@ -370,12 +370,12 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                     "ci_watchlists", "ci_watchlist_revisions", "ci_products", "ci_product_profiles",
                     "ci_sources", "ci_fetch_outcomes", "ci_snapshots", "ci_baselines",
                     "ci_run_comparisons", "ci_change_candidates", "ci_investigation_rounds",
-                    "ci_briefs", "ci_schedules", "ci_notifications",
+                    "ci_briefs", "ci_schedules", "ci_notifications", "ci_my_products",
                 }
                 <= set(tables)
             )
             self.assertEqual(await connection.scalar(text("SELECT version_num FROM alembic_version")),
-                             "0012_agent_profile_mode")
+                             "0013_ci_my_products")
 
     async def test_conversation_turn_acceptance_is_idempotent_serialized_and_replayable(self) -> None:
         repository = PostgresConversationRepository()

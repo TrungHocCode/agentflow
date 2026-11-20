@@ -9,6 +9,7 @@ from app.api.v1.runs import router as runs_router, workflow_run_router
 from app.api.v1.workflows import router as workflows_router
 from app.api.v1.watchlists import router as watchlists_router
 from app.api.v1.ci_reads import router as ci_reads_router
+from app.api.v1.my_products import router as my_products_router
 
 api_v1_router = APIRouter(prefix="/v1")
 api_v1_router.include_router(health_router)
@@ -22,3 +23,4 @@ api_v1_router.include_router(workflow_run_router)
 api_v1_router.include_router(workflows_router)
 api_v1_router.include_router(watchlists_router)
 api_v1_router.include_router(ci_reads_router)
+api_v1_router.include_router(my_products_router)

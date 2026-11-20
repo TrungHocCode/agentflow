@@ -121,6 +121,26 @@ class ProductConfig(Contract):
         return public_url(value) if value else None
 
 
+class MyProduct(Contract):
+    """A product the account owns; one per account is the default for new requests."""
+
+    id: UUID | None = None
+    name: ShortText
+    description: str = Field("", max_length=1000)
+    description_en: str = Field("", max_length=1000)
+    website: str | None = Field(None, max_length=2048)
+    market: Literal["global", "vn"] = "global"
+    known_competitors: list[ShortText] = Field(default_factory=list, max_length=20)
+    is_default: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    @field_validator("website")
+    @classmethod
+    def _website(cls, value: str | None) -> str | None:
+        return public_url(value) if value else None
+
+
 class ComparisonCriterion(Contract):
     field: ShortText
     objective: str = Field(min_length=1, max_length=1000)
