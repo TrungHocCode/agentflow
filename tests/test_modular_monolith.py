@@ -988,6 +988,30 @@ class TestConversationBoundaries(unittest.IsolatedAsyncioTestCase):
             InferencePurpose.PLANNER.value,
         )
 
+    async def test_competitor_tracking_goes_to_the_setup_card_not_a_supervisor_plan(self) -> None:
+        # Measured: the Supervisor drafted its own research plan (hiding the setup card) and once
+        # planned to list competitors from model memory.
+        repository = FakeConversationRepository()
+        execution_port = FakeExecutionPort()
+        service = ConversationService(repository=repository, execution_port=execution_port)
+        conversation = await service.create_conversation(title="Tracking")
+
+        updated = await service.send_message(conversation.id, "Theo dõi đối thủ giúp mình")
+        self.assertIsNone(execution_port.initial_state)
+        self.assertEqual((updated.draft_plan, updated.metadata["supervisor_decision"]), ([], "answer"))
+        follow_up = await service.send_message(conversation.id, "NoteNest là app ghi chú markdown cho Mac")
+        self.assertIsNone(execution_port.initial_state)
+        self.assertIsNone(execution_port.continuation_metadata)
+        self.assertEqual(follow_up.draft_plan, [])
+        replies = [message.content for message in await service.list_messages(conversation.id)
+                   if message.role == "assistant"]
+        self.assertEqual(len(replies), 2)
+        self.assertIn("Find competitors", replies[0])
+
+        other = await service.create_conversation(title="Research")
+        await service.send_message(other.id, "Research local LLMs")
+        self.assertIsNotNone(execution_port.initial_state)
+
     async def test_conversation_routes_simple_question_to_chat_profile(self) -> None:
         repository = FakeConversationRepository()
         execution_port = FakeExecutionPort()

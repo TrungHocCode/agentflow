@@ -382,6 +382,31 @@ class TestScoutStageB(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([s.url for s in found["craft.do"]], ["https://www.craft.do/whats-new"])
 
 
+class TestScoutSourcePages(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_follows_a_home_page_link_when_the_usual_paths_fail(self) -> None:
+        pages = {
+            "https://pos.vn/": {"final_url": "https://pos.vn/", "title": "POS", "text": "",
+                                "links": ["https://pos.vn/blog/cach-cai-thien", "https://pos.vn/bang-gia-phan-mem",
+                                          "https://other.com/pricing"]},
+            "https://pos.vn/bang-gia-phan-mem": {"final_url": "https://pos.vn/bang-gia-phan-mem",
+                                                 "title": "Bảng giá", "text": "Gói cơ bản 300.000 ₫ per month"},
+        }
+
+        async def fetch(url):
+            return pages.get(url)
+        found = await ScoutDiscovery(StubBatchTool([]), page_fetcher=fetch).stage_b(["pos.vn"], "pricing")
+        self.assertEqual([(s.url, s.provenance) for s in found["pos.vn"]],
+                         [("https://pos.vn/bang-gia-phan-mem", "site_crawl")])
+
+    async def test_a_blog_post_from_the_site_search_is_not_the_pricing_page(self) -> None:
+        tool = StubBatchTool([
+            {"url": "https://blog.logseq.com/how-to-setup", "title": "How to set up Logseq", "snippet": "x"},
+            {"url": "https://logseq.com/pricing", "title": "Logseq", "snippet": "x"},
+        ])
+        found = await ScoutDiscovery(tool, page_fetcher=no_page).stage_b(["logseq.com"], "pricing")
+        self.assertEqual([s.url for s in found["logseq.com"]], ["https://logseq.com/pricing"])
+
+
 class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
     ARTICLES = {
         "https://blog.example/best-notes": ("## 1. Obsidian\n\n## 2. Notion\n\n## Pros\n\n## Bear Notes",
@@ -391,7 +416,7 @@ class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
     RESULTS = [
         {"url": "https://blog.example/best-notes", "title": "The 10 best note apps in 2026", "snippet": "x"},
         {"url": "https://review.example/notes", "title": "Best note-taking apps compared", "snippet": "x"},
-        {"url": "https://notion.com/pricing", "title": "Notion pricing", "snippet": "Plans"},
+        {"url": "https://notion.com/pricing", "title": "Notion pricing", "snippet": "Note-taking plans"},
     ]
 
     async def fetch(self, url):
@@ -409,9 +434,23 @@ class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
             ("InkPad", None, True, "own"),  # listed in an article, but it is the user's product
         ])
         self.assertIn("2 comparison article(s): blog.example, review.example", products[0].rationale)
-        # Bear Notes had no matching site, so only unresolved names were looked up, in one more search.
-        self.assertEqual(tool.calls[1][0], ["Notion pricing", "Bear Notes pricing"])
+        # Bear Notes is listed by one article and not linked, so only Notion was looked up.
+        self.assertEqual(tool.calls[1][0], ["Notion pricing"])
         self.assertEqual(len(tool.calls), 2)
+
+    async def test_a_name_in_one_article_without_a_link_is_not_looked_up(self) -> None:
+        tool = StubBatchTool(self.RESULTS)
+        products = await ScoutDiscovery(tool, page_fetcher=self.fetch).stage_a(
+            "I make InkPad, a note-taking app. Find my competitors.")
+        self.assertNotIn("Bear Notes pricing", tool.calls[1][0])
+        self.assertNotIn("Bear Notes", [p.name for p in products])
+
+    async def test_a_lookup_site_that_shares_no_word_with_the_category_is_dropped(self) -> None:
+        results = [*self.RESULTS[:2], {"url": "https://notion.com/pricing", "title": "Notion pricing",
+                                       "snippet": "Maps and atlases"}]
+        products = await ScoutDiscovery(StubBatchTool(results), page_fetcher=self.fetch).stage_a(
+            "I make InkPad, a note-taking app. Find my competitors.")
+        self.assertEqual([p.name for p in products if p.kind == "competitor"], ["Obsidian"])
 
     async def test_named_competitors_skip_the_articles(self) -> None:
         tool = StubBatchTool(self.RESULTS)
@@ -432,8 +471,10 @@ class TestScoutListicles(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("did not list readable product names" in warning for warning in scout.warnings))
 
 
-def brief(own=None, named=(), category=None):
-    return ProductBrief(own_product=own, named_competitors=list(named), category=category)
+def brief(own=None, named=(), category=None, local=None):
+    """A model reading: `category` is the English description, `local` the one in the request's language."""
+    return ProductBrief(own_product=own, named_competitors=list(named), describes_own_product=bool(category),
+                        own_product_description=local or category, description_in_english=category)
 
 
 class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
@@ -463,12 +504,22 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
 
     async def test_scout_searches_the_category_the_model_read(self) -> None:
         async def reader(_prompt):
-            return brief("NoteNest", [], "note-taking apps for Mac")
+            return brief("NoteNest", [], "note-taking apps for Mac", "app ghi chú markdown cho Mac")
         tool = StubBatchTool([])
         scout = ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader)
         await scout.stage_a(self.VI_NOTES)
-        self.assertEqual(tool.calls[0][0], ["best note-taking apps for Mac", "note-taking apps for Mac alternatives"])
+        self.assertEqual(tool.calls[0][0], ["app ghi chú markdown cho Mac tốt nhất", "best note-taking apps for Mac",
+                                            "note-taking apps for Mac alternatives"])
         self.assertEqual(scout.dimensions, ["pricing"])
+
+    async def test_a_vietnamese_request_without_rivals_is_searched_in_vietnamese_first(self) -> None:
+        async def reader(_prompt):
+            return brief("CafePOS", [], "cafe management software", "phần mềm quản lý quán cafe")
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader).stage_a(
+            "Mình làm CafePOS, phần mềm quản lý quán cafe. Tìm đối thủ giúp mình.")
+        self.assertEqual(tool.calls[0][0], ["phần mềm quản lý quán cafe tốt nhất", "best cafe management software",
+                                            "cafe management software alternatives"])
 
     async def test_a_failing_reader_leaves_the_keyword_rules(self) -> None:
         async def broken(_prompt):
@@ -494,6 +545,69 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool.calls[1][0], ["iPOS bảng giá"])
         self.assertEqual({p.official_website for p in products if p.kind == "competitor"},
                          {"https://kiotviet.vn/", "https://ipos.vn/"})
+
+    def test_a_named_product_is_the_users_own_only_when_the_request_says_so(self) -> None:
+        # Recorded on qwen3:8b: Notion became the user's product; a whole request became a product name.
+        request = _understand("Track pricing of Notion and Obsidian.",
+                              brief("Notion", ["Obsidian"]))
+        self.assertEqual((request.own, request.named, request.category), (None, ["Notion", "Obsidian"], None))
+        vague = _understand("Theo dõi đối thủ giúp mình",
+                            brief("Theo dõi đối thủ giúp mình"))
+        self.assertEqual((vague.own, vague.named, vague.category), (None, [], None))
+
+    def test_the_model_decides_whether_the_request_describes_the_product(self) -> None:
+        # Recorded on qwen3 4B: "I make NoteNest." alone was read as describing the product, as "NoteNest".
+        prompt = "I make NoteNest. Watch my competitors."
+        echoed = _understand(prompt, ProductBrief(
+            own_product="NoteNest", named_competitors=[], describes_own_product=True,
+            own_product_description="NoteNest", description_in_english="NoteNest"))
+        self.assertEqual((echoed.own, echoed.category), ("NoteNest", None))
+        # A description string without the model's yes is ignored.
+        denied = _understand(prompt, ProductBrief(
+            own_product="NoteNest", named_competitors=[], describes_own_product=False,
+            own_product_description="note-taking app", description_in_english="note-taking app"))
+        self.assertEqual((denied.category, denied.local_description), (None, None))
+        # English: the model's description is used as given, not replaced by a phrase found in the request.
+        text = "I make NoteNest. Watch my competitors.\nIt is a markdown note-taking app for Mac."
+        answered = _understand(text, brief("NoteNest", [], "markdown note-taking apps"))
+        self.assertEqual(answered.category, "markdown note-taking apps")
+        cafe = _understand("Theo dõi đối thủ giúp mình\nMình làm CafePOS, phần mềm quản lý quán cafe",
+                           brief("CafePOS", [], "cafe management software", "phần mềm quản lý quán cafe"))
+        self.assertEqual((cafe.own, cafe.category, cafe.local_description),
+                         ("CafePOS", "cafe management software", "phần mềm quản lý quán cafe"))
+
+    async def test_an_english_request_searches_the_models_english_description(self) -> None:
+        async def reader(_prompt):
+            return brief("InkPad", [], "markdown note-taking apps")
+        tool = StubBatchTool([])
+        await ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader).stage_a(
+            "I make InkPad, a markdown note-taking app for Mac. Find my competitors.")
+        self.assertEqual(tool.calls[0][0], ["best markdown note-taking apps", "markdown note-taking apps alternatives"])
+
+    async def test_a_thin_request_gets_a_question_instead_of_a_search(self) -> None:
+        tool = StubBatchTool([])
+        for prompt, reader_brief, question in (
+            ("I make NoteNest. Watch my competitors.", brief("NoteNest", [], "NoteNest"), "What does NoteNest do"),
+            ("I make NoteNest. Watch my competitors.", brief("NoteNest"), "What does NoteNest do"),
+            ("Theo dõi đối thủ giúp mình", brief(None), "Sản phẩm của bạn là sản phẩm gì"),
+        ):
+            async def reader(_prompt, value=reader_brief):
+                return value
+            scout = ScoutDiscovery(tool, page_fetcher=no_page, brief_reader=reader)
+            self.assertEqual(await scout.stage_a(prompt), [])
+            self.assertIn(question, scout.follow_up_question)
+        self.assertEqual(tool.calls, [])
+
+    async def test_without_the_model_sentence_openers_are_not_rivals(self) -> None:
+        # Recorded with Ollama down: "Tôi", "Mình", "Theo" and "It" were searched as competitors.
+        self.assertEqual((_understand(self.VI_NOTES, None).own, _understand(self.VI_NOTES, None).named),
+                         ("NoteNest", []))
+        self.assertEqual(_understand("I make NoteNest. Watch my competitors.\nIt is a markdown app.", None).named, [])
+        tool = StubBatchTool([])
+        scout = ScoutDiscovery(tool, page_fetcher=no_page)
+        self.assertEqual(await scout.stage_a("Theo dõi đối thủ giúp mình"), [])
+        self.assertIsNotNone(scout.follow_up_question)
+        self.assertEqual(tool.calls, [])
 
     async def test_planner_returns_no_brief_when_the_model_fails(self) -> None:
         with patch("app.infrastructure.ci_setup_planner.get_llm", side_effect=RuntimeError("offline")):

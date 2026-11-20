@@ -22,6 +22,7 @@ from app.modules.conversations.models import (
 )
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository
+from app.modules.conversations.tracking_intent import is_tracking_request, tracking_reply
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
 from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
@@ -133,7 +134,10 @@ class ConversationService:
         )
         await self.repository.add_message(user_message)
 
-        if self._should_continue(conversation):
+        result_state = self._tracking_turn(conversation, content)
+        if result_state is not None:
+            pass
+        elif self._should_continue(conversation):
             result_state = await self.execution_port.continue_conversation(
                 conversation.id,
                 content,
@@ -407,11 +411,15 @@ class ConversationService:
                 "mode": "conversation",
                 "metadata": conversation.metadata,
             }
-            result_state = await self.execution_port.create_plan(
-                turn.id,
-                initial_state,
-                on_assistant_token=publish_assistant_token,
-            )
+            latest = next((message.content for message in reversed(history)
+                           if message.role == "user" and message.content), "")
+            result_state = self._tracking_turn(conversation, latest)
+            if result_state is None:
+                result_state = await self.execution_port.create_plan(
+                    turn.id,
+                    initial_state,
+                    on_assistant_token=publish_assistant_token,
+                )
             decision, effective_plan, assistant_messages = self._interpret_planner_result(
                 result_state,
                 [],
@@ -908,6 +916,17 @@ class ConversationService:
             "inference_purpose": purpose.value,
         })
         conversation.metadata = metadata
+
+    @staticmethod
+    def _tracking_turn(conversation: ConversationRecord, content: str) -> State | None:
+        """Answer a competitor-tracking turn without the Supervisor; the setup card searches instead."""
+        # Follow-up answers ("it is a markdown app") carry no tracking words, so the
+        # conversation stays with the setup card once it starts there.
+        if not (conversation.metadata.get("ci_setup") or is_tracking_request(content)):
+            return None
+        conversation.metadata["ci_setup"] = True
+        return {"messages": [AIMessage(content=tracking_reply(content))], "plan": [],
+                "metadata": {"supervisor_decision": "answer"}}
 
     @staticmethod
     def _assistant_messages(messages: List[Any]) -> List[str]:

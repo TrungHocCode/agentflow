@@ -31,17 +31,23 @@ function onSite(url, website) {
   return Boolean(host && site) && (host === site || host.endsWith(`.${site}`) || site.endsWith(`.${host}`));
 }
 
-function lastUserText(messages) {
-  const mine = (messages || []).filter((message) => message.sender === 'user');
-  const last = mine.at(-1);
-  const text = last?.content ?? last?.text ?? '';
-  return typeof text === 'string' ? text : '';
+// The server reads at most 2000 characters of the request.
+const MAX_PROMPT_CHARS = 2000;
+
+// The user's recent messages, oldest first: an answer to a follow-up question ("it is a markdown
+// app") only makes sense together with the request it answers.
+function userText(messages) {
+  const texts = (messages || [])
+    .filter((message) => message.sender === 'user')
+    .map((message) => message.content ?? message.text ?? '')
+    .filter((text) => typeof text === 'string' && text.trim());
+  return texts.slice(-4).join('\n').slice(-MAX_PROMPT_CHARS);
 }
 
-// Turns the latest chat message into a reviewable watchlist draft; the chat input
-// is the only place the user types, so there is no separate setup form.
+// Turns the chat into a reviewable watchlist draft; the chat input is the only place
+// the user types, so there is no separate setup form.
 export default function ChatWatchlistProposal({ messages, onCreated }) {
-  const prompt = lastUserText(messages);
+  const prompt = userText(messages);
   const [recommendation, setRecommendation] = useState(null);
   const [picks, setPicks] = useState({});
   const [urls, setUrls] = useState({});
@@ -302,7 +308,14 @@ export default function ChatWatchlistProposal({ messages, onCreated }) {
       {error && (
         <ErrorNotice message={error} onDismiss={() => setError('')} />
       )}
-      {recommendation && (
+      {recommendation?.follow_up_question && (
+        <Alert role="status">
+          <AlertDescription>
+            {recommendation.follow_up_question} Answer in the chat, then press Find competitors again.
+          </AlertDescription>
+        </Alert>
+      )}
+      {recommendation && !recommendation.follow_up_question && (
         <div className="flex flex-col gap-3">
           <Alert className="wizard-unverified">
             <AlertDescription>Unverified draft — review every entry before creating.</AlertDescription>

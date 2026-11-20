@@ -47,6 +47,25 @@ describe('ChatWatchlistProposal', () => {
     }));
   });
 
+  it('asks the follow-up question and sends the earlier request with the answer', async () => {
+    fetch.mockImplementation(async (url) => (String(url).includes('/discover-competitors')
+      ? response({ products: [], warnings: [], follow_up_question: 'What does NoteNest do, and for whom?' })
+      : response({ status: 'ok' })));
+    render(<ChatWatchlistProposal
+      messages={[
+        { sender: 'user', content: 'I make NoteNest. Watch my competitors.' },
+        { sender: 'assistant', content: 'Click Find competitors.' },
+        { sender: 'user', content: 'It is a markdown note-taking app for Mac.' }
+      ]}
+      onCreated={() => {}}
+    />);
+    fireEvent.click(screen.getByRole('button', { name: /find competitors/i }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('What does NoteNest do'));
+    const body = JSON.parse(fetch.mock.calls.find(([url]) => String(url).includes('/discover-competitors'))[1].body);
+    expect(body.prompt).toBe('I make NoteNest. Watch my competitors.\nIt is a markdown note-taking app for Mac.');
+    expect(screen.queryByText(/unverified draft/i)).not.toBeInTheDocument();
+  });
+
   it('discovers competitors, then source URLs, and creates from picks', async () => {
     const onCreated = vi.fn();
     render(<ChatWatchlistProposal messages={[{ sender: 'user', content: 'I make TaskFlow' }]} onCreated={onCreated} />);

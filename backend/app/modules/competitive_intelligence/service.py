@@ -115,7 +115,8 @@ class IntelligenceService:
 
         products = await self._scout_round(owner_id, lambda: self.scout.stage_a(prompt))
         return SetupRecommendation(products=products, suggested_dimensions=self.scout.dimensions[:4],
-                                   warnings=list(self.scout.warnings)[:16])
+                                   warnings=list(self.scout.warnings)[:16],
+                                   follow_up_question=self.scout.follow_up_question)
 
     async def discover_sources(self, domains: list[str], dimension: str,
                                owner_id: str) -> dict[str, list[RecommendedSource]]:
