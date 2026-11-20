@@ -187,7 +187,10 @@ async def _default_page_fetcher(url: str) -> dict[str, Any] | None:
 def _page_fits(dimension: str, host: str, page: dict[str, Any]) -> bool:
     """A probed page counts only if it stayed on the site, is not the home page, and reads like the dimension."""
     final = urlsplit(page.get("final_url") or "")
-    if not final.hostname or not same_site(final.hostname.casefold(), host) or final.path.strip("/") == "":
+    path = final.path.strip("/")
+    # A bare language code (/en/, /vi, /pt_BR) is a localized home page.
+    if (not final.hostname or not same_site(final.hostname.casefold(), host) or path == ""
+            or re.fullmatch(r"[a-z]{2}(?:[-_][a-z]{2})?", path, re.IGNORECASE)):
         return False
     text = f"{page.get('title', '')}\n{page.get('text', '')[:4000]}"
     if dimension == "pricing":

@@ -119,6 +119,18 @@ class TestVietnamesePrices(unittest.TestCase):
             self.assertFalse(_PRICING_TEXT.search(text), text)
 
 
+class TestLanguageHomePage(unittest.TestCase):
+    def test_bare_language_path_is_a_home_page(self) -> None:
+        from app.modules.competitive_intelligence.scout_discovery import _page_fits
+
+        def page(path: str) -> dict:
+            return {"final_url": f"https://ipos.vn{path}", "title": "", "text": "Giá 4.900.000 VND"}
+
+        for path in ("/en/", "/vi", "/en-us", "/pt_BR/"):
+            self.assertFalse(_page_fits("pricing", "ipos.vn", page(path)), path)
+        self.assertTrue(_page_fits("pricing", "ipos.vn", page("/en/pricing")))
+
+
 class TestScoutProfile(unittest.TestCase):
     def test_scout_profile_is_search_only_and_not_a_round_role(self) -> None:
         from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
