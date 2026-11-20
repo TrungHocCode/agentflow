@@ -59,13 +59,16 @@ Hệ thống tách biệt rõ ràng giữa hai giai đoạn:
 
 1. **Build Phase (Planner / Flow Designer)**:
    - **SupervisorAgent**: Giao tiếp với người dùng, phân tích intent, tạo kế hoạch (`FlowDefinition` chứa các `Task` với dependencies).
+   - Mỗi tin nhắn chat đều qua Supervisor. Khi người dùng muốn tìm/so sánh/theo dõi đối thủ, Supervisor chọn `setup_tracking`: cùng lượt đó code chạy setup (đọc request + Scout, kèm sản phẩm của người dùng), rồi Supervisor viết câu trả lời từ kết quả. Code kiểm tra routing (keyword) và có fallback khi model lỗi.
    - Kết thúc với buớc review/approval của người dùng trước khi thực thi.
 
 2. **Run Phase (Deterministic Execution Engine)**:
    - **ExecutionManager / TaskDispatcher**: Node điều phối bằng code (code-based router) đọc `plan`, lọc ra các `Task` có status `pending` đã thỏa mãn `dependencies`, và gán `current_task` cho WorkerAgent tương ứng.
    - **WorkerAgent**: Thực thi task bằng ReAct loop (LLM + tool calls). Kết quả tool output được bao bọc trong tag `<tool_output>...</tool_output>` để chống prompt injection.
-   - Dispatcher hiện chọn task tuần tự theo DAG, **không gọi lại Supervisor LLM sau mỗi bước worker**. Bounded parallel DAG execution là mục tiêu; tool crawl batch đã có concurrency riêng.
+   - Dispatcher chọn task tuần tự theo DAG, **không gọi lại Supervisor LLM sau mỗi bước worker**. Bounded parallel DAG execution là mục tiêu; tool crawl batch đã có concurrency riêng.
+   - **Điểm quyết định của CI run** (bật bằng `CI_SUPERVISOR_DECISIONS`): sau khi so sánh và ở cuối mỗi round, Supervisor chọn một action từ menu cố định. Code tính `allowed_actions` cho từng nguồn và dựng schema riêng cho mỗi lần gọi (chỉ action/id hợp lệ), kiểm tra lại (`validate_round`, budget, allowlist) và quay về plan mặc định khi lỗi. Không có gì để quyết định thì không gọi model. Lịch sử quyết định nằm trong `run.metadata.supervisor`.
    - **ScoutAgent (setup discovery)**: Runtime worker profile `scout` chỉ có tool search (`web_search`, `web_search_batch`). Nó đề xuất competitor/source candidates chưa xác minh trước khi tạo watchlist; **không phải** role của investigation round (không nằm trong `CI_ROLE_TOOLS`/`SAFE_ROLES`).
+   - **source_finder**: worker `tool_loop` (`web_search`, `fetch_page`, tối đa 4 bước) tìm trang công khai của một sản phẩm cho một dimension. Model chỉ trả URL hoặc `NOT PUBLIC`; code fetch lại và kiểm tra (`_page_fits`: cùng site, không phải trang chủ, đọc giống dimension) trước khi chấp nhận. Trang tìm được chỉ là đề xuất, cần người dùng duyệt.
 
 ### State Management
 
