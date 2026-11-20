@@ -247,6 +247,8 @@ Reports, charts, evidence storage, and downloads use `ARTIFACT_ROOT` (default: `
 
 Evidence-backed runs retain explicit subject/field coverage, source-processing outcomes and quotation lineage. Their report stage renders typed findings deterministically rather than invoking a final LLM rewrite. An observed field or matching quotation is **not** semantic verification; unanswered requirements remain unresolved. Older workflows without a requirement matrix do not establish request-level completeness.
 
+`CI_SUPERVISOR_DECISIONS` (default `false`) lets the Supervisor choose the next action at competitive-intelligence run decision points (analyze changes, ask the user, finish); code validates every choice and falls back to the default plan on any failure.
+
 Run-wide guardrails share `MAX_RUN_LLM_CALLS` (64), `MAX_RUN_ESTIMATED_TOKENS` (262144) and `MAX_RUN_DURATION` (3600 seconds) across ReAct and internal map/reduce. The token limit uses an input-size heuristic plus reserved output, including schemas, and is not exact Ollama usage. Failed inference calls retain their reservation; exhaustion is explicit and never automatically retried. Cancellation is cooperative: an in-process wrapper cannot forcibly stop blocking code already running in a thread or a remote server's computation.
 
 The crawler tries static HTTP fetching first. In automatic mode, it uses Chromium only when the extracted content is poor or the page appears to need client-side rendering. For local browser-based fallback, install Chromium once:
