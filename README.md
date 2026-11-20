@@ -280,7 +280,7 @@ docker compose up --build
 
 The frontend is served at <http://localhost:5173>, the API at <http://localhost:8000>, and Mongo Express at <http://localhost:8081>.
 
-**Ollama is not included in the Compose stack.** For model-backed execution, the API and worker containers must be able to reach your Ollama host. The simplest working setup is the local-process workflow above. If you use the API and worker containers, set `OLLAMA_BASE_URL` in `.env` to a host-reachable Ollama address and make sure Ollama accepts connections from Docker; Compose forwards that URL and the three model-profile settings to both services.
+**The model server (Ollama or llama-server) is not included in the Compose stack.** For model-backed execution, the API and worker containers must be able to reach it. The simplest working setup is the local-process workflow above. If you use the API and worker containers, set `OLLAMA_BASE_URL` (Ollama) or `LLM_PROVIDER=llamacpp` with `LLAMACPP_BASE_URL` (llama-server) in `.env` to a host-reachable address, and make sure the server accepts connections from Docker; Compose forwards these settings and the three model-profile settings to both services.
 
 ## Verify the installation
 
