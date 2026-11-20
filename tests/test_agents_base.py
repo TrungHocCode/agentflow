@@ -147,6 +147,32 @@ class TestAgentPlatformBase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["messages"][0].content, "Drafting a plan.")
         self.assertEqual(updates["plan"][0].description, "Find primary sources")
 
+    async def test_supervisor_does_not_stream_text_for_setup_tracking(self):
+        supervisor = SupervisorAgent(name="Supervisor", system_prompt="You are a supervisor.", llm=self.mock_llm)
+        structured_llm = MagicMock()
+
+        async def partial_outputs(messages):
+            del messages
+            yield {"decision": "setup_tracking"}
+            yield {"decision": "setup_tracking", "assistant_message": "Please list competitors."}
+            yield {"decision": "setup_tracking", "mode": "conversation", "assistant_message": "Please list competitors.",
+                   "plan": [], "metadata": None}
+
+        structured_llm.astream = partial_outputs
+        self.mock_llm.with_structured_output.return_value = structured_llm
+        chunks = []
+
+        async def collect_chunk(chunk: str) -> None:
+            chunks.append(chunk)
+
+        updates = await supervisor.execute(
+            {"messages": [HumanMessage(content="Find my competitors")], "plan": [], "mode": "conversation",
+             "metadata": {}},
+            on_assistant_token=collect_chunk,
+        )
+        self.assertEqual(chunks, [])
+        self.assertEqual(updates["metadata"]["supervisor_decision"], "setup_tracking")
+
     async def test_supervisor_cannot_override_internal_inference_purpose(self):
         supervisor = SupervisorAgent(
             name="Supervisor",

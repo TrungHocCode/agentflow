@@ -118,3 +118,7 @@ class SetupPort(Protocol):
     async def run_setup(self, owner_id: str, prompt: str) -> Dict[str, Any]:
         """Return ``{"product": {...}, "recommendation": {...}}``; raise when the search cannot run."""
         ...
+
+    async def write_reply(self, message: str, setup: Dict[str, Any] | None) -> str | None:
+        """One or two sentences about the search result in the user's language; None when unavailable."""
+        ...

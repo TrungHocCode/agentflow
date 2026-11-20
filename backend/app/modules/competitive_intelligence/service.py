@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import copy
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -117,12 +118,18 @@ class IntelligenceService:
                                    fallback: MyProduct | None = None) -> SetupRecommendation:
         """Return search-grounded competitor candidates; nothing is persisted or approved."""
 
+        return (await self._discover(prompt, owner_id, product, fallback))[0]
+
+    async def _discover(self, prompt: str, owner_id: str, product: MyProduct | None,
+                        fallback: MyProduct | None) -> tuple[SetupRecommendation, ScoutDiscovery]:
+        """Search with a per-call copy of the Scout: its per-search state must not be shared between users."""
+        scout = copy.copy(self.scout)
         products = await self._scout_round(
-            owner_id, lambda: self.scout.stage_a(prompt, product, fallback) if product or fallback
-            else self.scout.stage_a(prompt))
-        return SetupRecommendation(products=products, suggested_dimensions=self.scout.dimensions[:4],
-                                   warnings=list(self.scout.warnings)[:16],
-                                   follow_up_question=self.scout.follow_up_question)
+            owner_id, lambda: scout.stage_a(prompt, product, fallback) if product or fallback
+            else scout.stage_a(prompt))
+        return SetupRecommendation(products=products, suggested_dimensions=scout.dimensions[:4],
+                                   warnings=list(scout.warnings)[:16],
+                                   follow_up_question=scout.follow_up_question), scout
 
     async def run_setup(self, owner_id: str, prompt: str) -> dict[str, Any]:
         """Chat setup: pick the product (saved by name, else message, else default), then search."""
@@ -131,21 +138,27 @@ class IntelligenceService:
         named = next((item for item in sorted(saved, key=lambda p: -len(p.name)) if re.search(
             rf"(?<!\w){re.escape(item.name)}(?!\w)", prompt, re.IGNORECASE)), None)
         default = next((item for item in saved if item.is_default), None)
-        recommendation = await self.discover_competitors(prompt, owner_id, named, default)
-        chosen = named or (default if self.scout.used_fallback else None)
+        recommendation, scout = await self._discover(prompt, owner_id, named, default)
+        chosen = named or (default if scout.used_fallback else None)
         if chosen is not None:
             product = {"name": chosen.name, "description": chosen.description or chosen.description_en,
                        "source": "saved" if chosen is named else "default", "my_product_id": str(chosen.id)}
         else:
-            product = {"name": self.scout.own_name or "", "description": self.scout.own_description or "",
+            product = {"name": scout.own_name or "", "description": scout.own_description or "",
                        "source": "message", "my_product_id": None}
         return {"product": product, "recommendation": recommendation.model_dump(mode="json")}
+
+    async def write_reply(self, message: str, setup: dict[str, Any] | None) -> str | None:
+        """A short model-written sentence about the setup result; None when no model is available."""
+        writer = getattr(self.planner, "write_setup_reply", None)
+        return await writer(message, setup) if writer is not None else None
 
     async def discover_sources(self, domains: list[str], dimension: str,
                                owner_id: str) -> dict[str, list[RecommendedSource]]:
         """Return same-site source URL candidates for explicitly picked domains."""
 
-        return await self._scout_round(owner_id, lambda: self.scout.stage_b(domains, dimension))
+        scout = copy.copy(self.scout)
+        return await self._scout_round(owner_id, lambda: scout.stage_b(domains, dimension))
 
     async def _scout_round(self, owner_id: str, search: Callable[[], Awaitable[Found]]) -> Found:
         """Charge one round only when it finds something; a failed or empty search stays free."""

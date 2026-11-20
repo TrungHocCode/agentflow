@@ -81,6 +81,8 @@ _OWN_PRODUCT = re.compile(
 _OWN_PRODUCT_VI = re.compile(
     r"(?i:tôi|mình|chúng tôi|bọn mình|em)\s+(?i:đang\s+)?(?i:làm|bán|phát triển|xây dựng|kinh doanh)\s+"
     r"([A-Z][A-Za-z0-9&.+_-]*)")
+# "...a markdown app called Inkwell": the name follows the description instead of "I make".
+_OWN_PRODUCT_CALLED = re.compile(r"\b(?i:called|named)\s+([A-Z][A-Za-z0-9&.+_-]*)")
 # Editorial pages rank highly for competitor searches but are not products to track.
 _ARTICLE_TITLE = re.compile(
     r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked|"
@@ -280,7 +282,7 @@ def _fallback_keywords(prompt: str) -> list[str]:
 
 
 def _own_product(prompt: str) -> str | None:
-    match = _OWN_PRODUCT.search(prompt) or _OWN_PRODUCT_VI.search(prompt)
+    match = _OWN_PRODUCT.search(prompt) or _OWN_PRODUCT_VI.search(prompt) or _OWN_PRODUCT_CALLED.search(prompt)
     return match.group(1).rstrip("&.+_-") if match else None
 
 
@@ -296,8 +298,12 @@ def _says_something(text: str, names: list[str]) -> bool:
 def _category(prompt: str, own: str | None) -> str | None:
     """The product category the user described, searched as "best <category>" when no rival is named."""
     start = prompt.find(own) + len(own) if own and own in prompt else 0
+    called = f"(?:called|named)\\s+{re.escape(own)}" if own else ""
+    if called and re.search(rf"\b{called}", prompt, re.IGNORECASE):
+        start = 0  # the description came before the name
     match = _CATEGORY.search(prompt, start)
-    return " ".join(match.group(1).split()) if match else None
+    text = " ".join(match.group(1).split()) if match else None
+    return re.sub(rf"\s+{called}$", "", text, flags=re.IGNORECASE) if text and called else text
 
 
 def _listed_names(markdown: str) -> list[str]:
@@ -425,6 +431,9 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
                 category, local = (re.sub(r"^(?:an?|the)\s+", "", text, flags=re.IGNORECASE)
                                    for text in (english, local))
                 local_description = local if local and local.casefold() != category.casefold() else None
+    # A capitalized word of the user's own description ("Vietnam" in "a cafe POS in Vietnam") is not a rival.
+    described = f"{category or ''} {local_description or ''}"
+    named = [name for name in named if not re.search(rf"(?<!\w){re.escape(name)}(?!\w)", described, re.IGNORECASE)]
     return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions,
                     local_description=local_description)
 
@@ -624,7 +633,7 @@ class ScoutDiscovery:
 
         terms, own = request.terms, request.own
         if not request.named:
-            listed = await self._listed_products(records, own, request.category)
+            listed = await self._listed_products(records, own, request.category, request.local_description)
             if listed:
                 return self._with_own(listed, own)
         elif _vietnamese(request):
@@ -712,7 +721,8 @@ class ScoutDiscovery:
         return products
 
     async def _listed_products(self, records: list[dict[str, Any]], own: str | None,
-                               category: str | None = None) -> list[RecommendedProduct]:
+                               category: str | None = None,
+                               local_description: str | None = None) -> list[RecommendedProduct]:
         """Read the top "best X" articles and keep the products they list that have a website of their own."""
         articles: list[dict[str, Any]] = []
         article_domains: set[str] = set()
@@ -727,6 +737,7 @@ class ScoutDiscovery:
         pages = await asyncio.gather(*(self.page_fetcher(str(record["url"])) for record in articles),
                                      return_exceptions=True)
         read = sum(isinstance(page, dict) for page in pages)
+        described = f"{category or ''} {local_description or ''}"
         counts: dict[str, int] = {}
         names: dict[str, str] = {}
         listed_by: dict[str, list[str]] = {}
@@ -739,6 +750,9 @@ class ScoutDiscovery:
             for name in _listed_names(page.get("markdown", "")):
                 key = _compact(name)
                 if not key or (own and key == _compact(own)):
+                    continue
+                # A heading such as "Vietnam" repeats a word of the user's own description; it is not a rival.
+                if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", described, re.IGNORECASE):
                     continue
                 names.setdefault(key, name)
                 counts[key] = counts.get(key, 0) + 1

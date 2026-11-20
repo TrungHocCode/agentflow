@@ -313,7 +313,8 @@ class SupervisorAgent(BaseAgent):
                             continue
                         streamed_output = partial_output
                         assistant_message = partial_output.get("assistant_message")
-                        if not isinstance(assistant_message, str):
+                        # The application writes the reply to a setup request after the search has run.
+                        if not isinstance(assistant_message, str) or partial_output.get("decision") == "setup_tracking":
                             continue
                         if assistant_message.startswith(streamed_assistant_message):
                             delta = assistant_message[len(streamed_assistant_message):]

@@ -39,6 +39,21 @@ def setup_acknowledgement(text: str) -> str:
     return "Mình sẽ tìm đối thủ ngay." if is_vietnamese(text) else "I'll look for competitors now."
 
 
+def setup_summary(text: str, setup: dict[str, Any] | None) -> str:
+    """Code-written lead sentence, used when the model cannot write one from the search result."""
+    vietnamese = is_vietnamese(text)
+    recommendation = (setup or {}).get("recommendation") or {}
+    if setup is None or setup.get("failed"):
+        return "Mình chưa tìm được đối thủ lần này." if vietnamese else "I could not finish the competitor search."
+    if recommendation.get("follow_up_question"):
+        return "Mình cần thêm một thông tin trước khi tìm." if vietnamese else "I need one more detail before I search."
+    if not recommendation.get("products"):
+        return "Mình không tìm thấy đối thủ nào." if vietnamese else "I did not find any competitors."
+    return ("Mình đã tìm được vài đối thủ; hãy chọn đối thủ muốn theo dõi rồi bấm “Find source URLs” ở thẻ bên dưới."
+            if vietnamese else
+            "I found some competitors; pick the ones to track and press “Find source URLs” in the card below.")
+
+
 def setup_report(text: str, setup: dict[str, Any] | None) -> str:
     """The code-written lines that follow the Supervisor's text; ``setup`` is None when the search failed."""
     vietnamese = is_vietnamese(text)

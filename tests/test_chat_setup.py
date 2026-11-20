@@ -47,8 +47,8 @@ class ScriptedPort(FakeExecutionPort):
 
 
 class FakeSetup:
-    def __init__(self, *results) -> None:
-        self.results, self.prompts = list(results), []
+    def __init__(self, *results, reply: str | None = "Found some competitors.") -> None:
+        self.results, self.prompts, self.reply, self.replied = list(results), [], reply, []
 
     async def run_setup(self, owner_id: str, prompt: str):
         self.prompts.append(prompt)
@@ -56,6 +56,13 @@ class FakeSetup:
         if isinstance(result, Exception):
             raise result
         return result
+
+
+    async def write_reply(self, message, setup):
+        self.replied.append((message, setup))
+        if self.reply is None:
+            raise TimeoutError("model slow")
+        return self.reply
 
 
 class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
@@ -75,7 +82,9 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
         _, message, conversation = await self.start(ScriptedPort("setup_tracking"), setup, "Find my competitors")
         self.assertEqual(message.metadata["outcome"], "setup_tracking")
         self.assertEqual(message.metadata["ci_setup"], SETUP)
-        self.assertTrue(message.content.startswith("Sure.\n\nUsing: NoteNest (default)"))
+        self.assertTrue(message.content.startswith("Found some competitors.\n\nUsing: NoteNest (default)"))
+        self.assertNotIn("Sure.", message.content)
+        self.assertEqual(setup.replied[0][0], "Find my competitors")
         self.assertIn("Suggested competitors: Obsidian, Notion.", message.content)
         self.assertNotIn("ci_setup_pending", conversation.metadata)
         self.assertNotIn("ci_setup", conversation.metadata)
@@ -88,9 +97,10 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("drafted a workflow", message.content)
 
     async def test_model_failure_falls_back_to_the_keyword_match(self) -> None:
-        _, message, _ = await self.start(ScriptedPort(fail=True), FakeSetup(SETUP), "Theo dõi đối thủ giúp mình")
+        _, message, _ = await self.start(
+            ScriptedPort(fail=True), FakeSetup(SETUP, reply=None), "Theo dõi đối thủ giúp mình")
         self.assertEqual(message.metadata["outcome"], "setup_tracking")
-        self.assertIn("Mình sẽ tìm đối thủ ngay.", message.content)
+        self.assertIn("Mình đã tìm được vài đối thủ", message.content)  # model reply failed: code sentence
         self.assertIn("Đang dùng: NoteNest (mặc định)", message.content)
 
     async def test_non_tracking_message_keeps_a_supervisor_plan(self) -> None:
@@ -120,12 +130,18 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.content, "Sure.")
         self.assertNotIn("ci_setup", message.metadata)
 
+    async def test_setup_tracking_without_a_tracking_message_is_answered_by_the_supervisor(self) -> None:
+        setup = FakeSetup(SETUP)
+        _, message, _ = await self.start(ScriptedPort("setup_tracking"), setup, "What will you check on those pages?")
+        self.assertEqual((message.metadata["outcome"], message.content), ("answer", "Sure."))
+        self.assertEqual((setup.prompts, "ci_setup" in message.metadata), ([], False))
+
     async def test_a_failed_search_still_completes_the_turn(self) -> None:
         accepted, message, _ = await self.start(
             ScriptedPort("setup_tracking"), FakeSetup(RuntimeError("search down")), "Find my competitors")
         turn = (await self.service.list_turns(self.conversation.id))[-1]
         self.assertEqual(turn.status, "completed")
-        self.assertIn("search failed", message.content)
+        self.assertIn("Search again", message.content)
         self.assertEqual(message.metadata["ci_setup"], {"product": None, "recommendation": None, "failed": True})
 
 
@@ -186,6 +202,47 @@ class ProductResolutionTests(unittest.IsolatedAsyncioTestCase):
         result = await self.build([saved], brief).run_setup(str(uuid4()), "I make Zed, a markdown app. Find competitors")
         self.assertEqual(result["product"], {"name": "Zed", "description": "markdown app",
                                              "source": "message", "my_product_id": None})
+
+    async def test_concurrent_setups_do_not_share_scout_state(self) -> None:
+        import asyncio
+
+        service = self.build([product("Other", is_default=True, description_en="crm")])
+        first, second = await asyncio.gather(
+            service.run_setup(str(uuid4()), "Find my competitors"),
+            service.run_setup(str(uuid4()), "Find my competitors"))
+        self.assertEqual((first["product"]["name"], second["product"]["name"]), ("Other", "Other"))
+        self.assertEqual((service.scout.own_name, service.scout.used_fallback), (None, False))
+
+    async def test_a_follow_up_answer_with_the_name_after_the_description_is_searched(self) -> None:
+        prompt = "Find my competitors please.\nIt is a markdown note-taking app for Mac called Inkwell."
+        result = await self.build([]).run_setup(str(uuid4()), prompt)
+        self.assertEqual(result["product"]["name"], "Inkwell")
+        self.assertEqual(result["product"]["description"], "markdown note-taking app for Mac")
+        self.assertEqual(self.queries[0][0], "best markdown note-taking app for Mac")
+        self.assertIsNone(result["recommendation"]["follow_up_question"])
+
+    async def test_article_headings_from_the_description_and_the_own_product_are_not_competitors(self) -> None:
+        article = "## 1. Vietnam\n\n## 2. Obsidian\n\n## 3. CafePOS\n"
+
+        def search(queries, max_results):
+            return json.dumps({"data": {"results": [{"url": "https://blog.example/best-cafe-pos",
+                                                      "title": "Best cafe POS", "snippet": "list"}]}})
+
+        async def page(url):
+            return {"markdown": article, "links": ["https://obsidian.md/"]}
+
+        async def brief(prompt):
+            return ProductBrief(own_product="CafePOS", named_competitors=[], describes_own_product=True,
+                                own_product_description="cafe management POS software in Vietnam",
+                                description_in_english="cafe management POS software in Vietnam")
+
+        service = IntelligenceService(AsyncMock(), MagicMock(), scout=ScoutDiscovery(
+            search, page_fetcher=page, brief_reader=brief))
+        result = await service.run_setup(str(uuid4()), "I build CafePOS, a cafe management POS software in Vietnam.")
+        kinds = {(item["name"], item["kind"]) for item in result["recommendation"]["products"]}
+        self.assertIn(("Obsidian", "competitor"), kinds)
+        self.assertNotIn(("Vietnam", "competitor"), kinds)
+        self.assertEqual([item for item in kinds if item[0] == "CafePOS"], [("CafePOS", "own")])
 
     async def test_no_saved_product_and_a_thin_request_asks_a_follow_up(self) -> None:
         result = await self.build([]).run_setup(str(uuid4()), "Find my competitors")

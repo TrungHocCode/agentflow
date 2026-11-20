@@ -22,7 +22,9 @@ from app.modules.conversations.models import (
 )
 from app.modules.conversations.events import ConversationEvent, ConversationEventPublisher
 from app.modules.conversations.ports import ConversationRepository, SetupPort
-from app.modules.conversations.tracking_intent import is_tracking_request, setup_acknowledgement, setup_report
+from app.modules.conversations.tracking_intent import (
+    is_tracking_request, setup_acknowledgement, setup_report, setup_summary,
+)
 from app.modules.workflows.ports import WorkflowRepository
 from app.shared.execution_metrics import merge_execution_timings, summarize_execution_timings
 from app.shared.llm_call_metrics import merge_llm_call_metrics, summarize_llm_call_metrics
@@ -951,6 +953,10 @@ class ConversationService:
             logger.warning("Supervisor failed on a tracking request; code routes it to setup", exc_info=True)
             return self._setup_state(setup_acknowledgement(latest))
         metadata = result_state.get("metadata") or {}
+        if metadata.get("supervisor_decision") == "setup_tracking" and not tracking:
+            # Only a message that itself asks to find or track competitors starts a search; a follow-up
+            # question about earlier results is answered with the Supervisor's own text.
+            return {**result_state, "metadata": {**metadata, "supervisor_decision": "answer"}}
         if tracking and (metadata.get("planning_failed") or metadata.get("supervisor_decision") == "propose_plan"):
             # The Supervisor must not plan competitor research from memory; its plan text no longer applies.
             return self._setup_state(setup_acknowledgement(latest))
@@ -966,14 +972,20 @@ class ConversationService:
         """Run competitor setup in this turn; a failed search still completes the turn with a retry card."""
         if self.setup_port is None:
             return result_state, None
-        supervisor_text = next(iter(self._assistant_messages(result_state.get("messages") or [])), "")
         prompt = "\n".join(user_texts)[-2000:] or latest
         try:
             ci_setup: Dict[str, Any] | None = await self.setup_port.run_setup(turn.user_id, prompt)
         except Exception:
             logger.warning("Competitor setup failed in a chat turn", exc_info=True, extra={"turn_id": turn.id})
             ci_setup = None
-        text = "\n\n".join(part for part in (supervisor_text, setup_report(latest, ci_setup)) if part)
+        # The Supervisor's text was written before the search ran, so a short model reply written from the
+        # result replaces it; code lines state the facts.
+        try:
+            lead = await self.setup_port.write_reply(latest, ci_setup)
+        except Exception:
+            logger.warning("Could not write the setup reply", exc_info=True, extra={"turn_id": turn.id})
+            lead = None
+        text = "\n\n".join((lead or setup_summary(latest, ci_setup), setup_report(latest, ci_setup)))
         metadata = {**(result_state.get("metadata") or {}), "supervisor_decision": "setup_tracking"}
         stored = ci_setup or {"product": None, "recommendation": None, "failed": True}
         return {**result_state, "messages": [AIMessage(content=text)], "plan": [], "metadata": metadata}, stored
