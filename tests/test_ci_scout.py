@@ -110,6 +110,15 @@ def no_results_batch(*_args):
                        "data": {"results": [], "queries": [{"query": "q", "status": "empty", "results": []}]}})
 
 
+class TestVietnamesePrices(unittest.TestCase):
+    def test_dong_prices_count_but_bare_per_month_does_not(self) -> None:
+        from app.modules.competitive_intelligence.scout_discovery import _PRICING_TEXT
+        for text in ("Phí 270.000 đ", "chỉ 8.000đ", "170.000 đ/tháng", "1.200.000 VNĐ", "50.000 đồng"):
+            self.assertTrue(_PRICING_TEXT.search(text), text)
+        for text in ("Dùng thử mỗi tháng", "Có 3 đại lý"):
+            self.assertFalse(_PRICING_TEXT.search(text), text)
+
+
 class TestScoutProfile(unittest.TestCase):
     def test_scout_profile_is_search_only_and_not_a_round_role(self) -> None:
         from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES

@@ -131,7 +131,9 @@ SITE_PATHS: dict[str, tuple[str, ...]] = {
     "release_notes": ("/changelog", "/release-notes", "/releases", "/whats-new"),
 }
 _PRICING_TEXT = re.compile(
-    r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
+    r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed"
+    # Vietnamese prices: "270.000 đ", "8.000đ". Bare "mỗi tháng" is not one (it is on home pages).
+    r"|\d[\d.,]*\s?(?:đồng|vnđ|đ|₫)(?!\w)", re.IGNORECASE)
 
 PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
 BriefReader = Callable[[str], Awaitable[ProductBrief | None]]

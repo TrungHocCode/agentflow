@@ -34,9 +34,12 @@ def llm_answering(*replies):
     return llm
 
 
-def fetcher(final_url, text=PAGE_TEXT):
+def fetcher(final_url, text=PAGE_TEXT, home_final="https://acme.com/"):
+    """Fake fetcher: root URLs resolve to ``home_final``, any other URL to ``final_url``."""
     async def fetch(url):
-        return {"final_url": final_url, "title": "Pricing", "text": text, "markdown": "", "links": []}
+        is_home = url.rstrip("/").count("/") == 2
+        return {"final_url": home_final if is_home else final_url, "title": "Pricing",
+                "text": "Welcome" if is_home else text, "markdown": "", "links": []}
     return fetch
 
 
@@ -80,13 +83,23 @@ class TestSourceFinder(unittest.IsolatedAsyncioTestCase):
                                    page_fetcher=fetcher("https://acme.com/"))
         self.assertFalse(result.found)
 
-    async def test_invented_quote_rejected(self) -> None:
+    async def test_quote_is_optional_and_only_kept_when_on_the_page(self) -> None:
         url = "https://acme.com/pricing"
-        result = await find_source("Acme", "acme.com", "pricing",
-                                   llm=llm_answering(final(url, "Enterprise costs $999 per seat")),
-                                   page_fetcher=fetcher(url))
-        self.assertFalse(result.found)
-        self.assertIn("quote", result.reason)
+        bare = await find_source("Acme", "acme.com", "pricing", llm=llm_answering(AIMessage(content=f"URL: {url}")),
+                                 page_fetcher=fetcher(url))
+        self.assertTrue(bare.found)
+        self.assertIsNone(bare.quote)
+        invented = await find_source("Acme", "acme.com", "pricing",
+                                     llm=llm_answering(final(url, "Enterprise costs $999 per seat")),
+                                     page_fetcher=fetcher(url))
+        self.assertTrue(invented.found)
+        self.assertIsNone(invented.quote)
+
+    async def test_brand_redirect_counts_as_same_site(self) -> None:
+        url = "https://www.notion.com/pricing"
+        result = await find_source("Notion", "notion.so", "pricing", llm=llm_answering(final(url)),
+                                   page_fetcher=fetcher(url, home_final="https://www.notion.com/"))
+        self.assertTrue(result.found)
 
     async def test_unfetchable_url_rejected(self) -> None:
         async def nothing(url):

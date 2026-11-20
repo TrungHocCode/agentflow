@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.execution.agents.base import WorkerAgent
 from app.execution.agents.resolver import GLOBAL_RUNTIME_GUIDANCE, AgentResolver
 from app.execution.state import Task
+from app.execution.tools.registry import autodiscover_tools
 from app.modules.competitive_intelligence.scout_discovery import (
     PageFetcher,
     _default_page_fetcher,
@@ -89,6 +90,7 @@ async def find_source(product_name: str, website: str, dimension: str, *, llm: B
                       page_fetcher: PageFetcher | None = None) -> SourceFinding:
     """Find ``product_name``'s own page for ``dimension`` and verify it in code."""
     base = SourceFinding(product_name=product_name, website=website, dimension=dimension, found=False)
+    autodiscover_tools()  # the CI worker may not have imported the graph, which loads tools
     answer, status, steps = await _run_worker(product_name, website, dimension, llm)
     base.steps = steps
     if status == "failed":
@@ -100,17 +102,22 @@ async def find_source(product_name: str, website: str, dimension: str, *, llm: B
         return base
     base.url = url
     host = (urlsplit(website if "//" in website else f"//{website}").hostname or "").casefold()
-    page = await (page_fetcher or _default_page_fetcher)(url)
+    fetch = page_fetcher or _default_page_fetcher
+    page = await fetch(url)
     if not page:
         base.reason = "the URL could not be fetched"
-    elif not quote or len(quote) < MIN_QUOTE_CHARS:
-        base.reason = "no usable quote in the worker's answer"
-    elif not _page_fits(dimension, host, page):
+        return base
+    hosts = [host]
+    # Brands move sites (notion.so -> notion.com): the home page's final host counts as the same site.
+    home = await fetch(f"https://{host}/")
+    alias = (urlsplit((home or {}).get("final_url") or "").hostname or "").casefold()
+    if alias and alias != host:
+        hosts.append(alias)
+    if not any(_page_fits(dimension, h, page) for h in hosts):
         base.reason = "page is off-site, the home page, or does not read like the dimension"
-    elif _squash(quote) not in _squash(f"{page.get('text', '')}\n{page.get('markdown', '')}"):
-        base.reason = "the quote does not appear on the page"
-    else:
-        base.found, base.quote = True, quote
-    if not base.found:
-        base.quote = None
+        return base
+    base.found = True
+    # The quote is informational (small models rarely give one); keep it only when the page contains it.
+    if quote and _squash(quote) in _squash(f"{page.get('text', '')} {page.get('markdown', '')}"):
+        base.quote = quote
     return base
