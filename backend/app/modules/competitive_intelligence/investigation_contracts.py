@@ -11,17 +11,18 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
 from app.modules.competitive_intelligence.models import Contract
 
 CIRole = Literal["coordinator", "source_researcher", "product_analyst", "evidence_verifier",
                  "competitive_analyst", "report_agent"]
+# CI runs only read approved pages and render briefs: no search, code execution or file writes.
+CI_TOOLS = frozenset({"news_crawler", "news_crawler_batch", "http_request", "text_summarizer",
+                      "markdown_report_generator", "chart_generator"})
+# Each role keeps the CI-safe part of its catalog profile, so tools are declared once, in the profile.
 CI_ROLE_TOOLS: dict[str, list[str]] = {
-    "source_researcher": ["news_crawler", "news_crawler_batch", "http_request"],
-    "product_analyst": ["http_request", "text_summarizer"],
-    "evidence_verifier": ["text_summarizer"],
-    # Works from the evidence in its prompt; a fetch could only fail against the approved scope.
-    "competitive_analyst": ["text_summarizer"],
-    "report_agent": ["markdown_report_generator", "chart_generator"],
+    role: [name for name in DEFAULT_AGENT_PROFILES[role].tool_names if name in CI_TOOLS]
+    for role in ("source_researcher", "product_analyst", "evidence_verifier", "competitive_analyst", "report_agent")
 }
 ROUND_VERSION = "ci-round-v1"
 MAX_ROUND_TASKS = 20

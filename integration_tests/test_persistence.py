@@ -107,9 +107,10 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
         repository = PostgresResearchRepository()
         with tempfile.TemporaryDirectory() as directory, patch.object(settings, "ARTIFACT_ROOT", directory):
             store = DurableEvidenceStore(repository, directory, self.repository)
-            agents = [WorkerAgent("source_researcher", "Collect", source_model, [crawl]),
-                      WorkerAgent("synthesis_agent", "Reconcile", synthesis_model),
-                      WorkerAgent("report_agent", "Render", report_model, [markdown_report_generator])]
+            agents = [WorkerAgent("source_researcher", "Collect", source_model, [crawl], mode="collect_evidence"),
+                      WorkerAgent("synthesis_agent", "Reconcile", synthesis_model, mode="reduce_evidence"),
+                      WorkerAgent("report_agent", "Render", report_model, [markdown_report_generator],
+                                  mode="render_report")]
             for agent in agents:
                 agent.evidence_store = store
             tasks = [Task(id=1, node="source_researcher", status="pending", description="Collect context", research_requirements=[
@@ -374,7 +375,7 @@ class TestRealPersistence(unittest.IsolatedAsyncioTestCase):
                 <= set(tables)
             )
             self.assertEqual(await connection.scalar(text("SELECT version_num FROM alembic_version")),
-                             "0011_ci_scheduling")
+                             "0012_agent_profile_mode")
 
     async def test_conversation_turn_acceptance_is_idempotent_serialized_and_replayable(self) -> None:
         repository = PostgresConversationRepository()
