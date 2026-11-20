@@ -83,12 +83,15 @@ _OWN_PRODUCT_VI = re.compile(
     r"([A-Z][A-Za-z0-9&.+_-]*)")
 # Editorial pages rank highly for competitor searches but are not products to track.
 _ARTICLE_TITLE = re.compile(
-    r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked)\b", re.IGNORECASE)
+    r"\b(?:best|top\s+\d+|\d+\s+top|alternatives?|vs\.?|versus|compared|comparison|reviews?|ranked|"
+    r"tốt nhất|hàng đầu)\b", re.IGNORECASE)
 _NAME_SEPARATOR = re.compile(r"\s*[:|]\s+|\s+[\u2013\u2014-]\s+")
 _TRAILING_PAGE_WORD = re.compile(r"\s+(?:pricing|plans?|prices?|features?|integrations?)$", re.IGNORECASE)
 _TOKEN = re.compile(r"[a-z0-9]+")
 # The category in "I make NoteNest, a markdown note-taking app for Mac." -> "markdown note-taking app for Mac".
 _CATEGORY = re.compile(r"\b(?:an?|the)\s+([^.;!?]{3,80}?)\s*(?:[.;!?]|$)", re.IGNORECASE)
+# The user's own description of the product in Vietnamese, after "<own>,": "CafePOS, phần mềm quản lý quán cafe".
+_DESCRIPTION_AFTER_NAME = r",\s*([^,.;!?\n]{3,80})"
 # A product is the user's own only when the request says so ("I make", "our app", "tôi bán", "của mình").
 # Measured: from "Track pricing of Notion and Obsidian." qwen3:8b made Notion the user's product.
 _OWNERSHIP = re.compile(
@@ -128,6 +131,15 @@ _SECTION_FIRST_WORDS = {
 }
 # Templates and single forum threads mention a dimension without being the product's page for it.
 _NOT_A_SOURCE_PATH = re.compile(r"/(?:templates?|t)/", re.IGNORECASE)
+# What a page's URL says when it is the product's page for a dimension. Measured: Logseq, KiotViet and iPOS
+# searches returned blog posts about other topics as their "pricing" or "features" page.
+_DIMENSION_LINK: dict[str, re.Pattern[str]] = {
+    "pricing": re.compile(r"pric|plans?\b|bang-gia|bảng-giá|goi-cuoc|gia-ban", re.IGNORECASE),
+    "features": re.compile(r"features?|tinh-nang", re.IGNORECASE),
+    "integrations": re.compile(r"integrations?|tich-hop|marketplace", re.IGNORECASE),
+    "release_notes": re.compile(r"changelog|release|whats-new|cap-nhat", re.IGNORECASE),
+}
+MAX_HOME_LINKS = 3
 
 SearchToolCaller = Callable[[list[str], int], Any | Awaitable[Any]]
 
@@ -325,8 +337,8 @@ def _listed_names(markdown: str) -> list[str]:
     return names
 
 
-def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
-    """The first result domain that is plausibly the product's own (bear.app for "Bear Notes").
+def _site_record(name: str, records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The first result whose domain is plausibly the product's own (bear.app for "Bear Notes").
 
     The domain name must be the product name or part of it; a longer one (craftybase.com for "Craft") is another firm.
     """
@@ -335,8 +347,13 @@ def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
         domain = _registrable_domain(str(record.get("url") or ""))
         label = _compact(domain.split(".")[0]) if domain else ""
         if label and (label == wanted or (len(label) >= 4 and label in wanted and domain not in _PLATFORM_DOMAINS)):
-            return domain
+            return record
     return None
+
+
+def _site_of(name: str, records: list[dict[str, Any]]) -> str | None:
+    record = _site_record(name, records)
+    return _registrable_domain(str(record.get("url") or "")) if record else None
 
 
 def _compact(value: str) -> str:
@@ -400,12 +417,16 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
             model_named = list(named)  # a small model sometimes drops names it was given
         named = list(dict.fromkeys(name for name in model_named if name.casefold() != str(own).casefold()))
         model_category = " ".join(str(brief.category or "").split())[:80]
-        # Trust the model's category only when the request itself describes the product. Measured: from a
+        # Use a category only when the request itself describes the product. Measured: from a
         # bare name, qwen3 guessed "Productivity Tools" (8B) or "note-taking applications" (4B), and the
         # search then found Slack and Miro.
         described = _describes_product(prompt, [*([own] if own else []), *named])
         if model_category and "://" not in model_category and described:
-            category = model_category
+            # Measured: qwen3 4B and 8B broadened "a markdown note-taking app for Mac" to "note-taking apps" and
+            # found OneNote instead of Bear; the user's own words found the right field. Only Vietnamese needs
+            # the model, which translates it for the English search.
+            if _VIETNAMESE.search(prompt) or not category:
+                category = model_category
         elif own is None:
             category = None  # without the user's product, "the ..." is rarely its description
     return _Request(prompt=prompt, own=own, named=named, category=category, dimensions=dimensions)
@@ -499,6 +520,23 @@ class ScoutDiscovery:
                     continue
                 return RecommendedSource(url=url, kind=dimension, provenance="site_crawl",
                                          note=" ".join(page.get("title", "").split())[:500])
+        # The usual paths missed (/bang-gia-phan-mem): follow the home page's own links for the dimension.
+        try:
+            home = await self.page_fetcher(f"https://{host}/")
+        except Exception:
+            home = None
+        candidates = [link for link in dict.fromkeys((home or {}).get("links", []))
+                      if _DIMENSION_LINK[dimension].search(urlsplit(link).path)
+                      and same_site((urlsplit(link).hostname or "").casefold(), host)]
+        for link in candidates[:MAX_HOME_LINKS]:
+            try:
+                page = await self.page_fetcher(link)
+                if page and _page_fits(dimension, host, page):
+                    note = " ".join(page.get("title", "").split())[:500]
+                    return RecommendedSource(url=public_url(page["final_url"]), kind=dimension,
+                                             provenance="site_crawl", note=note)
+            except Exception:
+                continue
         return None
 
     async def _understand(self, prompt: str) -> _Request:
@@ -527,6 +565,11 @@ class ScoutDiscovery:
         elif category := request.category:
             # Nobody named: "best X" articles list the field; stage A reads their headings.
             queries = [f"best {category}", f"{category} alternatives"]
+            # Local products rank for the user's own words (measured: English-only found Toast and Square for a
+            # Vietnamese cafe POS), so the Vietnamese description is searched first.
+            if _VIETNAMESE.search(prompt) and own and (
+                    described := re.search(re.escape(own) + _DESCRIPTION_AFTER_NAME, prompt)):
+                queries.insert(0, f"{described.group(1).strip()} tốt nhất")
         elif terms:
             queries.append(" ".join(terms[:4] + ["competitors", "alternatives"]))
             if dimensions:
@@ -569,7 +612,7 @@ class ScoutDiscovery:
 
         terms, own = request.terms, request.own
         if not request.named:
-            listed = await self._listed_products(records, own)
+            listed = await self._listed_products(records, own, request.category)
             if listed:
                 return self._with_own(listed, own)
         elif _VIETNAMESE.search(prompt):
@@ -656,7 +699,8 @@ class ScoutDiscovery:
                                                rationale="Named in your request as your own product."))
         return products
 
-    async def _listed_products(self, records: list[dict[str, Any]], own: str | None) -> list[RecommendedProduct]:
+    async def _listed_products(self, records: list[dict[str, Any]], own: str | None,
+                               category: str | None = None) -> list[RecommendedProduct]:
         """Read the top "best X" articles and keep the products they list that have a website of their own."""
         articles: list[dict[str, Any]] = []
         article_domains: set[str] = set()
@@ -670,6 +714,7 @@ class ScoutDiscovery:
             return []
         pages = await asyncio.gather(*(self.page_fetcher(str(record["url"])) for record in articles),
                                      return_exceptions=True)
+        read = sum(isinstance(page, dict) for page in pages)
         counts: dict[str, int] = {}
         names: dict[str, str] = {}
         listed_by: dict[str, list[str]] = {}
@@ -693,11 +738,21 @@ class ScoutDiscovery:
         ranked = sorted(counts, key=lambda key: -counts[key])[:MAX_PRODUCTS]
         # The articles usually link each product's own site; search only for the names they do not.
         sites = {key: _site_of(names[key], links) for key in ranked}
-        unresolved = [key for key in ranked if sites[key] is None][:MAX_BATCH_QUERIES]
+        # Measured: section headings ("Stay Organized", "For Students") each cost a lookup, so a name that one
+        # article lists and does not link is dropped; with a single article read, its names are all it has.
+        unresolved = [key for key in ranked if sites[key] is None
+                      and counts[key] >= min(2, read)][:MAX_BATCH_QUERIES]
         if unresolved:
             # Pricing pages live on the product's own site; "<name> official website" mostly finds directories.
             lookups = await self._search([f"{names[key]} pricing" for key in unresolved], MAX_RESULTS_PER_QUERY)
-            sites.update({key: _site_of(names[key], lookups) for key in unresolved})
+            topic = {token for token in _tokens(category or "") if len(token) >= 3 and token not in _STOPWORDS}
+            for key in unresolved:
+                record = _site_record(names[key], lookups)
+                text = f"{record.get('title') or ''} {record.get('snippet') or ''}" if record else ""
+                # Measured: "Atlas" resolved to a mapping company; a namesake shares no word with the category.
+                if record and topic and not topic & _tokens(text):
+                    record = None
+                sites[key] = _registrable_domain(str(record.get("url") or "")) if record else None
         products: list[RecommendedProduct] = []
         seen: set[str] = set()
         for key in ranked:
@@ -767,7 +822,12 @@ class ScoutDiscovery:
             if not matches:
                 continue
             key = matches[0]
-            if _NOT_A_SOURCE_PATH.search(urlsplit(raw_url).path):
+            path = urlsplit(raw_url).path
+            if _NOT_A_SOURCE_PATH.search(path):
+                continue
+            # A blog post about something else is not the page (measured: Logseq, KiotViet, iPOS).
+            pattern = _DIMENSION_LINK[dimension]
+            if not (pattern.search(path) or pattern.search(str(record.get("title") or ""))):
                 continue
             try:
                 public_url(raw_url)
