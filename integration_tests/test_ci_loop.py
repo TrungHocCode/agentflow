@@ -148,7 +148,8 @@ class TestCIRealLoop(unittest.IsolatedAsyncioTestCase):
         tasks = await self.hooks.on_task_completed(run2, self.researcher_task(), "done")
         self.assertTrue(tasks)
         roles = {task.agent_id for task in tasks}
-        self.assertTrue({"source_researcher", "evidence_verifier"} <= roles)
+        # Code already found the change; a round only asks the analyst what it means.
+        self.assertEqual(roles, {"competitive_analyst"})
         self.assertTrue(all(task.config.get("investigation_round_id") for task in tasks))
         run2 = await self.complete_run(run2.run_id)
         await self.hooks.on_run_completed(run2)

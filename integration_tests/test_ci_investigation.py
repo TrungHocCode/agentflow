@@ -137,7 +137,7 @@ class TestCIRealInvestigation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outcome, "accepted")
         stored, outcome = await self.investigation.propose_round(
             self.run_id, self.watchlist.id, self.revision_id, self.owner, [], [self.candidate()],
-            self.scope, InvestigationBudget(max_tasks=1), 0, 0, 0, False, NOW)
+            self.scope, InvestigationBudget(max_tasks=1), 0, 0, 1, False, NOW)  # one task already spent
         self.assertEqual((outcome, stored.status), ("rejected", "rejected"))
         self.assertTrue(stored.rejection_reasons)
         with self.assertRaises(ConflictError):
