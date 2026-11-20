@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     LLM_CHAT_MODEL: str = "qwen3:0.6b"
     LLM_PLANNER_MODEL: str = "qwen3:8b"
     LLM_WORKER_MODEL: str = "qwen3:8b"
+    # Thinking mode for hybrid models such as qwen3:8b: None keeps the model default (qwen3 thinks,
+    # which is several times slower); False turns it off. Instruct-only models ignore it.
+    LLM_THINKING: bool | None = None
     # Explicit context policy; estimates are conservative, not provider token counts.
     LLM_CONTEXT_TOKENS: int = Field(default=8192, ge=2048)
     LLM_OUTPUT_TOKENS: int = Field(default=1024, ge=128)

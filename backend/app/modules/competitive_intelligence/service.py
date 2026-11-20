@@ -114,7 +114,8 @@ class IntelligenceService:
         """Return search-grounded competitor candidates; nothing is persisted or approved."""
 
         products = await self._scout_round(owner_id, lambda: self.scout.stage_a(prompt))
-        return SetupRecommendation(products=products, warnings=list(self.scout.warnings)[:16])
+        return SetupRecommendation(products=products, suggested_dimensions=self.scout.dimensions[:4],
+                                   warnings=list(self.scout.warnings)[:16])
 
     async def discover_sources(self, domains: list[str], dimension: str,
                                owner_id: str) -> dict[str, list[RecommendedSource]]:
