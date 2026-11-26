@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage
@@ -12,18 +12,22 @@ from langchain_core.messages import AIMessage
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend")))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
 from app.modules.competitive_intelligence.models import MyProduct
 from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.setup_recommend import ProductBrief
 from app.modules.conversations.service import ConversationService
+from app.modules.conversations.tracking_intent import setup_report, setup_summary
 from test_modular_monolith import FakeConversationRepository, FakeExecutionPort
 
 SETUP = {
     "product": {"name": "NoteNest", "description": "a markdown app", "source": "default",
                 "my_product_id": str(uuid4())},
-    "recommendation": {"products": [{"name": "Obsidian", "kind": "competitor"},
-                                    {"name": "Notion", "kind": "competitor"}], "follow_up_question": None},
+    "recommendation": {"products": [{"name": "Obsidian", "kind": "competitor", "suggested": True},
+                                    {"name": "Notion", "kind": "competitor", "suggested": True},
+                                    {"name": "Irs", "kind": "competitor", "suggested": False}],
+                       "follow_up_question": None},
 }
 ASK = {"product": {"name": "", "description": "", "source": "message", "my_product_id": None},
        "recommendation": {"products": [], "follow_up_question": "What does your product do?"}}
@@ -161,6 +165,42 @@ class ChatSetupRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(turn.status, "completed")
         self.assertIn("Search again", message.content)
         self.assertEqual(message.metadata["ci_setup"], {"product": None, "recommendation": None, "failed": True})
+
+
+def junk_setup(text_products) -> dict:
+    return {"product": SETUP["product"], "recommendation": {"products": text_products, "follow_up_question": None}}
+
+
+class SuggestedOnlyTests(unittest.IsolatedAsyncioTestCase):
+
+    def test_report_lists_only_suggested_competitors(self) -> None:
+        report = setup_report("Find my competitors", SETUP)
+        self.assertIn("Suggested competitors: Obsidian, Notion.", report)
+        self.assertNotIn("Irs", report)
+
+    def test_report_without_suggested_points_to_the_card(self) -> None:
+        junk = junk_setup([{"name": "Irs", "kind": "competitor", "suggested": False},
+                           {"name": "Top 8 POS features", "kind": "competitor", "suggested": False}])
+        self.assertIn("No clear competitors found. The card lists 2 search results to check",
+                      setup_report("Find my competitors", junk))
+        self.assertIn("2 kết quả tìm kiếm", setup_report("Tìm đối thủ của tôi", junk))
+        self.assertNotIn("Irs", setup_report("Find my competitors", junk))
+        self.assertEqual(setup_summary("Find my competitors", junk), "I did not find any competitors.")
+        self.assertIn("No competitors were found.", setup_report("x", junk_setup([])))
+
+    async def test_reply_facts_split_found_and_unchecked(self) -> None:
+        captured = []
+        model = MagicMock()
+
+        async def fake_invoke(messages):
+            captured.append(json.loads(messages[1].content))
+            return AIMessage(content="ok")
+
+        model.ainvoke = fake_invoke
+        with patch("app.infrastructure.ci_setup_planner.get_llm", return_value=model):
+            await OllamaSetupPlanner().write_setup_reply("Find my competitors", SETUP)
+        facts = captured[0]
+        self.assertEqual((facts["competitors_found"], facts["unchecked_results"]), (["Obsidian", "Notion"], 1))
 
 
 def product(name: str, **fields) -> MyProduct:

@@ -75,18 +75,21 @@ class OllamaSetupPlanner:
         import re
 
         recommendation = (setup or {}).get("recommendation") or {}
+        competitors = [item for item in recommendation.get("products") or [] if item.get("kind") == "competitor"]
         facts = {
             "user_message": message.strip()[:2000],
             "product_used": ((setup or {}).get("product") or {}).get("name") or None,
-            "competitors_found": [item["name"] for item in recommendation.get("products") or []
-                                  if item.get("kind") == "competitor"][:10],
+            "competitors_found": [item["name"] for item in competitors if item.get("suggested")][:10],
+            "unchecked_results": sum(1 for item in competitors if not item.get("suggested")),
             "follow_up_question": recommendation.get("follow_up_question"),
             "search_failed": setup is None or bool(setup.get("failed")),
         }
         system = (
             "Reply to the user in one or two short plain sentences, in the language of user_message. Use only "
             "the facts given. Say what the search found. If competitors_found is not empty, tell the user to pick "
-            "the competitors to track and press Find source URLs in the card below. If follow_up_question is set, "
+            "the competitors to track and press Find source URLs in the card below. If competitors_found is empty and "
+            "unchecked_results is above 0, say no clear competitors were found and the card below has search "
+            "results to check. If follow_up_question is set, "
             "say one more detail is needed; the question itself is shown separately, so do not repeat it. If "
             "search_failed is true, say the search failed and Search again in the card retries it. Never name a "
             "competitor that is not in competitors_found, and never ask for information user_message already "

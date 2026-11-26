@@ -39,6 +39,12 @@ def setup_acknowledgement(text: str) -> str:
     return "Mình sẽ tìm đối thủ ngay." if is_vietnamese(text) else "I'll look for competitors now."
 
 
+def _competitors(recommendation: dict[str, Any], suggested: bool) -> list[dict[str, Any]]:
+    """Competitor candidates that are (suggested=True) or are not (False) ticked by the search."""
+    return [item for item in recommendation.get("products") or []
+            if item.get("kind") == "competitor" and bool(item.get("suggested")) is suggested]
+
+
 def setup_summary(text: str, setup: dict[str, Any] | None) -> str:
     """Code-written lead sentence, used when the model cannot write one from the search result."""
     vietnamese = is_vietnamese(text)
@@ -47,7 +53,7 @@ def setup_summary(text: str, setup: dict[str, Any] | None) -> str:
         return "Mình chưa tìm được đối thủ lần này." if vietnamese else "I could not finish the competitor search."
     if recommendation.get("follow_up_question"):
         return "Mình cần thêm một thông tin trước khi tìm." if vietnamese else "I need one more detail before I search."
-    if not recommendation.get("products"):
+    if not _competitors(recommendation, suggested=True):
         return "Mình không tìm thấy đối thủ nào." if vietnamese else "I did not find any competitors."
     return ("Mình đã tìm được vài đối thủ; hãy chọn đối thủ muốn theo dõi rồi bấm “Find source URLs” ở thẻ bên dưới."
             if vietnamese else
@@ -69,8 +75,15 @@ def setup_report(text: str, setup: dict[str, Any] | None) -> str:
     question = recommendation.get("follow_up_question")
     if question:
         return f"{using}\n\n{question}" if name else question
-    names = [item["name"] for item in recommendation.get("products") or [] if item.get("kind") == "competitor"]
+    names = [item["name"] for item in _competitors(recommendation, suggested=True)]
     if not names:
+        unchecked = len(_competitors(recommendation, suggested=False))
+        if unchecked:
+            return f"{using}\n\n" + (
+                f"Chưa thấy đối thủ nào rõ ràng. Thẻ bên dưới có {unchecked} kết quả tìm kiếm để bạn kiểm tra, "
+                "hoặc hãy thêm đối thủ bạn biết." if vietnamese else
+                f"No clear competitors found. The card lists {unchecked} search results to check, "
+                "or add competitors you know.")
         return f"{using}\n\n" + ("Chưa tìm thấy đối thủ nào." if vietnamese else "No competitors were found.")
     listed = ", ".join(names[:MAX_LISTED_COMPETITORS])
     return f"{using}\n\n" + (f"Đối thủ gợi ý: {listed}." if vietnamese else f"Suggested competitors: {listed}.")
