@@ -95,7 +95,7 @@ class Settings(BaseSettings):
     # Let the Supervisor choose the next action at CI run decision points; off keeps code-planned rounds.
     CI_SUPERVISOR_DECISIONS: bool = False
     # Let a model-driven Scout read comparison pages when the request names no rival; off keeps the article rules.
-    CI_SCOUT_AGENT: bool = False
+    CI_SCOUT_AGENT: bool = True
 
     @model_validator(mode="after")
     def validate_context_policy(self) -> "Settings":
