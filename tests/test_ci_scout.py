@@ -110,6 +110,27 @@ def no_results_batch(*_args):
                        "data": {"results": [], "queries": [{"query": "q", "status": "empty", "results": []}]}})
 
 
+class TestVietnamesePrices(unittest.TestCase):
+    def test_dong_prices_count_but_bare_per_month_does_not(self) -> None:
+        from app.modules.competitive_intelligence.scout_discovery import _PRICING_TEXT
+        for text in ("Phí 270.000 đ", "chỉ 8.000đ", "170.000 đ/tháng", "1.200.000 VNĐ", "50.000 đồng"):
+            self.assertTrue(_PRICING_TEXT.search(text), text)
+        for text in ("Dùng thử mỗi tháng", "Có 3 đại lý"):
+            self.assertFalse(_PRICING_TEXT.search(text), text)
+
+
+class TestLanguageHomePage(unittest.TestCase):
+    def test_bare_language_path_is_a_home_page(self) -> None:
+        from app.modules.competitive_intelligence.scout_discovery import _page_fits
+
+        def page(path: str) -> dict:
+            return {"final_url": f"https://ipos.vn{path}", "title": "", "text": "Giá 4.900.000 VND"}
+
+        for path in ("/en/", "/vi", "/en-us", "/pt_BR/"):
+            self.assertFalse(_page_fits("pricing", "ipos.vn", page(path)), path)
+        self.assertTrue(_page_fits("pricing", "ipos.vn", page("/en/pricing")))
+
+
 class TestScoutProfile(unittest.TestCase):
     def test_scout_profile_is_search_only_and_not_a_round_role(self) -> None:
         from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES

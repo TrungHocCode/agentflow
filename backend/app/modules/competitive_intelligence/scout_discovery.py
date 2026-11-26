@@ -131,7 +131,9 @@ SITE_PATHS: dict[str, tuple[str, ...]] = {
     "release_notes": ("/changelog", "/release-notes", "/releases", "/whats-new"),
 }
 _PRICING_TEXT = re.compile(
-    r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed", re.IGNORECASE)
+    r"[$€£¥₹₫]\s?\d|\d[\d.,]*\s?(?:USD|EUR|GBP|VND)\b|per (?:month|user|seat|member)|/mo\b|billed"
+    # Vietnamese prices: "270.000 đ", "8.000đ". Bare "mỗi tháng" is not one (it is on home pages).
+    r"|\d[\d.,]*\s?(?:đồng|vnđ|đ|₫)(?!\w)", re.IGNORECASE)
 
 PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
 BriefReader = Callable[[str], Awaitable[ProductBrief | None]]
@@ -185,7 +187,10 @@ async def _default_page_fetcher(url: str) -> dict[str, Any] | None:
 def _page_fits(dimension: str, host: str, page: dict[str, Any]) -> bool:
     """A probed page counts only if it stayed on the site, is not the home page, and reads like the dimension."""
     final = urlsplit(page.get("final_url") or "")
-    if not final.hostname or not same_site(final.hostname.casefold(), host) or final.path.strip("/") == "":
+    path = final.path.strip("/")
+    # A bare language code (/en/, /vi, /pt_BR) is a localized home page.
+    if (not final.hostname or not same_site(final.hostname.casefold(), host) or path == ""
+            or re.fullmatch(r"[a-z]{2}(?:[-_][a-z]{2})?", path, re.IGNORECASE)):
         return False
     text = f"{page.get('title', '')}\n{page.get('text', '')[:4000]}"
     if dimension == "pricing":
