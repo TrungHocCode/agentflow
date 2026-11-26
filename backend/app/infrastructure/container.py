@@ -1,9 +1,13 @@
 """Composition helpers for wiring concrete adapters into application services."""
 
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.execution.adapters import LangGraphExecutionAdapter
 from app.execution.agents.resolver import AgentResolver
+from app.execution.llm import get_llm
+from app.execution.model_router import InferencePurpose
 from app.execution.ports import ExecutionPort
 from app.infrastructure.health_probe import DatabaseHealthProbe
 from app.infrastructure.model_probe import OllamaModelProbe
@@ -50,6 +54,7 @@ from app.infrastructure.postgres.intelligence_schedule_repository import Postgre
 from app.infrastructure.artifacts.snapshot_blobs import SnapshotFileStore
 from app.infrastructure.artifacts.brief_blobs import BriefFileStore
 from app.infrastructure.ci_setup_planner import OllamaSetupPlanner
+from app.modules.competitive_intelligence.scout_agent import discover_competitors
 from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.service import IntelligenceService
 from app.modules.competitive_intelligence.snapshot_service import SnapshotService
@@ -181,12 +186,19 @@ def build_research_result_service(session: AsyncSession | None = None) -> Resear
     return ResearchResultService(PostgresResearchRepository(session))
 
 
+async def _scout_agent(*args: Any, **kwargs: Any) -> Any:
+    """Run the Scout agent on the worker model (built per call; IntelligenceService copies the scout)."""
+    return await discover_competitors(*args, llm=get_llm(purpose=InferencePurpose.WORKER, temperature=0), **kwargs)
+
+
 def build_intelligence_service(session: AsyncSession) -> IntelligenceService:
     rate_limiter = NoopRateLimiter() if settings.REPOSITORY_BACKEND == "memory" else RedisRateLimiter()
     planner = OllamaSetupPlanner()
+    scout = ScoutDiscovery(brief_reader=planner.read_brief,
+                           competitor_agent=_scout_agent if settings.CI_SCOUT_AGENT else None)
     return IntelligenceService(PostgresIntelligenceRepository(), build_run_service(session),
                                PostgresConversationRepository(), planner,
-                               scout=ScoutDiscovery(brief_reader=planner.read_brief), rate_limiter=rate_limiter,
+                               scout=scout, rate_limiter=rate_limiter,
                                my_products=PostgresMyProductRepository())
 
 

@@ -132,13 +132,14 @@ class TestLanguageHomePage(unittest.TestCase):
 
 
 class TestScoutProfile(unittest.TestCase):
-    def test_scout_profile_is_search_only_and_not_a_round_role(self) -> None:
+    def test_scout_profile_is_read_only_and_not_a_round_role(self) -> None:
         from app.execution.agents.resolver import DEFAULT_AGENT_PROFILES
         from app.modules.competitive_intelligence.investigation_contracts import CI_ROLE_TOOLS
         from app.modules.competitive_intelligence.service import SAFE_ROLES
 
         profile = DEFAULT_AGENT_PROFILES["scout"]
-        self.assertEqual(set(profile.tool_names), {"web_search", "web_search_batch"})
+        self.assertEqual(set(profile.tool_names), {"web_search", "fetch_page"})
+        self.assertEqual(profile.mode, "tool_loop")
         self.assertEqual(profile.runtime_name, "worker")
         self.assertNotIn("scout", CI_ROLE_TOOLS)
         self.assertNotIn("scout", SAFE_ROLES)

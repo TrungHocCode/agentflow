@@ -139,6 +139,9 @@ _PRICING_TEXT = re.compile(
 
 PageFetcher = Callable[[str], Awaitable[dict[str, Any] | None]]
 BriefReader = Callable[[str], Awaitable[ProductBrief | None]]
+# Model-driven competitor discovery: (own, description, local description, market, page_fetcher=, search=) ->
+# (verified products, warnings). It raises when the worker fails or times out.
+CompetitorAgent = Callable[..., Awaitable[tuple[list[RecommendedProduct], list[str]]]]
 
 
 @dataclass(frozen=True)
@@ -483,11 +486,14 @@ class ScoutDiscovery:
     """Deterministic staged discovery over the registered batch search tool."""
 
     def __init__(self, search_tool_caller: SearchToolCaller | None = None,
-                 page_fetcher: PageFetcher | None = None, brief_reader: BriefReader | None = None) -> None:
+                 page_fetcher: PageFetcher | None = None, brief_reader: BriefReader | None = None,
+                 competitor_agent: CompetitorAgent | None = None) -> None:
         self.search_tool_caller = search_tool_caller or _default_search_tool_caller
         self.page_fetcher = page_fetcher or _default_page_fetcher
         # Optional model that reads the request; without it, keyword rules alone pick the search terms.
         self.brief_reader = brief_reader
+        # Optional: when set, a request that names no rival is tried with the agent before the article path.
+        self.competitor_agent = competitor_agent
         self.warnings: list[str] = []
         self.dimensions: list[str] = []
         self.follow_up_question: str | None = None
@@ -627,6 +633,10 @@ class ScoutDiscovery:
             # giúp mình" searched "best Marketing" and returned Barbie and Diablo IV).
             self.follow_up_question = _follow_up_question(request)
             return []
+        if not request.named and request.category and self.competitor_agent is not None:
+            found = await self._agent_products(request)
+            if found:
+                return self._with_own(found, request.own)
         queries = self._competitor_queries(request)
         if not queries:
             self._warn("Could not derive competitor search terms from the prompt.")
@@ -711,6 +721,23 @@ class ScoutDiscovery:
             self._warn("Truncated competitor candidates to one per domain.")
         if not products:
             self._warn("Search results did not contain usable competitor domains.")
+        return products
+
+    async def _agent_products(self, request: _Request) -> list[RecommendedProduct]:
+        """Ask the agent; empty (with a warning naming the path) when it fails, finds nothing or nothing survives."""
+        assert self.competitor_agent is not None and request.category
+        try:
+            products, warnings = await self.competitor_agent(
+                request.own, request.category, request.local_description, request.market,
+                page_fetcher=self.page_fetcher, search=self._search)
+        except Exception as exc:  # Any failure or timeout falls back to the article path.
+            products, warnings = [], [f"Scout agent failed ({type(exc).__name__})."]
+        for warning in warnings:
+            self._warn(warning)
+        self._warn("Competitors came from the Scout agent." if products
+                   else "Scout agent found no verified competitors; used the comparison-article path.")
+        # The agent's lookups may have used the stage's search budget; the article path needs its own.
+        self._stage_calls = 0
         return products
 
     @staticmethod
