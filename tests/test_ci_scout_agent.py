@@ -34,10 +34,10 @@ class Harness:
         self.queries.append(queries)
         return self.lookups
 
-    async def run(self, answer, own="NoteNest", status="done"):
+    async def run(self, answer, own="NoteNest", status="done", description=DESCRIPTION):
         with patch.object(scout_agent, "_run_worker", AsyncMock(return_value=(answer, status, 3))), \
                 patch.object(scout_agent, "autodiscover_tools"):
-            return await discover_competitors(own, DESCRIPTION, None, "global", llm=object(),
+            return await discover_competitors(own, description, None, "global", llm=object(),
                                               page_fetcher=self.fetch, search=self.search)
 
 
@@ -80,7 +80,7 @@ class TestScoutAgentChecks(unittest.IsolatedAsyncioTestCase):
         products, _ = await h.run(f"PRODUCT: Bear | SOURCE: {LIST_URL}")
         self.assertEqual(products, [])
 
-    async def test_suggested_needs_two_source_domains_or_a_passing_lookup(self) -> None:
+    async def test_suggested_when_site_is_linked_or_lookup_passes_or_two_sources(self) -> None:
         lookups = [{"url": "https://craft.do/pricing", "title": "Craft pricing", "snippet": "markdown notes"}]
         h = Harness({LIST_URL: page("Obsidian, Bear and Craft: markdown note taking apps for Mac.",
                                     ["https://obsidian.md/", "https://bear.app/"]),
@@ -89,7 +89,13 @@ class TestScoutAgentChecks(unittest.IsolatedAsyncioTestCase):
             f"PRODUCT: Obsidian | SOURCE: {LIST_URL}\nPRODUCT: Obsidian | SOURCE: {LIST_URL_2}\n"
             f"PRODUCT: Bear | SOURCE: {LIST_URL}\nPRODUCT: Craft | SOURCE: {LIST_URL}")
         self.assertEqual({p.name: p.suggested for p in products},
-                         {"Obsidian": True, "Bear": False, "Craft": True})
+                         {"Obsidian": True, "Bear": True, "Craft": True})
+
+    async def test_lookup_without_topic_words_stays_unticked(self) -> None:
+        lookups = [{"url": "https://craft.do/pricing", "title": "Craft pricing", "snippet": "notes"}]
+        h = Harness({LIST_URL: page("Craft is a note taking app.")}, lookups)
+        products, _ = await h.run(f"PRODUCT: Craft | SOURCE: {LIST_URL}", description="")
+        self.assertEqual({p.name: p.suggested for p in products}, {"Craft": False})
 
     async def test_failed_worker_raises(self) -> None:
         with self.assertRaises(RuntimeError):

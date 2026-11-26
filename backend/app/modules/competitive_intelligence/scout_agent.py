@@ -132,7 +132,9 @@ async def discover_competitors(own: str | None, description: str, local_descript
 
     sites = {key: _site_of(names[key], links) for key in names}
     unresolved = [key for key in names if sites[key] is None][:MAX_BATCH_QUERIES]
-    lookup_passed: set[str] = set()
+    # A site taken from a link on a cited page, or found by a lookup that passed the topic check, is trusted;
+    # only a lookup with no topic words to check leaves the product unticked (unless two sources list it).
+    trusted = {key for key in names if sites[key] is not None}
     if unresolved:
         records = await search([f"{names[key]} pricing" for key in unresolved], MAX_RESULTS_PER_QUERY)
         for key in unresolved:
@@ -144,7 +146,7 @@ async def discover_competitors(own: str | None, description: str, local_descript
             if record:
                 sites[key] = _registrable_domain(str(record.get("url") or ""))
                 if topic:
-                    lookup_passed.add(key)
+                    trusted.add(key)
 
     products: list[RecommendedProduct] = []
     seen: set[str] = set()
@@ -154,7 +156,7 @@ async def discover_competitors(own: str | None, description: str, local_descript
             continue
         seen.add(domain)
         products.append(RecommendedProduct(
-            name=names[key], kind="competitor", suggested=len(listed_by[key]) >= 2 or key in lookup_passed,
+            name=names[key], kind="competitor", suggested=len(listed_by[key]) >= 2 or key in trusted,
             company="", official_website=f"https://{domain}/", sources=[], provenance="web_search",
             rationale=f"Listed on {', '.join(sorted(listed_by[key]))} (found by the Scout agent)."[:500]))
         if len(products) >= MAX_PRODUCTS:
