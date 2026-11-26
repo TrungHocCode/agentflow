@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import logging
+import copy
+import re
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 from app.core.config import settings
 from app.modules.competitive_intelligence.investigation_contracts import CI_ROLE_TOOLS, CI_TOOLS
 from app.modules.competitive_intelligence.models import (
-    CreateWatchlist, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
+    CreateWatchlist, MyProduct, Page, Pagination, ProductProfileVersion, ProductView, Revision, SourceView, StartRunRequest,
     UpdateWatchlist, Watchlist, digest, public_url,
 )
 from app.modules.competitive_intelligence.scout_discovery import ScoutDiscovery
 from app.modules.competitive_intelligence.setup_recommend import (
     MAX_RECOMMENDED_PRODUCTS, MAX_RECOMMENDED_SOURCES, RecommendedProduct, RecommendedSource, SetupRecommendation,
 )
-from app.modules.competitive_intelligence.ports import IntelligenceRepository, SetupPlanner
+from app.modules.competitive_intelligence.ports import IntelligenceRepository, MyProductRepository, SetupPlanner
 from app.modules.conversations.ports import ConversationRepository
 from app.modules.runs.models import RunDocument, RunResponse
 from app.modules.runs.service import RunService
@@ -37,8 +39,10 @@ SAFE_TOOLS = CI_TOOLS
 class IntelligenceService:
     def __init__(self, repository: IntelligenceRepository, runs: RunService,
                  conversations: ConversationRepository | None = None, planner: SetupPlanner | None = None,
-                 scout: ScoutDiscovery | None = None, rate_limiter: RateLimiter | None = None) -> None:
+                 scout: ScoutDiscovery | None = None, rate_limiter: RateLimiter | None = None,
+                 my_products: MyProductRepository | None = None) -> None:
         self.repository, self.run_service = repository, runs
+        self.my_products = my_products
         self.conversations, self.planner = conversations, planner
         self.scout = scout if scout is not None else ScoutDiscovery()
         # Composition injects the shared limiter, which hashes the identifier into
@@ -110,19 +114,51 @@ class IntelligenceService:
             warnings.append(f"Truncated to {MAX_RECOMMENDED_PRODUCTS} products; refine the description.")
         return raw.model_copy(update={"products": products, "warnings": warnings[:16]})
 
-    async def discover_competitors(self, prompt: str, owner_id: str) -> SetupRecommendation:
+    async def discover_competitors(self, prompt: str, owner_id: str, product: MyProduct | None = None,
+                                   fallback: MyProduct | None = None) -> SetupRecommendation:
         """Return search-grounded competitor candidates; nothing is persisted or approved."""
 
-        products = await self._scout_round(owner_id, lambda: self.scout.stage_a(prompt))
-        return SetupRecommendation(products=products, suggested_dimensions=self.scout.dimensions[:4],
-                                   warnings=list(self.scout.warnings)[:16],
-                                   follow_up_question=self.scout.follow_up_question)
+        return (await self._discover(prompt, owner_id, product, fallback))[0]
+
+    async def _discover(self, prompt: str, owner_id: str, product: MyProduct | None,
+                        fallback: MyProduct | None) -> tuple[SetupRecommendation, ScoutDiscovery]:
+        """Search with a per-call copy of the Scout: its per-search state must not be shared between users."""
+        scout = copy.copy(self.scout)
+        products = await self._scout_round(
+            owner_id, lambda: scout.stage_a(prompt, product, fallback) if product or fallback
+            else scout.stage_a(prompt))
+        return SetupRecommendation(products=products, suggested_dimensions=scout.dimensions[:4],
+                                   warnings=list(scout.warnings)[:16],
+                                   follow_up_question=scout.follow_up_question), scout
+
+    async def run_setup(self, owner_id: str, prompt: str) -> dict[str, Any]:
+        """Chat setup: pick the product (saved by name, else message, else default), then search."""
+        saved = await self.my_products.list(owner_id) if self.my_products is not None else []
+        # shortcut: whole-word, case-insensitive name match; use the model's own_product if names collide
+        named = next((item for item in sorted(saved, key=lambda p: -len(p.name)) if re.search(
+            rf"(?<!\w){re.escape(item.name)}(?!\w)", prompt, re.IGNORECASE)), None)
+        default = next((item for item in saved if item.is_default), None)
+        recommendation, scout = await self._discover(prompt, owner_id, named, default)
+        chosen = named or (default if scout.used_fallback else None)
+        if chosen is not None:
+            product = {"name": chosen.name, "description": chosen.description or chosen.description_en,
+                       "source": "saved" if chosen is named else "default", "my_product_id": str(chosen.id)}
+        else:
+            product = {"name": scout.own_name or "", "description": scout.own_description or "",
+                       "source": "message", "my_product_id": None}
+        return {"product": product, "recommendation": recommendation.model_dump(mode="json")}
+
+    async def write_reply(self, message: str, setup: dict[str, Any] | None) -> str | None:
+        """A short model-written sentence about the setup result; None when no model is available."""
+        writer = getattr(self.planner, "write_setup_reply", None)
+        return await writer(message, setup) if writer is not None else None
 
     async def discover_sources(self, domains: list[str], dimension: str,
                                owner_id: str) -> dict[str, list[RecommendedSource]]:
         """Return same-site source URL candidates for explicitly picked domains."""
 
-        return await self._scout_round(owner_id, lambda: self.scout.stage_b(domains, dimension))
+        scout = copy.copy(self.scout)
+        return await self._scout_round(owner_id, lambda: scout.stage_b(domains, dimension))
 
     async def _scout_round(self, owner_id: str, search: Callable[[], Awaitable[Found]]) -> Found:
         """Charge one round only when it finds something; a failed or empty search stays free."""

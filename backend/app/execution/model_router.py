@@ -80,7 +80,7 @@ def route_conversation(
     """Route obvious conversational turns to the small model; default to the planner otherwise."""
 
     normalized = " ".join(content.casefold().split())
-    if has_pending_plan or previous_decision == "clarify":
+    if has_pending_plan or previous_decision in {"clarify", "setup_tracking"}:
         return InferencePurpose.PLANNER
 
     if _URL_PATTERN.search(normalized) or any(cue in normalized for cue in _WORKFLOW_CUES):

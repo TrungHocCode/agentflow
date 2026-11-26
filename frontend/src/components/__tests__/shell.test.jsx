@@ -112,14 +112,16 @@ describe('application shell', () => {
     expect(screen.queryByText(/answers from approved sources/i)).not.toBeInTheDocument();
   });
 
-  it('collapses setup help into a details block, hidden while a plan is active', () => {
-    const { rerender } = renderChat({ messages: [{ sender: 'user', text: 'Track X', renderKey: 'm-0' }] });
+  it('shows the setup card only inside the assistant answer that carries a setup result', () => {
+    const user = { sender: 'user', text: 'Track my competitors', renderKey: 'm-0' };
+    const { rerender } = renderChat({ messages: [user] });
+    expect(screen.queryByTestId('chat-proposal')).not.toBeInTheDocument();
 
-    expect(screen.getByText('Set up tracking from this chat')).toBeInTheDocument();
-
+    const setup = { product: { name: 'TaskFlow', source: 'default', my_product_id: 'p1' },
+      recommendation: { products: [], warnings: [], follow_up_question: 'What does TaskFlow do?' } };
     rerender(
       <ChatStudio
-        messages={[{ sender: 'user', text: 'Track X', renderKey: 'm-0' }]}
+        messages={[user, { sender: 'supervisor', text: 'Using: TaskFlow (default)', ciSetup: setup }]}
         onSendMessage={noop}
         onApprovePlan={noop}
         onOpenResults={noop}
@@ -134,12 +136,13 @@ describe('application shell', () => {
         isProcessing={false}
         isStreaming={false}
         activeTurnId={null}
-        activePlan={[{ id: 1, description: 'Collect', status: 'pending' }]}
+        activePlan={[]}
         runStatus={null}
         runId={null}
         onWatchlistCreated={noop}
       />
     );
-    expect(screen.queryByText('Set up tracking from this chat')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-proposal')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-proposal-using')).toHaveTextContent('Using: TaskFlow (default)');
   });
 });

@@ -50,11 +50,11 @@ function groupMessages(messages) {
   return messages.reduce((groups, message, index) => {
     const lastGroup = groups.at(-1);
     if (lastGroup?.sender === message.sender) {
-      lastGroup.messages.push({ ...message, renderKey: `${message.turnId || 'message'}-${index}` });
+      lastGroup.messages.push({ ...message, index, renderKey: `${message.turnId || 'message'}-${index}` });
     } else {
       groups.push({
         sender: message.sender,
-        messages: [{ ...message, renderKey: `${message.turnId || 'message'}-${index}` }]
+        messages: [{ ...message, index, renderKey: `${message.turnId || 'message'}-${index}` }]
       });
     }
     return groups;
@@ -287,6 +287,13 @@ export default function ChatStudio({
                             )}
                           </BubbleContent>
                         </Bubble>
+                        {message.ciSetup && !message.isGenerating && (
+                          <ChatWatchlistProposal
+                            setup={message.ciSetup}
+                            messages={messages.slice(0, message.index)}
+                            onCreated={onWatchlistCreated}
+                          />
+                        )}
                         {message.duration && (
                           <MessageFooter className="chat-message__meta">
                             <Clock3 aria-hidden="true" />Response time: {message.duration}s
@@ -298,13 +305,6 @@ export default function ChatStudio({
                 })}
               </MessageGroup>
             ))
-          )}
-
-          {messages.some(message => message.sender === 'user') && !runStatus && !activePlan?.length && (
-            <details className="chat-proposal" {...(messages.length <= 2 ? { open: true } : {})}>
-              <summary>Set up tracking from this chat</summary>
-              <ChatWatchlistProposal messages={messages} onCreated={onWatchlistCreated} />
-            </details>
           )}
 
           {isProcessing && !isStreaming && !hasStreamingAssistantMessage && (
