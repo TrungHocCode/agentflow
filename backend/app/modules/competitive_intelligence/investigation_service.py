@@ -51,8 +51,13 @@ class InvestigationService:
                             questions: list[InvestigationQuestion], candidates: list[ChangeCandidate],
                             scope: RoundScope, budget: InvestigationBudget, spent_calls: int,
                             spent_tokens: int, spent_tasks: int, final: bool,
-                            created_at: datetime) -> tuple[InvestigationRound, str]:
-        """Plan, validate and persist one round; returns the stored round and its decision outcome."""
+                            created_at: datetime, planner: str = COORDINATOR_IDENTITY,
+                            ) -> tuple[InvestigationRound, str]:
+        """Plan, validate and persist one round; returns the stored round and its decision outcome.
+
+        planner names who chose the candidates (stored as decided_by). A rejected non-default round is not
+        persisted, so the caller can still plan the default round under the same number.
+        """
         history = await self.rounds.list_rounds(str(run_id), owner_id)
         accepted = [round for round in history if round.status in ("accepted", "completed")]
         taken = {round.round_number for round in history}
@@ -70,7 +75,11 @@ class InvestigationService:
         if decision.outcome == "accepted":
             stored = await self.rounds.save_round(
                 planned.model_copy(update={"status": "accepted", "decided_at": created_at,
-                                           "decided_by": COORDINATOR_IDENTITY}), owner_id)
+                                           "decided_by": planner}), owner_id)
+        elif planner != COORDINATOR_IDENTITY:
+            return planned.model_copy(update={"status": "rejected", "decided_at": created_at,
+                                              "decided_by": planner,
+                                              "rejection_reasons": decision.reasons}), "rejected"
         else:
             stored = await self.rounds.save_round(
                 planned.model_copy(update={"status": "rejected", "decided_at": created_at,

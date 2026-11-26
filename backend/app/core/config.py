@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = ""
     # One setup wizard pass spends two rounds; failed and empty searches are refunded.
     CI_SCOUT_ROUNDS_PER_DAY: int = Field(default=10, ge=1, le=1000)
+    # Let the Supervisor choose the next action at CI run decision points; off keeps code-planned rounds.
+    CI_SUPERVISOR_DECISIONS: bool = False
 
     @model_validator(mode="after")
     def validate_context_policy(self) -> "Settings":
