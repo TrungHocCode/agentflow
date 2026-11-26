@@ -519,6 +519,13 @@ class TestScoutProductBrief(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.named, ["Notion", "Obsidian", "Evernote"])
         self.assertEqual(_understand(self.VI_NOTES, brief("NoteNest")).named, [])  # not "Tôi"
 
+    def test_a_colon_ends_a_sentence_so_the_answer_opener_is_not_a_rival(self) -> None:
+        prompt = ("Find my competitors please.\nAsked: What does your product do, and for whom?\n"
+                  "User's answer: It is a markdown note-taking app for Mac called Inkwell.")
+        self.assertEqual(_understand(prompt, None).named, [])
+        request = _understand(prompt, brief(None, [], "markdown note-taking app for Mac"))
+        self.assertEqual(request.named, [])
+
     def test_vietnamese_dimensions_do_not_mistake_reviews_for_prices(self) -> None:
         self.assertEqual(_dimensions("theo dõi bảng giá và tính năng của đối thủ"), ["pricing", "features"])
         self.assertEqual(_dimensions("đánh giá đối thủ giúp mình"), [])

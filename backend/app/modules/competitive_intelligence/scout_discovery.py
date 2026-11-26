@@ -401,7 +401,7 @@ def _understand(prompt: str, brief: ProductBrief | None) -> _Request:
     # Capitalized words count as names only mid-sentence: openers such as "Tôi", "Theo" or "It" became
     # rival searches whenever the model was unavailable (measured with Ollama down).
     named = [term for term in _product_terms(prompt)
-             if term != own and not re.search(rf"(?:^|[.!?\n]\s*){re.escape(term)}\b", prompt)]
+             if term != own and not re.search(rf"(?:^|[.!?:\n]\s*){re.escape(term)}\b", prompt)]
     category, local_description = _category(prompt, own), None
     dimensions = _dimensions(prompt)
     if brief is not None:
