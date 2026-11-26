@@ -158,6 +158,37 @@ class TestObservationAllowance(unittest.TestCase):
         self.assertNotIn("projection_partial", project_tool_result(result, 600))
 
 
+class TestFetchPageProjection(unittest.TestCase):
+    def page(self, size: int):
+        text = "\n\n".join(f"Product {i}: description line" for i in range(size // 30))[:size]
+        return success_result({"title": "Top 10", "text": text, "markdown": text, "paragraphs": [text],
+                               "items": [{"title": "x" * 50}] * 30}, tool_name="news_crawler")
+
+    def test_long_page_text_fills_the_allowance(self) -> None:
+        projected = project_tool_result(self.page(20000), 5000, page_text=True)
+        parsed = json.loads(projected)
+        self.assertLessEqual(len(projected), 5000)
+        self.assertGreater(len(parsed["data"]["content"]), 4000)
+        self.assertTrue(parsed["projection_partial"])
+        self.assertTrue(parsed["data"]["content"].startswith("Product 0"))
+
+    def test_same_page_without_the_flag_keeps_the_small_preview(self) -> None:
+        self.assertLess(len(json.loads(project_tool_result(self.page(20000), 5000))["preview"]), 1700)
+
+    def test_short_page_is_complete_and_other_data_is_unchanged(self) -> None:
+        self.assertNotIn("projection_partial", project_tool_result(self.page(1000), 5000, page_text=True))
+        other = success_result({"body": "y" * 20000}, tool_name="news_crawler")
+        self.assertEqual(project_tool_result(other, 5000), project_tool_result(other, 5000, page_text=False))
+
+    def test_page_observation_still_fits_the_context_budget(self) -> None:
+        messages = [SystemMessage(content="z" * 9000), AIMessage(content="", tool_calls=[
+            {"id": "c", "name": "fetch_page", "args": {"url": "https://example.com"}}])]
+        projected = project_tool_result(self.page(20000), observation_allowance(messages, []), page_text=True)
+        messages.append(ToolMessage(content=fence_untrusted(projected), tool_call_id="c"))
+        budget = settings.LLM_CONTEXT_TOKENS - settings.LLM_OUTPUT_TOKENS - settings.LLM_CONTEXT_MARGIN_TOKENS
+        self.assertLessEqual(request_estimate(messages, []), budget)
+
+
 class TestWorkerPromptIncludesRoundContext(unittest.IsolatedAsyncioTestCase):
     async def test_analyst_prompt_contains_the_change(self) -> None:
         llm = MagicMock(spec=BaseChatModel)

@@ -82,8 +82,11 @@ def observation_allowance(messages: list[BaseMessage], tools: list[BaseTool], pe
     return max(MIN_OBSERVATION_CHARS, min(max_chars, allowance))
 
 
-def project_tool_result(result: ToolResult, max_chars: int = MAX_OBSERVATION_CHARS) -> str:
-    """Return bounded JSON without cutting serialized JSON or duplicating search candidates."""
+def project_tool_result(result: ToolResult, max_chars: int = MAX_OBSERVATION_CHARS, page_text: bool = False) -> str:
+    """Return bounded JSON without cutting serialized JSON or duplicating search candidates.
+
+    page_text: the result is one fetched page; spend the whole allowance on its text instead of a JSON preview.
+    """
     payload: dict[str, Any] = {"ok": result.ok, "status": result.status}
     reference = (result.metadata.model_extra or {}).get("discovery_id")
     if isinstance(reference, str):
@@ -109,6 +112,25 @@ def project_tool_result(result: ToolResult, max_chars: int = MAX_OBSERVATION_CHA
                            if key in {"file_path", "svg_path", "spec_path", "relative_path", "size_bytes", "title"}}
     else:
         payload["data"] = data
+    if page_text and isinstance(data, dict) and (data.get("markdown") or data.get("text")):
+        # The page repeats its text as markdown, paragraphs and items; keep one copy and trim only that copy.
+        payload["data"] = {"title": data.get("title"), "content": str(data.get("markdown") or data["text"])}
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        original_chars = len(serialized)
+        content = payload["data"]["content"]
+        if original_chars > max_chars:
+            payload.update(projection_partial=True, original_chars=original_chars,
+                           warning="Page text is cut at the end; do not infer the rest of the page.")
+            payload["data"]["content"] = ""
+            room = max_chars - len(json.dumps(payload, ensure_ascii=False, default=str))
+            while True:  # JSON escapes (newlines, quotes) make the cut longer than its text; shrink until it fits
+                content = content[:max(0, room)]
+                payload["data"]["content"] = content
+                serialized = json.dumps(payload, ensure_ascii=False, default=str)
+                if len(serialized) <= max_chars or not content:
+                    break
+                room = len(content) - (len(serialized) - max_chars)
+        return serialized
     serialized = json.dumps(payload, ensure_ascii=False, default=str)
     if len(serialized) <= max_chars:
         return serialized

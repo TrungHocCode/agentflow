@@ -798,7 +798,7 @@ class WorkerAgent(BaseAgent):
                                 method=str(tool_args.get("method") or "GET"))
                         allowance = observation_allowance([*messages, task_reminder], self.tools,
                                                           len(response.tool_calls) - call_index)
-                        wrapped_output = fence_untrusted(project_tool_result(observation, allowance))
+                        wrapped_output = fence_untrusted(project_tool_result(observation, allowance, page_text=tool_name == "fetch_page"))
 
                         messages.append(ToolMessage(
                             content=wrapped_output,
